@@ -25,13 +25,6 @@
     "conversations": "Conversations",
     "newChat": "New chat"
   },
-  "welcome": {
-    "examples": {
-      "one": "Summarise this week's news coverage of a company",
-      "two": "Compare how two outlets covered the same story",
-      "three": "Turn the attached data into a chart"
-    }
-  },
   "composer": {
     "placeholder": "Ask {{product}} anything…",
     "hintEnter": "Enter to send • Shift+Enter for a new line",

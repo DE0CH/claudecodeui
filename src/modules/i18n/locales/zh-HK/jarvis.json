@@ -25,13 +25,6 @@
     "conversations": "對話",
     "newChat": "新對話"
   },
-  "welcome": {
-    "examples": {
-      "one": "總結本週有關某公司的新聞報道",
-      "two": "比較兩間傳媒對同一事件的報道角度",
-      "three": "把附件的數據製成圖表"
-    }
-  },
   "composer": {
     "placeholder": "向 {{product}} 提問…",
     "hintEnter": "Enter 傳送 • Shift+Enter 換行",
