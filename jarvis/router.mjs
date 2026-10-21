@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Jarvis 3 UI router (DE0CH/jarvis3 docs/CLAUDE-CODE.md): the front of the CloudCLI-fork UI pods. One CloudCLI server
 // process per signed-in staff member, started on demand and stopped when idle; every request is checked against
-// Cloudflare Access (the same checks as jarvis3 chat/src/common/access.ts: RS256 against the team's JWKS, issuer,
+// Cloudflare Access (RS256 against the team's JWKS, issuer,
 // audience, expiry, an email claim, the instance's `users`) and proxied (HTTP and WebSocket) to that person's process
 // with `X-Jarvis-User: <email>`.
 //
