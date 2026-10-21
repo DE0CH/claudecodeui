@@ -19,6 +19,8 @@ import path from 'path';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
+import { acquireSandbox, jarvisEnabled, SANDBOX_RESET_NOTE, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
+
 import {
   appendFilesInputTag,
   buildClaudeUserContent,
@@ -1050,10 +1052,23 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       sdkOptions.mcpServers = mcpServers;
     }
 
+    // Jarvis 3 (docs/CLAUDE-CODE.md in DE0CH/jarvis3): Claude Code runs in the conversation's sandbox, with its
+    // /workspace; the instance's instructions and MCP tools are the sandbox's managed settings, not this host's.
+    let promptCommand = command;
+    if (jarvisEnabled()) {
+      const sandbox = await acquireSandbox(sessionId);
+      if (sandbox.reset) promptCommand = `${SANDBOX_RESET_NOTE}\n\n${command}`;
+      sdkOptions.cwd = '/workspace';
+      delete sdkOptions.mcpServers;
+      // the instance's model is the sandbox's ANTHROPIC_MODEL (egress allows only the instance's models)
+      delete sdkOptions.model;
+      sdkOptions.spawnClaudeCodeProcess = (spawnOptions) => spawnInSandbox(sandbox, sessionId, spawnOptions);
+    }
+
     // Every turn uses streaming input so stdin stays open past the turn's
     // `result`. The message list is reusable, but each query attempt needs its
     // own stream because an async generator cannot be replayed once consumed.
-    const promptMessages = await buildPromptMessages(command, options.images, options.files, options.cwd);
+    const promptMessages = await buildPromptMessages(promptCommand, options.images, options.files, options.cwd);
 
     sdkOptions.hooks = {
       Notification: [{
