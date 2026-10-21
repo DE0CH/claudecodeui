@@ -12,7 +12,7 @@ import express from 'express';
 import { closeConnection, initializeDatabase, projectsDb, sessionsDb, userDb } from '@/modules/database/index.js';
 import { releaseTestDatabase } from '@/modules/database/testing.js';
 import { ensureJarvisProject, ensureJarvisUser } from '@/modules/jarvis/jarvis-bootstrap.js';
-import { conversationWorkspaceDir } from '@/modules/jarvis/jarvis-config.js';
+import { conversationWorkspaceDir, jarvisLocale, jarvisModel, jarvisProductName, resetJarvisInstanceConfig } from '@/modules/jarvis/jarvis-config.js';
 import { onConversationDeleted, onConversationForked, stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
 import { readableClaudeApiError, readableSandboxError, SandboxServiceError } from '@/modules/jarvis/jarvis-errors.js';
 import { createJarvisFilesRouter, listWorkspaceFiles, openWorkspaceFile } from '@/modules/jarvis/jarvis-files.routes.js';
@@ -50,6 +50,8 @@ async function withJarvis(run: (ctx: { jfs: string; webUrl: string; calls: Array
   process.env.JARVIS_MODEL_LABEL = 'Sonnet 5.5';
   delete process.env.JARVIS_PRODUCT_NAME;
   delete process.env.JARVIS_LOCALE;
+  process.env.JARVIS_CONFIG = path.join(temp, 'no-config.json');
+  resetJarvisInstanceConfig();
   await initializeDatabase();
   try {
     await run({ jfs: path.join(temp, 'jfs'), webUrl, calls });
@@ -294,8 +296,28 @@ test('new sessions always belong to /workspace', async () => {
   });
 });
 
+test('the instance config fills what the environment leaves unset', async () => {
+  await withJarvis(async ({ jfs }) => {
+    const config = path.join(jfs, 'config.json');
+    await mkdir(jfs, { recursive: true });
+    await writeFile(config, JSON.stringify({ product: { name: '測試 AI', locale: 'zh-HK' }, models: [{ id: 'anthropic/claude-sonnet-5.5', label: 'Sonnet 5.5' }], defaultModel: 'anthropic/claude-sonnet-5.5' }));
+    process.env.JARVIS_CONFIG = config;
+    delete process.env.JARVIS_MODEL;
+    delete process.env.JARVIS_MODEL_LABEL;
+    resetJarvisInstanceConfig();
+    assert.equal(jarvisProductName(), '測試 AI');
+    assert.equal(jarvisLocale(), 'zh-HK');
+    assert.deepEqual(jarvisModel(), { value: 'anthropic/claude-sonnet-5.5', label: 'Sonnet 5.5' });
+    process.env.JARVIS_MODEL_LABEL = 'Override';
+    assert.equal(jarvisModel().label, 'Override');
+    resetJarvisInstanceConfig();
+  });
+});
+
 test('sandbox and model failures read as sentences', () => {
   const saved = process.env.JARVIS_LOCALE;
+  process.env.JARVIS_CONFIG = '/nonexistent/config.json';
+  resetJarvisInstanceConfig();
   try {
     delete process.env.JARVIS_LOCALE;
     const budget = 'API Error: 402 {"type":"error","error":{"type":"budget_exceeded","message":"Deyao has set a USD 50 budget limit and it has now been used up."}}';

@@ -4,8 +4,10 @@
  * egress or the model provider refuse (Claude Code writes those into the transcript as "API Error: <status> <body>";
  * egress answers 402 `budget_exceeded` with a ready-made message once the shared budget is used up).
  *
- * Language: JARVIS_LOCALE (e.g. zh-HK → Traditional Chinese, Hong Kong usage); English otherwise.
+ * Language: jarvisLocale() (zh-* → Traditional Chinese, Hong Kong usage); English otherwise.
  */
+import { jarvisLocale } from '@/modules/jarvis/jarvis-config.js';
+
 type Key =
   | 'unreachable'
   | 'busy'
@@ -46,7 +48,7 @@ const MESSAGES: Record<'en' | 'zh', Record<Key, string>> = {
 };
 
 function t(key: Key): string {
-  const locale = (process.env.JARVIS_LOCALE || '').toLowerCase();
+  const locale = jarvisLocale().toLowerCase();
   return MESSAGES[locale.startsWith('zh') ? 'zh' : 'en'][key];
 }
 
