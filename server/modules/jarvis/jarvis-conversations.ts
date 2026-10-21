@@ -6,6 +6,7 @@
 import { copyFile, cp, mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { jarvisTurnsDb } from '@/modules/database/index.js';
 import { conversationWorkspaceDir, isConversationId, jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
 import { releaseSandbox } from '@/modules/jarvis/sandbox-process.js';
 
@@ -112,4 +113,37 @@ export async function stageAttachmentsInWorkspace(sessionId: string, files: unkn
     }
   }
   return staged;
+}
+
+/**
+ * A turn that failed (no sandbox, the run broke): records the error, and the user's text when Claude Code never read
+ * it, so both are in the history after a reload. Times: the user's message at the client's `sentAt` (else when the
+ * server got it), the error strictly after it and not before now. Never throws (logged).
+ */
+export async function recordJarvisFailedTurn(input: {
+  sessionId: string | undefined;
+  userText: string | null;
+  sentAt?: unknown;
+  receivedAt: number;
+  error: string;
+}): Promise<{ userAt: string; errorAt: string }> {
+  const sent = typeof input.sentAt === 'string' ? Date.parse(input.sentAt) : Number.NaN;
+  const userMs = Number.isFinite(sent) ? sent : input.receivedAt;
+  const errorMs = Math.max(Date.now(), userMs + 1);
+  const userAt = new Date(userMs).toISOString();
+  const errorAt = new Date(errorMs).toISOString();
+  if (input.sessionId) {
+    try {
+      await jarvisTurnsDb.recordFailedTurn({
+        sessionId: input.sessionId,
+        userText: input.userText && input.userText.trim() ? input.userText : null,
+        userAt: input.userText ? userAt : null,
+        error: input.error,
+        errorAt,
+      });
+    } catch (error) {
+      console.warn('[jarvis] could not record the failed turn', { sessionId: input.sessionId, error: error instanceof Error ? error.message : error });
+    }
+  }
+  return { userAt, errorAt };
 }

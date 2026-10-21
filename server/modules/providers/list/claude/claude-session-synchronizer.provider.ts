@@ -11,7 +11,7 @@ import {
   readFileTimestamps,
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
-import { JARVIS_PROJECT_DIR_NAME, JARVIS_WORKSPACE_PATH, jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
+import { JARVIS_PROJECT_DIR_NAME, JARVIS_WORKSPACE_PATH, jarvisEnabled, jarvisUntitledName } from '@/modules/jarvis/jarvis-config.js';
 
 type ParsedSession = {
   sessionId: string;
@@ -148,10 +148,12 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     const existingSession = await sessionsDb.getSessionByProviderSessionId(parsed.sessionId)
       ?? await sessionsDb.getSessionById(parsed.sessionId);
     const existingSessionName = existingSession?.custom_name;
-    if (existingSessionName && existingSessionName !== 'Untitled Claude Session') {
+    // Jarvis mode: the localized placeholder counts as no name, so Claude Code's title replaces it
+    const untitled = jarvisEnabled() ? jarvisUntitledName() : 'Untitled Claude Session';
+    if (existingSessionName && existingSessionName !== 'Untitled Claude Session' && existingSessionName !== untitled) {
       return {
         ...parsed,
-        sessionName: normalizeSessionName(existingSessionName, 'Untitled Claude Session'),
+        sessionName: normalizeSessionName(existingSessionName, untitled),
       };
     }
 
@@ -159,10 +161,14 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     if (!sessionName) {
       sessionName = nameMap.get(parsed.sessionId);
     }
+    // An app-created row keeps its name through the upsert, so the placeholder is replaced here
+    if (jarvisEnabled() && existingSession && existingSessionName === untitled && sessionName?.trim()) {
+      await sessionsDb.updateSessionCustomName(existingSession.session_id, normalizeSessionName(sessionName, untitled));
+    }
 
     return {
       ...parsed,
-      sessionName: normalizeSessionName(sessionName, 'Untitled Claude Session'),
+      sessionName: normalizeSessionName(sessionName, untitled),
     };
   }
 

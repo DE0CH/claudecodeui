@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
-import { JARVIS_WORKSPACE_PATH, jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
+import { jarvisTurnsDb, projectsDb, sessionsDb, type JarvisFailedTurn } from '@/modules/database/index.js';
+import { JARVIS_WORKSPACE_PATH, jarvisEnabled, jarvisSessionName } from '@/modules/jarvis/jarvis-config.js';
 import { onConversationDeleted, onConversationForked } from '@/modules/jarvis/jarvis-conversations.js';
 import { broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
@@ -17,7 +17,7 @@ import type {
   NormalizedMessage,
   WorkflowAgentActivity,
 } from '@/shared/types.js';
-import { AppError, sliceTailPage } from '@/shared/utils.js';
+import { AppError, createNormalizedMessage, sliceTailPage } from '@/shared/utils.js';
 
 /** The project rows of these paths (each looked up once; blank paths skipped). */
 async function loadProjects(paths: Array<string | null | undefined>): Promise<Map<string, Awaited<ReturnType<typeof projectsDb.getProjectPath>>>> {
@@ -107,6 +107,9 @@ type SessionDetails = {
 const MAX_CLOUDCLI_SESSION_NAME_WORDS = 4;
 
 function buildCloudCliSessionName(initialMessage: string): string {
+  // Jarvis mode (staff write Chinese, which has no spaces between words): the message's first characters, or a
+  // localized placeholder until Claude Code's own title replaces it
+  if (jarvisEnabled()) return jarvisSessionName(initialMessage);
   const words = initialMessage.trim().split(/\s+/).filter(Boolean);
   return words.slice(0, MAX_CLOUDCLI_SESSION_NAME_WORDS).join(' ') || 'Untitled Session';
 }
@@ -503,6 +506,12 @@ export const sessionsService = {
       });
     }
 
+    // Jarvis mode: turns that failed before or while running are in our own table, not the transcript
+    const failedTurns = jarvisEnabled() ? await jarvisTurnsDb.listFailedTurns(sessionId) : [];
+    if (failedTurns.length > 0) {
+      return await this.fetchHistoryWithFailedTurns(session, failedTurns, options);
+    }
+
     // App-created sessions that never produced a provider transcript yet
     // (e.g. first message still streaming) simply have no history.
     if (!session.provider_session_id) {
@@ -568,6 +577,63 @@ export const sessionsService = {
         ...message,
         sessionId,
       })),
+    };
+  },
+
+  /**
+   * Jarvis mode history when some turns failed: the whole transcript plus each failed turn's user message (when
+   * Claude Code never read it) and error, in time order, then the requested page.
+   */
+  async fetchHistoryWithFailedTurns(
+    session: NonNullable<Awaited<ReturnType<typeof sessionsDb.getSessionById>>>,
+    failedTurns: JarvisFailedTurn[],
+    options: Pick<FetchHistoryOptions, 'limit' | 'offset'>,
+  ): Promise<FetchHistoryResult> {
+    const sessionId = session.session_id;
+    let transcriptMessages: NormalizedMessage[] = [];
+    if (session.provider_session_id) {
+      const providerSessions = providerRegistry.resolveProvider(session.provider as LLMProvider).sessions;
+      const full = await providerSessions.fetchHistory(sessionId, {
+        limit: null,
+        offset: 0,
+        projectPath: session.project_path ?? '',
+        providerSessionId: session.provider_session_id,
+      });
+      transcriptMessages = full.messages;
+    }
+    const extra: NormalizedMessage[] = [];
+    for (const turn of failedTurns) {
+      if (turn.user_text && turn.user_at) {
+        extra.push(createNormalizedMessage({
+          id: `jarvis-failed-${turn.id}-user`, sessionId, timestamp: turn.user_at, provider: 'claude',
+          kind: 'text', role: 'user', content: turn.user_text,
+        }));
+      }
+      extra.push(createNormalizedMessage({
+        id: `jarvis-failed-${turn.id}-error`, sessionId, timestamp: turn.error_at, provider: 'claude',
+        kind: 'error', content: turn.error,
+      }));
+    }
+    const time = (message: NormalizedMessage) => {
+      const t = Date.parse(message.timestamp);
+      return Number.isFinite(t) ? t : 0;
+    };
+    // stable merge: transcript order is kept; each failed-turn row goes after every transcript row not later than it
+    const merged = [...transcriptMessages];
+    for (const row of extra) {
+      let at = merged.length;
+      while (at > 0 && time(merged[at - 1]!) > time(row)) at -= 1;
+      merged.splice(at, 0, row);
+    }
+    const requestedLimit = options.limit ?? null;
+    const requestedOffset = Math.max(0, options.offset ?? 0);
+    const { page, hasMore } = sliceTailPage(merged, requestedLimit, requestedOffset);
+    return {
+      messages: page.map((message) => ({ ...message, sessionId })),
+      total: merged.length,
+      hasMore,
+      offset: requestedOffset,
+      limit: requestedLimit,
     };
   },
 

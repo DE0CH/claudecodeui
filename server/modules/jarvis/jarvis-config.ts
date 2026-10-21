@@ -97,3 +97,15 @@ export function conversationWorkspaceDir(conversationId: string): string {
   if (!isConversationId(conversationId)) throw new Error('not a conversation id');
   return path.join(jarvisJfsRoot(), 'ws', conversationId.toLowerCase());
 }
+
+/** Shown for a conversation until it has a title (and replaced by Claude Code's title when one comes). */
+export function jarvisUntitledName(): string {
+  return jarvisLocale().toLowerCase().startsWith('zh') ? '新對話' : 'New conversation';
+}
+
+/** A new conversation's name: the first 24 characters of its first message, or the untitled placeholder. */
+export function jarvisSessionName(initialMessage: string): string {
+  const chars = Array.from(initialMessage.replace(/\s+/g, ' ').trim());
+  if (chars.length === 0) return jarvisUntitledName();
+  return chars.length > 24 ? `${chars.slice(0, 24).join('').trimEnd()}…` : chars.join('');
+}

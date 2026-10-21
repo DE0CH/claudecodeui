@@ -12,8 +12,8 @@ import express from 'express';
 import { closeConnection, initializeDatabase, projectsDb, sessionsDb, userDb } from '@/modules/database/index.js';
 import { releaseTestDatabase } from '@/modules/database/testing.js';
 import { ensureJarvisProject, ensureJarvisUser } from '@/modules/jarvis/jarvis-bootstrap.js';
-import { conversationWorkspaceDir, jarvisLocale, jarvisModel, jarvisProductName, resetJarvisInstanceConfig } from '@/modules/jarvis/jarvis-config.js';
-import { onConversationDeleted, onConversationForked, stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
+import { conversationWorkspaceDir, jarvisLocale, jarvisModel, jarvisProductName, jarvisSessionName, resetJarvisInstanceConfig } from '@/modules/jarvis/jarvis-config.js';
+import { onConversationDeleted, onConversationForked, recordJarvisFailedTurn, stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
 import { readableClaudeApiError, readableSandboxError, SandboxServiceError } from '@/modules/jarvis/jarvis-errors.js';
 import { createJarvisFilesRouter, listWorkspaceFiles, openWorkspaceFile } from '@/modules/jarvis/jarvis-files.routes.js';
 import { isUnavailableInJarvis, jarvisApiGuard } from '@/modules/jarvis/jarvis-guard.js';
@@ -385,5 +385,41 @@ test('attached files are copied into the conversation\'s /workspace/uploads for 
     ]) as Array<{ path: string; name: string }>;
     assert.deepEqual(staged.map((f) => f.path), ['/workspace/uploads/報告.pdf', '/workspace/uploads/報告 (2).pdf', path.join(src, 'missing')]);
     assert.equal(await readFile(path.join(jfs, 'ws', sessionId, 'uploads', '報告 (2).pdf'), 'utf8'), 'two');
+  });
+});
+
+test('a failed turn keeps the user\'s message and the error in the history, the error after the message', async () => {
+  await withJarvis(async () => {
+    const created = await sessionsService.createAppSession('claude', '/workspace', '寫一份新聞稿');
+    const sentAt = new Date(Date.now() + 5000).toISOString(); // a client clock ahead of the server's
+    const times = await recordJarvisFailedTurn({ sessionId: created.sessionId, userText: '寫一份新聞稿', sentAt, receivedAt: Date.now(), error: 'busy' });
+    assert.equal(times.userAt, sentAt);
+    assert.ok(Date.parse(times.errorAt) > Date.parse(sentAt));
+    await recordJarvisFailedTurn({ sessionId: created.sessionId, userText: null, receivedAt: Date.now(), error: 'broke mid-run' });
+
+    const history = await sessionsService.fetchHistory(created.sessionId);
+    // in time order: the second failure happened at the server's now, before the skewed client's message
+    assert.deepEqual(history.messages.map((m) => [m.kind, m.role ?? null, m.content]), [
+      ['error', null, 'broke mid-run'],
+      ['text', 'user', '寫一份新聞稿'],
+      ['error', null, 'busy'],
+    ]);
+    assert.equal(history.total, 3);
+    const lastPage = await sessionsService.fetchHistory(created.sessionId, { limit: 1, offset: 0 });
+    assert.equal(lastPage.messages.length, 1);
+    assert.equal(lastPage.hasMore, true);
+  });
+});
+
+test('conversation names: the first characters of the message, or a placeholder in the instance language', async () => {
+  await withJarvis(async () => {
+    process.env.JARVIS_LOCALE = 'zh-HK';
+    assert.equal(jarvisSessionName(''), '新對話');
+    assert.equal(jarvisSessionName('請幫我整理今天關於元意顧問客戶的所有新聞報道並寫一份摘要'), '請幫我整理今天關於元意顧問客戶的所有新聞報道並寫…');
+    assert.equal(jarvisSessionName('  short   text '), 'short text');
+    const created = await sessionsService.createAppSession('claude', '/workspace', '');
+    assert.equal((await sessionsDb.getSessionById(created.sessionId))?.custom_name, '新對話');
+    delete process.env.JARVIS_LOCALE;
+    assert.equal(jarvisSessionName(''), 'New conversation');
   });
 });

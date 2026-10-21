@@ -19,7 +19,7 @@ import path from 'path';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
-import { stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
+import { recordJarvisFailedTurn, stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
 import { readableSandboxError } from '@/modules/jarvis/jarvis-errors.js';
 import { acquireSandbox, jarvisEnabled, SANDBOX_RESET_NOTE, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
 
@@ -1032,6 +1032,10 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
   // Hoisted above the try so the catch's cleanup can tell whether this run
   // still owns the activeSessions entry (or was superseded by a newer run).
   let queryInstance = null;
+  // Jarvis mode: whether Claude Code produced anything (then its transcript holds the user's message), and when the
+  // turn arrived (a failed turn's error must sort after the message the user just sent).
+  let sawSdkMessage = false;
+  const turnReceivedAt = Date.now();
 
   try {
     const resolvedModel = await context.resolveResumeModel(sessionId, options.model);
@@ -1216,6 +1220,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // Process streaming messages
     console.log('Starting async generator loop for session:', capturedSessionId || 'NEW');
     for await (const message of queryInstance) {
+      sawSdkMessage = true;
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
@@ -1444,7 +1449,18 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // Send error to WebSocket, then the terminal complete. A run that already
     // reported completion and then failed during its post-turn hold still
     // surfaces the error, but must not emit a second terminal complete.
-    ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+    let errorTimestamp;
+    if (jarvisEnabled()) {
+      const failed = await recordJarvisFailedTurn({
+        sessionId,
+        userText: sawSdkMessage ? null : command,
+        sentAt: options.sentAt,
+        receivedAt: turnReceivedAt,
+        error: errorContent,
+      });
+      errorTimestamp = failed.errorAt;
+    }
+    ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'claude', ...(errorTimestamp ? { timestamp: errorTimestamp } : {}) }));
     if (!turnCompleteSent) {
       ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: 1 }));
     }
