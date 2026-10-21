@@ -24,6 +24,15 @@ import enTasks from '@/modules/i18n/locales/en/tasks.json';
 // oxlint-disable-next-line importx/order
 import enGit from '@/modules/i18n/locales/en/git.json';
 
+import zhHKCommon from '@/modules/i18n/locales/zh-HK/common.json';
+import zhHKSettings from '@/modules/i18n/locales/zh-HK/settings.json';
+import zhHKAuth from '@/modules/i18n/locales/zh-HK/auth.json';
+import zhHKSidebar from '@/modules/i18n/locales/zh-HK/sidebar.json';
+import zhHKChat from '@/modules/i18n/locales/zh-HK/chat.json';
+import zhHKCodeEditor from '@/modules/i18n/locales/zh-HK/codeEditor.json';
+import zhHKJarvis from '@/modules/i18n/locales/zh-HK/jarvis.json';
+import enJarvis from '@/modules/i18n/locales/en/jarvis.json';
+// oxlint-disable-next-line importx/order
 import frCommon from '@/modules/i18n/locales/fr/common.json';
 import frSettings from '@/modules/i18n/locales/fr/settings.json';
 import frAuth from '@/modules/i18n/locales/fr/auth.json';
@@ -154,6 +163,7 @@ import ptBRTasks from '@/modules/i18n/locales/pt-BR/tasks.json';
 // oxlint-disable-next-line importx/order
 import ptBRGit from '@/modules/i18n/locales/pt-BR/git.json';
 
+import { IS_JARVIS, JARVIS_DEFAULT_LANGUAGE } from '@/shared/jarvis';
 // Import supported languages configuration
 import { languages } from '@/modules/i18n/languages';
 import {
@@ -171,7 +181,7 @@ const getSavedLanguage = (): string => {
   if (saved && languages.some(lang => lang.value === saved)) {
     return saved;
   }
-  return 'en';
+  return IS_JARVIS ? JARVIS_DEFAULT_LANGUAGE : 'en';
 };
 
 // Initialize i18next
@@ -188,7 +198,18 @@ i18n
         chat: enChat,
         codeEditor: enCodeEditor,
         tasks: enTasks,
-git: enGit,
+        git: enGit,
+        jarvis: enJarvis,
+      },
+      // Hong Kong Traditional Chinese, the staff build's default (DE0CH fork).
+      'zh-HK': {
+        common: zhHKCommon,
+        settings: zhHKSettings,
+        auth: zhHKAuth,
+        sidebar: zhHKSidebar,
+        chat: zhHKChat,
+        codeEditor: zhHKCodeEditor,
+        jarvis: zhHKJarvis,
       },
       fr: {
         common: frCommon,
@@ -326,13 +347,14 @@ git: enGit,
     lng: getSavedLanguage(),
 
     // Fallback language when a translation is missing
-    fallbackLng: 'en',
+    // zh-HK falls back to the Taiwan strings before English (only reached by keys it lacks).
+    fallbackLng: { 'zh-HK': ['zh-TW', 'en'], default: ['en'] },
 
     // Enable debug mode in development (logs missing keys to console)
     debug: false,
 
     // Namespaces - load only what's needed
-    ns: ['common', 'settings', 'auth', 'sidebar', 'chat', 'codeEditor', 'tasks', 'git'],
+    ns: ['common', 'settings', 'auth', 'sidebar', 'chat', 'codeEditor', 'tasks', 'git', 'jarvis'],
     defaultNS: 'common',
 
     // Key separator for nested keys (default: '.')

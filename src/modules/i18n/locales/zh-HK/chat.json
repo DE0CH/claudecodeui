@@ -1,0 +1,407 @@
+{
+  "codeBlock": {
+    "copy": "複製",
+    "copied": "已複製",
+    "copyCode": "複製程式碼"
+  },
+  "copyMessage": {
+    "copy": "複製訊息",
+    "copied": "已複製訊息",
+    "selectFormat": "選擇複製格式",
+    "copyAsMarkdown": "複製為 Markdown",
+    "copyAsText": "複製為純文字"
+  },
+  "messageTypes": {
+    "user": "我",
+    "error": "錯誤",
+    "tool": "工具",
+    "claude": "Claude",
+    "cursor": "Cursor",
+    "codex": "Codex",
+    "opencode": "OpenCode"
+  },
+  "tools": {
+    "settings": "工具設定",
+    "error": "工具錯誤",
+    "result": "工具結果",
+    "viewParams": "查看輸入參數",
+    "viewRawParams": "查看原始參數",
+    "viewDiff": "查看編輯差異：",
+    "creatingFile": "正在建立新檔案：",
+    "updatingTodo": "正在更新待辦清單",
+    "read": "讀取",
+    "readFile": "讀取檔案",
+    "updateTodo": "更新待辦清單",
+    "readTodo": "讀取待辦清單",
+    "searchResults": "個結果"
+  },
+  "search": {
+    "found": "找到 {{count}} 個{{type}}",
+    "file": "檔案",
+    "files": "檔案",
+    "pattern": "搜尋模式：",
+    "in": "範圍："
+  },
+  "fileOperations": {
+    "updated": "已成功更新檔案",
+    "created": "已成功建立檔案",
+    "written": "已成功寫入檔案",
+    "diff": "差異",
+    "newFile": "新檔案",
+    "viewContent": "查看檔案內容",
+    "viewFullOutput": "查看完整輸出（{{count}} 個字元）",
+    "contentDisplayed": "檔案內容已在上方的差異檢視中顯示"
+  },
+  "bashEditDiff": {
+    "created": "已建立",
+    "updated": "已更新",
+    "deleted": "已刪除",
+    "emptyFile": "空白檔案",
+    "moreLines_one": "… 還有 {{count}} 行",
+    "moreLines_other": "… 還有 {{count}} 行",
+    "moreFiles_one": "… 還有 {{count}} 個檔案已更改",
+    "moreFiles_other": "… 還有 {{count}} 個檔案已更改",
+    "filesNotShown_one": "{{count}} 個檔案已更改（二進制檔案、只更改權限或過大，無法顯示）",
+    "filesNotShown_other": "{{count}} 個檔案已更改（二進制檔案、只更改權限或過大，無法顯示）",
+    "filesUnavailable_one": "{{count}} 個檔案已更改（無法提供差異）",
+    "filesUnavailable_other": "{{count}} 個檔案已更改（無法提供差異）",
+    "filesChanged_one": "{{count}} 個檔案已更改",
+    "filesChanged_other": "{{count}} 個檔案已更改",
+    "morePaths_one": "+ 另外 {{count}} 個",
+    "morePaths_other": "+ 另外 {{count}} 個",
+    "diffUnavailable": "（此指令無法提供檔案差異）",
+    "partUnavailable": "（部分差異無法提供）",
+    "skipped": "（此 Git 指令已略過檔案差異）",
+    "shared": "（同一時間有另一個指令在此儲存庫執行；任何一方作出的更改都可能顯示在其中一個結果之下）"
+  },
+  "interactive": {
+    "title": "互動提示",
+    "waiting": "正在 CLI 中等待你的回應",
+    "instruction": "請在執行 Claude 的終端機中選擇一個選項。",
+    "selectedOption": "✓ Claude 已選擇選項 {{number}}",
+    "instructionDetail": "在 CLI 中，你可以用方向鍵或輸入編號，以互動方式選擇此選項。"
+  },
+  "thinking": {
+    "title": "正在思考...",
+    "emoji": "💭 正在思考..."
+  },
+  "json": {
+    "response": "JSON 回應"
+  },
+  "permissions": {
+    "grant": "授予 {{tool}} 權限",
+    "added": "已加入權限",
+    "addTo": "會將 {{entry}} 加入「允許的工具」。",
+    "retry": "權限已儲存。請重試要求以使用此工具。",
+    "error": "無法更新權限，請再試一次。",
+    "openSettings": "開啟設定"
+  },
+  "todo": {
+    "updated": "已成功更新待辦清單",
+    "current": "目前的待辦清單"
+  },
+  "plan": {
+    "viewPlan": "📋 查看執行計劃",
+    "title": "執行計劃"
+  },
+  "usageLimit": {
+    "resetAt": "已達 Claude 使用上限。你的上限會在 **{{time}} {{timezone}}** - {{date}} 重設"
+  },
+  "codex": {
+    "permissionMode": "權限模式",
+    "modes": {
+      "default": "預設模式",
+      "auto": "自動模式",
+      "acceptEdits": "接受編輯",
+      "bypassPermissions": "略過權限",
+      "plan": "計劃模式"
+    },
+    "descriptions": {
+      "default": "只有受信任的指令（ls、cat、grep、git status 等）會自動執行，其他指令會被略過。可寫入工作區。",
+      "auto": "由模型分類器逐一決定是否批准每次工具調用。無需人手處理，但比「略過權限」安全，仍然會有拒絕的情況。",
+      "acceptEdits": "所有指令均會在工作區內自動執行。在沙盒環境中全自動執行。",
+      "bypassPermissions": "完全存取系統，不設任何限制。所有指令均會自動執行，並可完全存取磁碟及網絡。請小心使用。",
+      "plan": "計劃模式：不會執行任何指令"
+    },
+    "technicalDetails": "技術詳情"
+  },
+  "voice": {
+    "input": "語音輸入",
+    "stopRecording": "停止錄音",
+    "transcribing": "正在轉錄…",
+    "speak": "朗讀",
+    "stopSpeaking": "停止",
+    "loading": "正在載入…"
+  },
+  "input": {
+    "placeholder": "輸入 / 使用指令、@ 選擇檔案，或向 {{provider}} 提出任何問題...",
+    "placeholderDefault": "輸入你的訊息...",
+    "disabled": "已停用輸入",
+    "attachFiles": "附加檔案",
+    "attachImages": "附加圖片",
+    "send": "傳送",
+    "stop": "停止",
+    "hintText": {
+      "ctrlEnter": "Ctrl+Enter 傳送 • Shift+Enter 換行 • Tab 切換模式 • / 使用斜線指令",
+      "enter": "Enter 傳送 • Shift+Enter 換行 • Tab 切換模式 • / 使用斜線指令",
+      "queue": "按 Enter 將下一則訊息加入佇列",
+      "updateQueued": "按 Enter 更新佇列中的訊息"
+    },
+    "clickToChangeMode": "按此更改權限模式（或在輸入框按 Tab）",
+    "showAllCommands": "顯示所有指令",
+    "clearInput": "清除輸入",
+    "scrollToBottom": "捲動至底部",
+    "queue": {
+      "sendNext": "將下一則訊息加入佇列",
+      "update": "更新佇列中的訊息",
+      "label": "佇列中",
+      "willSend": "會在目前工作完成後傳送",
+      "edit": "編輯佇列中的訊息",
+      "delete": "刪除佇列中的訊息"
+    }
+  },
+  "composer": {
+    "reasoning": "推理",
+    "model": "模型",
+    "effortDefault": "預設",
+    "loadingModels": "正在載入模型…",
+    "modelMenu": "選擇模型及推理程度",
+    "permissionHeading": "{{provider}} 的操作應如何批准？",
+    "editing": {
+      "title": "正在取代較早的訊息",
+      "filesNotReverted": "代理已更改的檔案不會被還原",
+      "cancel": "取消"
+    }
+  },
+  "providerSelection": {
+    "title": "選擇你的 AI 助理",
+    "description": "選擇一個供應商以開始新對話",
+    "selectModel": "選擇模型",
+    "providerInfo": {
+      "anthropic": "由 Anthropic 提供",
+      "openai": "由 OpenAI 提供",
+      "cursorEditor": "AI 程式碼編輯器",
+      "google": "由 Google 提供"
+    },
+    "readyPrompt": {
+      "claude": "已準備好使用 Claude（{{model}}）。請在下方輸入你的訊息。",
+      "cursor": "已準備好使用 Cursor（{{model}}）。請在下方輸入你的訊息。",
+      "codex": "已準備好使用 Codex（{{model}}）。請在下方輸入你的訊息。",
+      "opencode": "已準備好使用 OpenCode（{{model}}）。請在下方輸入你的訊息。",
+      "default": "請先在上方選擇供應商"
+    },
+    "pressToSearch": "按 <kbd>{{shortcut}}</kbd> 搜尋對話、檔案及提交記錄",
+    "chooseModel": "選擇模型",
+    "chooseModelDescription": "內置及自訂模型集中在同一列表",
+    "chooseModelDescriptionCustomOnly": "{{providers, list}} 只會列出你的模型",
+    "addModel": "新增模型",
+    "searchModels": "搜尋模型...",
+    "manageModels": "管理模型",
+    "noModelsFound": "找不到模型。",
+    "loadingModels": "正在載入模型…",
+    "clickToChange": "按此更改模型"
+  },
+  "session": {
+    "continue": {
+      "title": "繼續你的對話",
+      "description": "你可以提出問題、要求修改，或請它協助處理工作"
+    },
+    "loading": {
+      "olderMessages": "正在載入較早的訊息...",
+      "sessionMessages": "正在載入對話訊息..."
+    },
+    "messages": {
+      "showingOf": "正在顯示 {{shown}} / {{total}} 則訊息",
+      "scrollToLoad": "向上捲動以載入更多",
+      "showingLast": "正在顯示最後 {{count}} 則訊息（共 {{total}} 則）",
+      "loadEarlier": "載入較早的訊息",
+      "loadAll": "載入所有訊息",
+      "loadingAll": "正在載入所有訊息...",
+      "allLoaded": "已載入所有訊息",
+      "perfWarning": "已載入所有訊息，捲動可能會較慢。按「捲動至底部」可回復流暢度。"
+    }
+  },
+  "shell": {
+    "selectProject": {
+      "title": "選擇項目",
+      "description": "選擇一個項目，在該資料夾開啟互動式 Shell"
+    },
+    "status": {
+      "newSession": "新對話",
+      "initializing": "正在初始化...",
+      "restarting": "正在重新啟動...",
+      "themeRestartHint": "重新啟動以將新主題套用到 Claude Code"
+    },
+    "actions": {
+      "disconnect": "中斷連線",
+      "disconnectTitle": "與 Shell 中斷連線",
+      "restart": "重新啟動",
+      "restartTitle": "重新啟動 Shell",
+      "connect": "在 Shell 中繼續",
+      "connectTitle": "連接 Shell",
+      "bypass": "略過權限",
+      "bypassOnTitle": "已開啟略過權限：按此停用（會重新啟動 CLI）",
+      "bypassOffTitle": "已關閉略過權限：按此啟用（會重新啟動 CLI）"
+    },
+    "loading": "正在載入終端機...",
+    "connecting": "正在連接 Shell...",
+    "startSession": "開始新的 Claude 對話",
+    "resumeSession": "繼續對話：{{displayName}}...",
+    "runCommand": "在 {{projectName}} 執行 {{command}}",
+    "startCli": "正在 {{projectName}} 啟動 Claude CLI",
+    "defaultCommand": "指令"
+  },
+  "claudeStatus": {
+    "actions": {
+      "thinking": "思考中",
+      "processing": "處理中",
+      "analyzing": "分析中",
+      "working": "工作中",
+      "computing": "運算中",
+      "reasoning": "推理中"
+    },
+    "state": {
+      "live": "即時",
+      "paused": "已暫停"
+    },
+    "elapsed": {
+      "seconds": "{{count}} 秒",
+      "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
+      "label": "已用 {{time}}",
+      "startingNow": "即將開始"
+    },
+    "stop": "停止",
+    "backgroundWork": "背景工作",
+    "backgroundTask": {
+      "workflow": "工作流程 {{name}}",
+      "agent": "代理 {{description}}",
+      "command": "指令 {{description}}",
+      "count": "{{count}} 項工作",
+      "prompt": {
+        "title": "此對話仍有背景工作進行中",
+        "description": "傳送新訊息會開始新一輪回應，並停止該背景工作；未匯報的內容將會遺失。你可以將訊息加入佇列，待工作完成後才傳送。",
+        "cancel": "取消",
+        "queue": "加入佇列",
+        "sendAnyway": "仍然傳送"
+      }
+    },
+    "controls": {
+      "stopGeneration": "停止生成",
+      "pressEscToStop": "隨時按 Esc 停止"
+    },
+    "providers": {
+      "assistant": "助理"
+    }
+  },
+  "projectSelection": {
+    "startChatWithProvider": "選擇一個項目，開始與 {{provider}} 對話"
+  },
+  "tasks": {
+    "nextTaskPrompt": "開始下一項工作"
+  },
+  "message": {
+    "editAndResend": "編輯並重新傳送",
+    "forkFromHere": "由此分拆新對話",
+    "answeredBy": "由 {{model}} 回答"
+  },
+  "export": {
+    "trigger": "匯出對話",
+    "heading": "匯出為",
+    "untitled": "對話",
+    "html": {
+      "label": "網頁 (.html)",
+      "description": "獨立檔案，外觀與應用程式一樣，可列印為 PDF。"
+    },
+    "markdown": {
+      "label": "Markdown (.md)",
+      "description": "純文字，包括工具調用及差異。"
+    },
+    "json": {
+      "label": "JSON (.json)",
+      "description": "所有訊息的原始資料，供工具使用。"
+    }
+  },
+  "schedule": {
+    "trigger": "預約傳送此訊息",
+    "heading": "稍後傳送",
+    "customLabel": "或選擇時間",
+    "confirm": "預約",
+    "in": {
+      "15": "15 分鐘後",
+      "60": "1 小時後",
+      "480": "8 小時後",
+      "1440": "明日"
+    },
+    "pending": "已預約於 {{when}} 傳送",
+    "failed": "未能傳送：{{reason}}",
+    "cancel": "取消預約訊息",
+    "dismiss": "關閉失敗通知"
+  },
+  "misc": {
+    "copyToClipboard": "複製到剪貼簿",
+    "copyCommand": "複製指令",
+    "runningTask": "正在執行工作",
+    "userAskedRevise": "用戶要求修改計劃",
+    "typeAnswer": "輸入你的答案...",
+    "skipOne": "略過",
+    "skipAll": "全部略過",
+    "exportChat": "匯出對話",
+    "closeImagePreview": "關閉圖片預覽",
+    "availableCommands": "可用指令",
+    "filterCommands": "篩選指令...",
+    "closeModal": "關閉指令結果視窗",
+    "noDescription": "沒有說明。",
+    "modelChangeFailed": "暫時無法更改模型。",
+    "choiceSavedHint": "你的選擇已為此對話儲存，並會成為新對話的預設。",
+    "docsSearchSubtitle": "毋須離開對話，即可搜尋內置指令、語法及指令用法。",
+    "enterModelInfo": "請輸入模型名稱及模型 ID。",
+    "modelSaveFailed": "無法儲存此模型。",
+    "modelDeleteFailed": "無法刪除此模型。",
+    "cancelEditing": "取消編輯",
+    "userDeniedTool": "用戶拒絕使用工具",
+    "showTokenUsage": "顯示 Token 用量",
+    "fallbackCommands": {
+      "models": "瀏覽目前供應商的可用模型。",
+      "cost": "查看目前對話的 Token 用量。",
+      "status": "檢查運行環境、版本、供應商及環境狀態。",
+      "memory": "開啟項目的 CLAUDE.md 記憶檔案。",
+      "config": "開啟設定。",
+      "help": "顯示指令說明及語法。"
+    },
+    "modalMeta": {
+      "helpEyebrow": "指令中心",
+      "helpTitle": "說明及快捷鍵",
+      "helpSubtitle": "毋須離開對話，即可搜尋內置指令、語法及指令用法。",
+      "modelsEyebrow": "模型選擇",
+      "modelsTitle": "選擇模型",
+      "modelsSubtitle": "選擇此供應商應使用的模型。",
+      "costEyebrow": "對話數據",
+      "costTitle": "Token 用量",
+      "costSubtitle": "此對話的輸入、輸出及總 Token 數量。",
+      "statusEyebrow": "運行狀態",
+      "statusTitle": "系統狀態",
+      "statusSubtitle": "版本、供應商、運行環境及環境詳情一覽。",
+      "commandResult": "指令結果"
+    },
+    "choiceSavedSession": "你的選擇已為此對話儲存，並會成為新對話的預設。",
+    "choiceSavedDefault": "你的選擇會成為新對話的預設模型。",
+    "tokensUsed_one": "已使用 {{count}} 個 Token",
+    "tokensUsed_other": "已使用 {{count}} 個 Token",
+    "compacted": "已壓縮",
+    "compactionSummary": "完整摘要",
+    "expandImage": "放大 {{name}}",
+    "tokensLabel_one": "Token",
+    "tokensLabel_other": "Token",
+    "escClosesModal": "按 Esc 關閉視窗。",
+    "close": "關閉"
+  },
+  "modelLibrary": {
+    "effortLevels": "推理程度",
+    "effortLevelsHint": "選擇此模型支援的推理程度。如未選擇任何一項，則無法在輸入框為此模型選擇推理程度。",
+    "effortSummary": "推理：{{levels}}",
+    "customModelsOnly": "只使用我的模型",
+    "customModelsOnlyHint": "在所有模型選擇器中隱藏內置的 {{provider}} 模型，並以你的第一個模型作為預設。在你新增模型前，內置模型仍會列出。",
+    "builtInModelsHidden": "開啟「只使用我的模型」時，不會在模型選擇器中顯示。",
+    "customModelsOnlyFailed": "無法更改此設定。"
+  }
+}

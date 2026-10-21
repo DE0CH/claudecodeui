@@ -1,0 +1,48 @@
+{
+  "files": {
+    "open": "Files",
+    "title": "Files",
+    "close": "Close",
+    "back": "All files",
+    "refresh": "Refresh",
+    "download": "Download",
+    "downloadNamed": "Download {{name}}",
+    "openInNewTab": "Open in a new tab",
+    "loading": "Loading…",
+    "loadError": "Couldn't load the files.",
+    "retry": "Try again",
+    "empty": "This conversation has no files yet. Files that YYC AI writes, and files you attach, appear here.",
+    "notStarted": "Files appear here once the conversation has started.",
+    "noPreview": "This type of file can't be previewed. Download it to open it."
+  },
+  "about": {
+    "title": "About",
+    "licence": "{{product}} is free software, licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). You can get its complete source code here:",
+    "source": "Source code",
+    "version": "Version {{version}}"
+  },
+  "sidebar": {
+    "conversations": "Conversations",
+    "newChat": "New chat"
+  },
+  "welcome": {
+    "title": "How can I help?",
+    "subtitle": "Ask about news coverage, analyse data or draft a document. Files you attach, and files I make, stay with this conversation.",
+    "examples": {
+      "one": "Summarise this week's news coverage of a company",
+      "two": "Compare how two outlets covered the same story",
+      "three": "Turn the attached data into a chart"
+    }
+  },
+  "composer": {
+    "placeholder": "Ask {{product}} anything…",
+    "hintEnter": "Enter to send • Shift+Enter for a new line",
+    "hintCtrlEnter": "Ctrl+Enter to send • Enter for a new line"
+  },
+  "sessionMenu": {
+    "options": "Conversation options",
+    "optionsFor": "Options for {{name}}",
+    "rename": "Rename",
+    "delete": "Archive or delete"
+  }
+}

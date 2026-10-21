@@ -1,0 +1,48 @@
+{
+  "files": {
+    "open": "檔案",
+    "title": "檔案",
+    "close": "關閉",
+    "back": "所有檔案",
+    "refresh": "重新載入",
+    "download": "下載",
+    "downloadNamed": "下載 {{name}}",
+    "openInNewTab": "在新分頁開啟",
+    "loading": "載入中…",
+    "loadError": "未能載入檔案。",
+    "retry": "再試一次",
+    "empty": "這個對話暫時未有檔案。YYC AI 製作的檔案和你附加的檔案都會在這裏顯示。",
+    "notStarted": "對話開始後，檔案會在這裏顯示。",
+    "noPreview": "這類檔案無法預覽，請下載後開啟。"
+  },
+  "about": {
+    "title": "關於",
+    "licence": "{{product}} 是自由軟件，以 GNU Affero 通用公共授權條款第 3 版（AGPL-3.0）發佈。完整原始碼可在此取得：",
+    "source": "原始碼",
+    "version": "版本 {{version}}"
+  },
+  "sidebar": {
+    "conversations": "對話",
+    "newChat": "新對話"
+  },
+  "welcome": {
+    "title": "有甚麼可以幫你？",
+    "subtitle": "可以查詢新聞報道、分析數據或草擬文件。你附加的檔案和我製作的檔案，都會保存在這個對話內。",
+    "examples": {
+      "one": "總結本週有關某公司的新聞報道",
+      "two": "比較兩間傳媒對同一事件的報道角度",
+      "three": "把附件的數據製成圖表"
+    }
+  },
+  "composer": {
+    "placeholder": "向 {{product}} 提問…",
+    "hintEnter": "Enter 傳送 • Shift+Enter 換行",
+    "hintCtrlEnter": "Ctrl+Enter 傳送 • Enter 換行"
+  },
+  "sessionMenu": {
+    "options": "對話選項",
+    "optionsFor": "「{{name}}」的選項",
+    "rename": "重新命名",
+    "delete": "封存或刪除"
+  }
+}

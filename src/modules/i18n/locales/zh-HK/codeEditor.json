@@ -1,0 +1,47 @@
+{
+  "toolbar": {
+    "changes": "項更改",
+    "previousChange": "上一項更改",
+    "nextChange": "下一項更改",
+    "hideDiff": "隱藏差異標示",
+    "showDiff": "顯示差異標示",
+    "settings": "編輯器設定",
+    "collapse": "收起編輯器",
+    "expand": "將編輯器展開至全闊"
+  },
+  "loading": "正在載入 {{fileName}}...",
+  "header": {
+    "showingChanges": "正在顯示更改"
+  },
+  "actions": {
+    "copyPath": "複製檔案路徑",
+    "pathCopied": "已複製檔案路徑",
+    "download": "下載檔案",
+    "save": "儲存",
+    "saving": "正在儲存...",
+    "saved": "已儲存！",
+    "exitFullscreen": "退出全螢幕",
+    "fullscreen": "全螢幕",
+    "close": "關閉",
+    "previewMarkdown": "預覽 Markdown",
+    "editMarkdown": "編輯 Markdown"
+  },
+  "footer": {
+    "lines": "行數：",
+    "characters": "字元數：",
+    "shortcuts": "按 Ctrl+S 儲存 • 按 Esc 關閉"
+  },
+  "binaryFile": {
+    "title": "二進制檔案",
+    "message": "檔案「{{fileName}}」是二進制檔案，無法在文字編輯器中顯示。"
+  },
+  "filePreview": {
+    "loading": "正在載入預覽...",
+    "error": "無法顯示此檔案。",
+    "openInNewTab": "在新分頁開啟"
+  },
+  "unsavedChanges": {
+    "confirmClose": "你有未儲存的更改。要關閉此檔案並捨棄這些更改嗎？",
+    "indicator": "未儲存的更改"
+  }
+}

@@ -1,3 +1,5 @@
+import { IS_JARVIS } from '@/shared/jarvis';
+
 /**
  * Supported Languages Configuration
  *
@@ -14,7 +16,7 @@ export type Language = {
   nativeName: string;
 };
 
-export const languages: Language[] = [
+const allLanguages: Language[] = [
   {
     value: 'en',
     label: 'English',
@@ -44,6 +46,11 @@ export const languages: Language[] = [
     value: 'zh-TW',
     label: 'Traditional Chinese',
     nativeName: '繁體中文',
+  },
+  {
+    value: 'zh-HK',
+    label: 'Traditional Chinese (Hong Kong)',
+    nativeName: '繁體中文（香港）',
   },
   {
     value: 'ja',
@@ -91,6 +98,13 @@ export const languages: Language[] = [
     nativeName: 'Português (Brasil)',
   },
 ];
+
+/** The staff build offers its staff's two languages only: Hong Kong Chinese first, then English. */
+const JARVIS_LANGUAGES = ['zh-HK', 'en'];
+
+export const languages: Language[] = IS_JARVIS
+  ? JARVIS_LANGUAGES.map((value) => allLanguages.find((lang) => lang.value === value)!)
+  : allLanguages;
 
 /** Get language object by value, or undefined when it is not supported. */
 export const getLanguage = (value: string): Language | undefined => {
