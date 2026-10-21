@@ -4,6 +4,8 @@
 FROM node:22.23.3-bookworm AS build
 WORKDIR /app
 ENV HUSKY=0 ELECTRON_SKIP_BINARY_DOWNLOAD=1 PUPPETEER_SKIP_DOWNLOAD=1 npm_config_fund=false npm_config_audit=false
+# The YYC AI staff build (src/shared/jarvis.ts): chat-only UI, platform mode, no login.
+ENV VITE_JARVIS=true
 COPY package.json package-lock.json ./
 COPY scripts ./scripts
 RUN npm ci
