@@ -1,7 +1,8 @@
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, SquarePen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { Project, ProjectSession } from '@/shared/types';
+import { useProjectCommandState } from '@/modules/project-workspace/context/ProjectsStateContext';
 import MobileMenuButton from '@/modules/project-workspace/MobileMenuButton';
 import WorkspaceConnectionStatus from '@/modules/project-workspace/WorkspaceConnectionStatus';
 import WorkspaceTitle from '@/modules/project-workspace/WorkspaceTitle';
@@ -17,7 +18,8 @@ type JarvisWorkspaceHeaderProps = {
 
 /**
  * The staff build's header (WorkspaceMain renders it instead of WorkspaceHeader): the conversation's
- * title and connection status, and a Files button in place of the Shell / Files / Git / Tasks tabs.
+ * title and connection status, a Files button in place of the Shell / Files / Git / Tasks tabs, and on a
+ * phone a new-chat button.
  */
 export default function JarvisWorkspaceHeader({
   selectedProject,
@@ -28,6 +30,7 @@ export default function JarvisWorkspaceHeader({
   onOpenFiles,
 }: JarvisWorkspaceHeaderProps) {
   const { t } = useTranslation('jarvis');
+  const { handleNewSession } = useProjectCommandState();
 
   return (
     <header className="pwa-header-safe flex-shrink-0 border-b border-border/60 bg-background/95 px-3 py-1.5 backdrop-blur-sm sm:px-4 sm:py-2">
@@ -49,6 +52,18 @@ export default function JarvisWorkspaceHeader({
           >
             <FolderOpen className="h-4 w-4" />
             {t('files.open')}
+          </button>
+        )}
+        {/* On a phone the sidebar is a drawer: a new chat is one tap from the conversation. */}
+        {isMobile && selectedSession && (
+          <button
+            type="button"
+            onClick={() => handleNewSession(selectedProject)}
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
+            aria-label={t('sidebar.newChat')}
+            title={t('sidebar.newChat')}
+          >
+            <SquarePen className="h-5 w-5" />
           </button>
         )}
       </div>

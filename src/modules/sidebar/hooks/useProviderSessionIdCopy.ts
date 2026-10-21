@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 
 import { api } from '@/shared/api';
+import { IS_JARVIS } from '@/shared/jarvis';
 import { copyTextToClipboard } from '@/shared/utils';
 
 type CopyState = 'loading' | 'idle' | 'copying' | 'copied' | 'error';
@@ -53,6 +54,8 @@ export function useProviderSessionIdCopy(sessionId: string, providerLabel: strin
   const setOptionsOpen = useCallback((open: boolean) => {
     if (open) {
       setProviderSessionId(null);
+      // Staff build: the menu offers no "copy provider session id".
+      if (IS_JARVIS) return;
       void load();
     } else {
       reset();
