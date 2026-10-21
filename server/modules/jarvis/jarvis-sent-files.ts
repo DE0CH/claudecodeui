@@ -55,8 +55,8 @@ function contentParts(entry: any): any[] {
 }
 
 /**
- * Every file sent with SendUserFile in a transcript, once each (the latest send wins), newest first. A missing
- * transcript means nothing was sent yet.
+ * Every file sent with SendUserFile in a transcript, once each (the latest send wins), newest send first, the files of
+ * one send in the order Claude gave them. A missing transcript means nothing was sent yet.
  */
 export async function readSentFiles(transcriptPath: string): Promise<SentFileRecord[]> {
   const pending = new Map<string, PendingCall>();
@@ -110,6 +110,6 @@ export async function readSentFiles(transcriptPath: string): Promise<SentFileRec
     }
   }
   return [...latest.values()].sort(
-    (a, b) => Date.parse(b.sentAt) - Date.parse(a.sentAt) || (seq.get(b.path) ?? 0) - (seq.get(a.path) ?? 0),
+    (a, b) => Date.parse(b.sentAt) - Date.parse(a.sentAt) || (seq.get(a.path) ?? 0) - (seq.get(b.path) ?? 0),
   );
 }

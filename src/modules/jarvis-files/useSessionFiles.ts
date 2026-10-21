@@ -25,7 +25,7 @@ type State = {
 
 const sentTime = (file: SessionFile) => new Date(file.sentAt ?? file.mtime).getTime() || 0;
 
-/** Newest first; the server's order (latest send first) breaks ties. */
+/** Newest send first; within one send the server's order (as Claude listed them) stays (a stable sort). */
 const byNewestFirst = (a: SessionFile, b: SessionFile) => sentTime(b) - sentTime(a);
 
 /**

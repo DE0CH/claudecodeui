@@ -212,8 +212,8 @@ test('sent files come from the transcript: successful SendUserFile calls only, l
     const sent = await readSentFiles(transcript);
     assert.deepEqual(sent.map((f) => [f.path, f.sentAt]), [
       ['draft.pdf', '2026-10-21T10:05:00.000Z'],
-      ['b.csv', '2026-10-21T10:03:00.000Z'],
       ['charts/a.png', '2026-10-21T10:03:00.000Z'],
+      ['b.csv', '2026-10-21T10:03:00.000Z'],
     ]);
     assert.deepEqual(await readSentFiles(path.join(temp, 'none.jsonl')), []);
 
