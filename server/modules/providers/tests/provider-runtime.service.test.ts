@@ -86,7 +86,7 @@ test('dispatches runs and aborts through the runtime owned by providerRegistry',
   const runtime = createRuntime({
     async run(command, options, writer, context) {
       calls.push(['run', command, options, writer]);
-      assert.equal(context.resolveProviderSessionId('session-1'), 'native-session-1');
+      assert.equal(await context.resolveProviderSessionId('session-1'), 'native-session-1');
       assert.equal(await context.resolveResumeModel('session-1', 'sonnet'), 'sonnet');
       assert.deepEqual(await context.getProviderModels(), { OPTIONS: [], DEFAULT: 'default-model' });
       assert.equal(context.normalizeMessage('hello', 'session-1')[0]?.provider, 'claude');

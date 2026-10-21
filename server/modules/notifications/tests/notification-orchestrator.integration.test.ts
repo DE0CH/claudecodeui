@@ -13,6 +13,7 @@ import {
 import {
   buildNotificationPayload,
 } from '../services/notification-orchestrator.service.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promise<void> {
   const previousDatabasePath = process.env.DATABASE_PATH;
@@ -26,7 +27,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   try {
     await runTest();
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -37,7 +38,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 test('notification payload uses the app session id for a provider session id', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-session-1', 'claude', '/workspace/demo');
     await sessionsDb.assignProviderSessionId('app-session-1', 'claude-native-1');
 

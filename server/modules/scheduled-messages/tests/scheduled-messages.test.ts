@@ -8,6 +8,7 @@ import { closeConnection, initializeDatabase, scheduledMessagesDb, sessionDrafts
 import { dispatchDueScheduledMessages, dispatchQueuedMessages } from '@/modules/scheduled-messages/services/scheduled-message-dispatcher.service.js';
 import { scheduledMessagesService } from '@/modules/scheduled-messages/services/scheduled-messages.service.js';
 import { chatRunRegistry } from '@/modules/websocket/index.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 const SESSION_ID = 'scheduled-session';
 
@@ -25,7 +26,7 @@ async function withIsolatedDatabase(runTest: (userId: number) => void | Promise<
     await runTest(Number(user.id));
   } finally {
     chatRunRegistry.clearAll();
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -302,7 +303,7 @@ test('cancelling something that already fired is refused', async () => {
     });
     await dispatchDueScheduledMessages(createRuntime([]));
 
-    assert.throws(
+    await assert.rejects(
       async () => await scheduledMessagesService.cancel(userId, scheduled.id),
       (error: Error & { code?: string }) => error.code === 'SCHEDULED_MESSAGE_NOT_PENDING',
     );
@@ -318,7 +319,7 @@ test('one user cannot cancel another user\'s scheduled message', async () => {
       scheduledFor: new Date(Date.now() + 3_600_000).toISOString(),
     });
 
-    assert.throws(
+    await assert.rejects(
       async () => await scheduledMessagesService.cancel(userId + 1, scheduled.id),
       (error: Error & { code?: string }) => error.code === 'SCHEDULED_MESSAGE_NOT_PENDING',
     );
@@ -330,15 +331,15 @@ test('scheduling validates its input', async () => {
   await withIsolatedDatabase(async (userId) => {
     const base = { userId, sessionId: SESSION_ID, scheduledFor: new Date(Date.now() + 1000).toISOString() };
 
-    assert.throws(
+    await assert.rejects(
       async () => await scheduledMessagesService.schedule({ ...base, content: '   ' }),
       (error: Error & { code?: string }) => error.code === 'CONTENT_REQUIRED',
     );
-    assert.throws(
+    await assert.rejects(
       async () => await scheduledMessagesService.schedule({ ...base, content: 'hi', scheduledFor: 'not a date' }),
       (error: Error & { code?: string }) => error.code === 'INVALID_SCHEDULE_TIME',
     );
-    assert.throws(
+    await assert.rejects(
       async () => await scheduledMessagesService.schedule({
         ...base,
         content: 'hi',
@@ -346,7 +347,7 @@ test('scheduling validates its input', async () => {
       }),
       (error: Error & { code?: string }) => error.code === 'SCHEDULE_TOO_FAR_AHEAD',
     );
-    assert.throws(
+    await assert.rejects(
       async () => await scheduledMessagesService.schedule({ ...base, sessionId: 'nope', content: 'hi' }),
       (error: Error & { code?: string }) => error.code === 'SESSION_NOT_FOUND',
     );

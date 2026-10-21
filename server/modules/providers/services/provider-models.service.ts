@@ -15,12 +15,12 @@ import { AppError } from '@/shared/utils.js';
 
 /** Session-row access the service needs, narrowed so tests can stub it. */
 type ProviderModelsSessionStore = {
-  getSessionById(sessionId: string): { model: string | null; effort: string | null } | null;
-  setSessionModel(sessionId: string, model: string): void;
-  setSessionEffort(sessionId: string, effort: string): void;
+  getSessionById(sessionId: string): Promise<{ model: string | null; effort: string | null } | null>;
+  setSessionModel(sessionId: string, model: string): Promise<void>;
+  setSessionEffort(sessionId: string, effort: string): Promise<void>;
 };
 
-/** SQLite catalog operations used by the Providers service and its unit fakes. */
+/** Catalog operations used by the Providers service and its unit fakes. */
 type ProviderModelsCatalogStore = Pick<
   typeof providerModelsDb,
   | 'listCustomProviderModels'

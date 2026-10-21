@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { closeConnection, initializeDatabase } from '@/modules/database/index.js';
 import type { IProvider } from '@/shared/interfaces.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 // Each provider synchronizer resolves `os.homedir()` when the registry module is
 // first imported, so HOME has to point at an empty fixture home *before* that
@@ -45,7 +46,7 @@ async function withIsolatedDatabase(runTest: () => Promise<void>): Promise<void>
   try {
     await runTest();
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -125,6 +126,10 @@ test('a synchronizeSessions call after the shared scan settles starts a new scan
       await first;
 
       const second = sessionSynchronizerService.synchronizeSessions();
+      // The scan reads its last-scan time from the database before it reaches the provider.
+      while (providerStub.getSynchronizeCalls() < 2) {
+        await new Promise((resolve) => { setTimeout(resolve, 5); });
+      }
       providerStub.release();
       await second;
 

@@ -6,11 +6,12 @@ import test from 'node:test';
 
 import {
   closeConnection,
-  getConnection,
   initializeDatabase,
+  run,
   sessionDraftsDb,
   userPreferencesDb,
 } from '@/modules/database/index.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 const USER_ID = 1;
 
@@ -25,14 +26,12 @@ async function withDatabase(runTest: () => void | Promise<void>): Promise<void> 
   await initializeDatabase();
 
   // Both tables cascade from users(id), so a row has to exist to write against.
-  getConnection()
-    .prepare('INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)')
-    .run(USER_ID, 'tester', 'hash');
+  await run('INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)', [USER_ID, 'tester', 'hash']);
 
   try {
     await runTest();
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -43,7 +42,7 @@ async function withDatabase(runTest: () => void | Promise<void>): Promise<void> 
 }
 
 test('preferences round-trip every JSON shape a setting can take', async () => {
-  withDatabase(async () => {
+  await withDatabase(async () => {
     await userPreferencesDb.savePreferences(USER_ID, {
       theme: 'dark',
       tasksEnabled: false,
@@ -59,7 +58,7 @@ test('preferences round-trip every JSON shape a setting can take', async () => {
 });
 
 test('saving preferences merge-patches instead of replacing the whole set', async () => {
-  withDatabase(async () => {
+  await withDatabase(async () => {
     await userPreferencesDb.savePreferences(USER_ID, { theme: 'dark', userLanguage: 'de' });
     await userPreferencesDb.savePreferences(USER_ID, { theme: 'light' });
 
@@ -71,7 +70,7 @@ test('saving preferences merge-patches instead of replacing the whole set', asyn
 });
 
 test('a preference set to undefined is removed', async () => {
-  withDatabase(async () => {
+  await withDatabase(async () => {
     await userPreferencesDb.savePreferences(USER_ID, { theme: 'dark', userLanguage: 'de' });
     await userPreferencesDb.savePreferences(USER_ID, { userLanguage: undefined });
 
@@ -80,21 +79,20 @@ test('a preference set to undefined is removed', async () => {
 });
 
 test('one unreadable preference value does not cost the user the others', async () => {
-  withDatabase(async () => {
+  await withDatabase(async () => {
     await userPreferencesDb.savePreferences(USER_ID, { theme: 'dark' });
-    getConnection()
-      .prepare(
-        `INSERT INTO user_preferences (user_id, preference_key, preference_value)
-         VALUES (?, ?, ?)`
-      )
-      .run(USER_ID, 'broken', 'not json');
+    await run(
+      `INSERT INTO user_preferences (user_id, preference_key, preference_value)
+       VALUES (?, ?, ?)`,
+      [USER_ID, 'broken', 'not json'],
+    );
 
     assert.deepEqual(await userPreferencesDb.getPreferences(USER_ID), { theme: 'dark' });
   });
 });
 
 test('drafts round-trip text and queued message per scope', async () => {
-  withDatabase(async () => {
+  await withDatabase(async () => {
     await sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: 'half typed', queuedMessage: null });
     await sessionDraftsDb.saveDraft(USER_ID, 'project:p1', {
       text: '',
@@ -112,7 +110,7 @@ test('drafts round-trip text and queued message per scope', async () => {
 });
 
 test('saving an empty draft deletes the row rather than keeping a blank one', async () => {
-  withDatabase(async () => {
+  await withDatabase(async () => {
     await sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: 'typed', queuedMessage: null });
     await sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: '', queuedMessage: null });
 
@@ -121,7 +119,7 @@ test('saving an empty draft deletes the row rather than keeping a blank one', as
 });
 
 test('deleteDraft removes only the named scope', async () => {
-  withDatabase(async () => {
+  await withDatabase(async () => {
     await sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: 'a', queuedMessage: null });
     await sessionDraftsDb.saveDraft(USER_ID, 'session-b', { text: 'b', queuedMessage: null });
 

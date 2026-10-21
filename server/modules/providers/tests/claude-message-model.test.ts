@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import { ClaudeSessionsProvider } from '@/modules/providers/list/claude/claude-sessions.provider.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 const SESSION_ID = 'claude-model-session';
 
@@ -20,7 +21,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   try {
     await runTest();
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {

@@ -15,11 +15,7 @@ function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDepe
       getUserByUsername: async () => undefined,
       updateLastLogin: async () => undefined,
     },
-    transaction: {
-      begin: () => undefined,
-      commit: () => undefined,
-      rollback: () => undefined,
-    },
+    withTransaction: async (fn) => await fn(),
     hashPassword: async () => 'hashed-password',
     comparePassword: async () => false,
     generateToken: () => 'signed-token',
@@ -30,10 +26,16 @@ function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDepe
 test('register hashes credentials and commits through injected dependencies', async () => {
   const operations: string[] = [];
   const service = createAuthService(createDependencies({
-    transaction: {
-      begin: () => operations.push('begin'),
-      commit: () => operations.push('commit'),
-      rollback: () => operations.push('rollback'),
+    withTransaction: async (fn) => {
+      operations.push('begin');
+      try {
+        const value = await fn();
+        operations.push('commit');
+        return value;
+      } catch (error) {
+        operations.push('rollback');
+        throw error;
+      }
     },
     hashPassword: async (password) => {
       operations.push(`hash:${password}`);
@@ -46,14 +48,15 @@ test('register hashes credentials and commits through injected dependencies', as
         return { id: 1, username, password_hash: passwordHash };
       },
       getUserByUsername: async () => undefined,
-      updateLastLogin: async (userId) => operations.push(`login:${userId}`),
+      updateLastLogin: async (userId) => { operations.push(`login:${userId}`); },
     },
   }));
 
   const result = await service.register('alice', 'secret12');
 
   assert.equal(result.token, 'signed-token');
-  assert.deepEqual(operations, ['begin', 'hash:secret12', 'create:alice:hash', 'commit', 'login:1']);
+  // The password is hashed before the transaction opens, so no database connection is held during bcrypt.
+  assert.deepEqual(operations, ['hash:secret12', 'begin', 'create:alice:hash', 'commit', 'login:1']);
 });
 
 test('login rejects an invalid password without issuing a token', async () => {

@@ -35,7 +35,7 @@ test('subscribeToPush persists the subscription and enables Web Push', async () 
   const operations: string[] = [];
   const service = createSettingsService(dependencies({
     pushSubscriptions: {
-      save: async (_id, endpoint) => operations.push(`save:${endpoint}`),
+      save: async (_id, endpoint) => { operations.push(`save:${endpoint}`); },
       remove: async () => undefined,
     },
     notifications: {

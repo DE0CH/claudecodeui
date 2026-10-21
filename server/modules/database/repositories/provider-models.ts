@@ -145,6 +145,7 @@ export const providerModelsDb = {
         provider, model_id, model_name, sort_order, effort_values, effort_default
       )
       VALUES (?, ?, ?, ?, ?, ?)
+      RETURNING id
     `, [provider,
       input.id,
       input.model,

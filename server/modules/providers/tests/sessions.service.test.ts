@@ -10,6 +10,7 @@ import { sessionsService } from '@/modules/providers/services/sessions.service.j
 import { chatRunRegistry } from '@/modules/websocket/index.js';
 import type { IProvider } from '@/shared/interfaces.js';
 import type { BackgroundTaskSummary } from '@/shared/types.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promise<void> {
   const previousDatabasePath = process.env.DATABASE_PATH;
@@ -22,7 +23,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   try {
     await runTest();
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -33,7 +34,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 test('provider session id returns the mapped native id', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-session-id', 'codex', '/tmp/session-id-copy-project');
     await sessionsDb.assignProviderSessionId('app-session-id', 'codex-native-session-id');
 
@@ -42,7 +43,7 @@ test('provider session id returns the mapped native id', { concurrency: false },
 });
 
 test('app session names use at most four whole words from the initial message', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     const result = await sessionsService.createAppSession(
       'codex',
       '/tmp/session-name-project',
@@ -58,7 +59,7 @@ test('app session names use at most four whole words from the initial message', 
 });
 
 test('app sessions without message text receive a stable fallback name', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     const result = await sessionsService.createAppSession('claude', '/tmp/attachment-only-project', '  \n ');
 
     assert.equal(result.sessionName, 'Untitled Session');
@@ -67,10 +68,10 @@ test('app sessions without message text receive a stable fallback name', { concu
 });
 
 test('provider session id is unavailable until the provider assigns one', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('pending-app-session', 'claude', '/tmp/session-id-copy-project');
 
-    assert.throws(
+    await assert.rejects(
       async () => await sessionsService.getProviderSessionId('pending-app-session'),
       (error: unknown) => {
         const typedError = error as { code?: string; statusCode?: number };
@@ -81,8 +82,8 @@ test('provider session id is unavailable until the provider assigns one', { conc
 });
 
 test('provider session id reports a missing app session', { concurrency: false }, async () => {
-  await withIsolatedDatabase(() => {
-    assert.throws(
+  await withIsolatedDatabase(async () => {
+    await assert.rejects(
       async () => await sessionsService.getProviderSessionId('missing-session'),
       (error: unknown) => {
         const typedError = error as { code?: string; statusCode?: number };
@@ -93,7 +94,7 @@ test('provider session id reports a missing app session', { concurrency: false }
 });
 
 test('recent sessions map project metadata and preserve database pagination', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createSession(
       'older-session',
       'claude',
@@ -153,7 +154,7 @@ test('history pages are sliced from the cached full transcript and see appended 
   const transcriptPath = path.join(transcriptDirectory, `${sessionId}.jsonl`);
 
   try {
-    withIsolatedDatabase(async () => {
+    await withIsolatedDatabase(async () => {
       const rows = [
         claudeTextRow(sessionId, 'user', 'one', 0),
         claudeTextRow(sessionId, 'assistant', 'reply one', 1),
@@ -254,7 +255,7 @@ const task = (taskId: string, startedAt: number): BackgroundTaskSummary => ({
 });
 
 test('running sessions list a session whose background work outlived its turn', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('held-session', 'claude', '/tmp/running-project');
     // The turn ran and completed: the registry still holds the finished run.
     const run = chatRunRegistry.startRun({
@@ -285,7 +286,7 @@ test('running sessions list a session whose background work outlived its turn', 
 });
 
 test('running sessions carry their tasks on a chat run that is still going', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('busy-session', 'claude', '/tmp/running-project');
     await sessionsDb.createAppSession('idle-session', 'codex', '/tmp/running-project');
     const run = chatRunRegistry.startRun({
@@ -316,7 +317,7 @@ test('running sessions carry their tasks on a chat run that is still going', { c
 });
 
 test('running sessions with no background work are the chat runs alone', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('plain-session', 'codex', '/tmp/running-project');
     const run = chatRunRegistry.startRun({
       appSessionId: 'plain-session', provider: 'codex', providerSessionId: null, connection: null, userId: null,
@@ -335,7 +336,7 @@ test('running sessions with no background work are the chat runs alone', { concu
 });
 
 test('running sessions report a turn driven by the Claude CLI', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('cli-session', 'claude', '/tmp/running-project');
     await sessionsDb.assignProviderSessionId('cli-session', 'claude-native-1');
 
@@ -361,7 +362,7 @@ test('running sessions report a turn driven by the Claude CLI', { concurrency: f
 });
 
 test('running sessions ignore registry files a crash left behind', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('stale-session', 'claude', '/tmp/running-project');
     await sessionsDb.assignProviderSessionId('stale-session', 'claude-native-stale');
 
@@ -383,7 +384,7 @@ test('running sessions ignore registry files a crash left behind', { concurrency
 });
 
 test('a CLI turn does not duplicate a session already running a chat run', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('both-session', 'claude', '/tmp/running-project');
     await sessionsDb.assignProviderSessionId('both-session', 'claude-native-both');
     const run = chatRunRegistry.startRun({
@@ -406,7 +407,7 @@ test('a CLI turn does not duplicate a session already running a chat run', { con
 });
 
 test('an unreadable registry never fails the running-sessions poll', { concurrency: false }, async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('safe-session', 'claude', '/tmp/running-project');
     await sessionsDb.assignProviderSessionId('safe-session', 'claude-native-safe');
 

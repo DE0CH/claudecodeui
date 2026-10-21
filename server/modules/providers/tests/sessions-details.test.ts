@@ -7,6 +7,7 @@ import test from 'node:test';
 import { closeConnection, initializeDatabase, projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
 import { AppError, normalizeProjectPath } from '@/shared/utils.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promise<void> {
   const previousDatabasePath = process.env.DATABASE_PATH;
@@ -20,7 +21,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   try {
     await runTest();
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -31,7 +32,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 test('getSessionDetailsById resolves the owning project for a disk-indexed session', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     const projectPath = '/home/user/example-project';
     const sessionId = await sessionsDb.createSession('provider-abc', 'claude', projectPath, 'My session');
     const projectRow = await projectsDb.getProjectPath(projectPath);
@@ -51,7 +52,7 @@ test('getSessionDetailsById resolves the owning project for a disk-indexed sessi
 });
 
 test('getSessionDetailsById falls back to the provider-native id and returns the canonical app id', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     const projectPath = '/home/user/alias-project';
     const appSessionId = await sessionsDb.createAppSession('app-session-1', 'claude', projectPath);
     await sessionsDb.assignProviderSessionId(appSessionId, 'provider-native-1');
@@ -64,8 +65,8 @@ test('getSessionDetailsById falls back to the provider-native id and returns the
 });
 
 test('getSessionDetailsById throws SESSION_NOT_FOUND for unknown ids', async () => {
-  await withIsolatedDatabase(() => {
-    assert.throws(
+  await withIsolatedDatabase(async () => {
+    await assert.rejects(
       async () => await sessionsService.getSessionDetailsById('does-not-exist'),
       (error: unknown) => error instanceof AppError && error.code === 'SESSION_NOT_FOUND',
     );

@@ -9,6 +9,7 @@ import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/datab
 import { handleChatConnection } from '@/modules/websocket/services/chat-websocket.service.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 const SESSION_ID = 'held-session';
 
@@ -68,7 +69,7 @@ async function withGateway(
   } finally {
     connectedClients.clear();
     chatRunRegistry.clearAll();
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -78,13 +79,22 @@ async function withGateway(
   }
 }
 
-/** The handler is async and the socket listener does not await it. */
-const settle = () => new Promise((resolve) => { setTimeout(resolve, 30); });
+const sleep = (ms: number) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+/**
+ * The handler is async (its session lookup is a database query) and the socket listener does not await it: wait
+ * until `until` holds (at most 5 s), then a little longer for anything that would follow.
+ */
+const settle = async (until: () => boolean) => {
+  const deadline = Date.now() + 5000;
+  while (!until() && Date.now() < deadline) await sleep(10);
+  await sleep(30);
+};
 
 test('chat.stop-task stops the task through the session\'s provider runtime', async () => {
   await withGateway('task-1', async ({ socket, stops }) => {
     socket.emit('message', JSON.stringify({ type: 'chat.stop-task', sessionId: SESSION_ID, taskId: 'task-1' }));
-    await settle();
+    await settle(() => stops.length > 0);
 
     // The provider comes from the session row, never from the frame.
     assert.deepEqual(stops, [{ provider: 'claude', sessionId: SESSION_ID, taskId: 'task-1' }]);
@@ -96,7 +106,7 @@ test('chat.stop-task stops the task through the session\'s provider runtime', as
 test('a task the runtime is not tracking is refused with NO_SUCH_TASK', async () => {
   await withGateway('task-1', async ({ socket, stops }) => {
     socket.emit('message', JSON.stringify({ type: 'chat.stop-task', sessionId: SESSION_ID, taskId: 'already-settled' }));
-    await settle();
+    await settle(() => socket.frames.length > 0);
 
     assert.equal(stops.length, 1);
     assert.equal(socket.frames.length, 1);
@@ -109,7 +119,7 @@ test('a task the runtime is not tracking is refused with NO_SUCH_TASK', async ()
 test('a stop without a task id never reaches the runtime', async () => {
   await withGateway('task-1', async ({ socket, stops }) => {
     socket.emit('message', JSON.stringify({ type: 'chat.stop-task', sessionId: SESSION_ID }));
-    await settle();
+    await settle(() => socket.frames.length > 0);
 
     assert.equal(stops.length, 0);
     assert.equal(socket.frames.at(-1)?.code, 'TASK_ID_REQUIRED');
@@ -119,7 +129,7 @@ test('a stop without a task id never reaches the runtime', async () => {
 test('a stop for a session that does not exist is refused', async () => {
   await withGateway('task-1', async ({ socket, stops }) => {
     socket.emit('message', JSON.stringify({ type: 'chat.stop-task', sessionId: 'no-such-session', taskId: 'task-1' }));
-    await settle();
+    await settle(() => socket.frames.length > 0);
 
     assert.equal(stops.length, 0);
     assert.equal(socket.frames.at(-1)?.code, 'SESSION_NOT_FOUND');

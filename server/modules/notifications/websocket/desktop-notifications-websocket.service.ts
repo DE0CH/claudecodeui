@@ -51,6 +51,7 @@ export function handleDesktopNotificationsConnection(
 
   let registered = false;
 
+  // A void handler: every await below is caught, so a database error can't become an unhandled rejection.
   ws.on('message', async (rawMessage) => {
     const data = parseIncomingJsonObject(rawMessage) as DesktopNotificationRegisterMessage | null;
     if (!data) {
@@ -77,14 +78,19 @@ export function handleDesktopNotificationsConnection(
       return;
     }
 
-    const device = await registerDesktopNotificationClient({
-      userId,
-      deviceId,
-      label: readOptionalString(data.label),
-      platform: readOptionalString(data.platform),
-      appVersion: readOptionalString(data.appVersion),
-      ws,
-    });
+    let device: Awaited<ReturnType<typeof registerDesktopNotificationClient>> | null = null;
+    try {
+      device = await registerDesktopNotificationClient({
+        userId,
+        deviceId,
+        label: readOptionalString(data.label),
+        platform: readOptionalString(data.platform),
+        appVersion: readOptionalString(data.appVersion),
+        ws,
+      });
+    } catch (error) {
+      console.error('[desktop-notifications] registration failed:', error instanceof Error ? error.message : error);
+    }
 
     if (!device) {
       ws.close(1011, 'Registration failed');

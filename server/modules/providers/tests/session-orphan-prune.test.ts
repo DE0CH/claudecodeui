@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 // Each provider synchronizer resolves `os.homedir()` when the registry module is
 // first imported, so HOME has to point at an empty fixture home *before* that
@@ -43,7 +44,7 @@ async function withIsolatedDatabase(runTest: (workspace: string) => Promise<void
   try {
     await runTest(tempDirectory);
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {

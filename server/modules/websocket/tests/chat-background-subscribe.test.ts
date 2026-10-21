@@ -9,6 +9,7 @@ import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/datab
 import { handleChatConnection } from '@/modules/websocket/services/chat-websocket.service.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 /**
  * A session's turn ends while its agents, workflow or backgrounded command are
@@ -47,7 +48,7 @@ async function withIsolatedDatabase(runTest: () => Promise<void>): Promise<void>
     connectedClients.clear();
     chatRunRegistry.clearAll();
     chatRunRegistry.setRetentionGuard(() => false);
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {

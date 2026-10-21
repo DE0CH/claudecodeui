@@ -45,7 +45,7 @@ function createScriptedQuery(): { createQuery: NonNullable<ProviderRuntimeContex
     stopped,
   };
 
-  const createQuery: NonNullable<ProviderRuntimeContext['createQuery']> = async ({ prompt }) => {
+  const createQuery: NonNullable<ProviderRuntimeContext['createQuery']> = ({ prompt }) => {
     void (async () => {
       for await (const _message of prompt) { /* the CLI reads its stdin */ }
       released = true;
@@ -102,7 +102,8 @@ async function withRun(
   }
 }
 
-const settle = () => new Promise((resolve) => { setTimeout(resolve, 25); });
+// 100 ms: the runtime awaits database reads (Postgres) between stream events, so 25 ms was flaky under load.
+const settle = () => new Promise((resolve) => { setTimeout(resolve, 100); });
 
 // A fixed settle can be too short on a loaded machine; the supersede tests
 // wait for the run to have actually processed its turn instead.

@@ -4,16 +4,16 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import Database from 'better-sqlite3';
-
 import {
   closeConnection,
-  getConnection,
+  get,
+  all,
+  run,
   initializeDatabase,
   providerModelsDb,
   sessionsDb,
 } from '@/modules/database/index.js';
-import { runMigrations } from '@/modules/database/migrations.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 test('provider model repository stores custom rows only and maintains session references', async () => {
   const previousDatabasePath = process.env.DATABASE_PATH;
@@ -26,9 +26,10 @@ test('provider model repository stores custom rows only and maintains session re
   await initializeDatabase();
 
   try {
-    const columns = getConnection().prepare('PRAGMA table_info(provider_models)').all() as Array<{
-      name: string;
-    }>;
+    const columns = await all<{ name: string }>(
+      `SELECT column_name AS name FROM information_schema.columns
+       WHERE table_schema = current_schema() AND table_name = 'provider_models' ORDER BY ordinal_position`,
+    );
     assert.deepEqual(columns.map((column) => column.name), [
       'id',
       'provider',
@@ -53,15 +54,14 @@ test('provider model repository stores custom rows only and maintains session re
       custom.recordId,
     );
 
-    const db = getConnection();
-    db.prepare(`
+    await run(`
       INSERT INTO projects (project_id, project_path)
       VALUES ('project-1', '/tmp/project-1')
-    `).run();
-    db.prepare(`
+    `);
+    await run(`
       INSERT INTO sessions (session_id, provider, project_path, model, effort)
       VALUES ('session-1', 'codex', '/tmp/project-1', 'gateway/model-v1', 'high')
-    `).run();
+    `);
 
     const updated = await providerModelsDb.updateCustomProviderModel('codex', custom.recordId, {
       model: 'Private Gateway Model 2',
@@ -84,7 +84,7 @@ test('provider model repository stores custom rows only and maintains session re
     assert.equal((await sessionsDb.getSessionById('session-1'))?.effort, null);
     assert.equal(await providerModelsDb.getCustomProviderModel('codex', custom.recordId), null);
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -94,32 +94,24 @@ test('provider model repository stores custom rows only and maintains session re
   }
 });
 
-test('migrations create the provider model index on an install that lacks it', async () => {
+test('the schema creates the provider model ordering index', async () => {
   const previousDatabasePath = process.env.DATABASE_PATH;
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'provider-model-index-'));
   const databasePath = path.join(tempDirectory, 'auth.db');
 
   await closeConnection();
   process.env.DATABASE_PATH = databasePath;
-  await writeFile(databasePath, '');
   await initializeDatabase();
 
   try {
-    const db = getConnection();
-    // Upgraded installs reach runMigrations with provider_models present but no
-    // index, so the CREATE INDEX statement is compiled against the real table
-    // instead of short-circuiting on the existing index name.
-    db.exec('DROP INDEX IF EXISTS idx_provider_models_provider_order');
-
-    runMigrations(db);
-
-    const indexedColumns = (db
-      .prepare('PRAGMA index_info(idx_provider_models_provider_order)')
-      .all() as Array<{ name: string }>)
-      .map((column) => column.name);
-    assert.deepEqual(indexedColumns, ['provider', 'sort_order', 'id']);
+    const index = await get<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_provider_models_provider_order'`,
+    );
+    assert.match(index?.indexdef ?? '', /\(provider, sort_order, id\)/);
+    // Initializing again is a no-op.
+    await initializeDatabase();
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -171,63 +163,10 @@ test('provider model repository persists declared effort levels', async () => {
       effort: null,
     });
     assert.equal(cleared?.effort, null);
-    const row = getConnection()
-      .prepare('SELECT effort_values, effort_default FROM provider_models WHERE id = ?')
-      .get(custom.recordId);
+    const row = await get('SELECT effort_values, effort_default FROM provider_models WHERE id = ?', [custom.recordId]);
     assert.deepEqual(row, { effort_values: null, effort_default: null });
   } finally {
-    await closeConnection();
-    if (previousDatabasePath === undefined) {
-      delete process.env.DATABASE_PATH;
-    } else {
-      process.env.DATABASE_PATH = previousDatabasePath;
-    }
-    await rm(tempDirectory, { recursive: true, force: true });
-  }
-});
-
-test('migrations add effort columns to an existing provider model table and keep old rows NULL', async () => {
-  const previousDatabasePath = process.env.DATABASE_PATH;
-  const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'provider-model-effort-migration-'));
-  const databasePath = path.join(tempDirectory, 'auth.db');
-
-  // The table as it shipped before effort metadata existed, with one user row.
-  const legacyDb = new Database(databasePath);
-  legacyDb.exec(`
-    CREATE TABLE provider_models (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      provider TEXT NOT NULL CHECK (provider IN ('claude', 'cursor', 'codex', 'opencode')),
-      model_id TEXT NOT NULL,
-      model_name TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(provider, model_id)
-    );
-    INSERT INTO provider_models (provider, model_id, model_name, sort_order)
-    VALUES ('codex', 'legacy-model', 'Legacy Model', 0);
-  `);
-  legacyDb.close();
-
-  await closeConnection();
-  process.env.DATABASE_PATH = databasePath;
-  await initializeDatabase();
-
-  try {
-    const columnNames = (getConnection().prepare('PRAGMA table_info(provider_models)').all() as Array<{
-      name: string;
-    }>).map((column) => column.name);
-    assert.deepEqual(columnNames.slice(-2), ['effort_values', 'effort_default']);
-
-    const [legacy] = await providerModelsDb.listCustomProviderModels('codex');
-    assert.equal(legacy?.modelId, 'legacy-model');
-    assert.equal(legacy?.effort, null);
-
-    // Running the migrations again is a no-op.
-    runMigrations(getConnection());
-    assert.equal((await providerModelsDb.listCustomProviderModels('codex'))[0]?.effort, null);
-  } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {

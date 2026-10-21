@@ -10,6 +10,7 @@ import { sessionsService } from '@/modules/providers/index.js';
 import { handleChatConnection } from '@/modules/websocket/services/chat-websocket.service.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 const SESSION_ID = 'edit-session';
 
@@ -119,7 +120,7 @@ async function withGateway(
     holdRun = null;
     connectedClients.clear();
     chatRunRegistry.clearAll();
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -129,8 +130,17 @@ async function withGateway(
   }
 }
 
-/** The handler is async and the socket listener does not await it. */
-const settle = () => new Promise((resolve) => { setTimeout(resolve, 30); });
+const sleep = (ms: number) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+/**
+ * The handler is async (it reads the session row from the database) and the socket listener does not await it:
+ * wait until `until` holds (at most 5 s), then a little longer for anything that would follow.
+ */
+const settle = async (until: () => boolean) => {
+  const deadline = Date.now() + 5000;
+  while (!until() && Date.now() < deadline) await sleep(10);
+  await sleep(30);
+};
 
 test('an edit resumes through the turn before the one being replaced', async () => {
   await withGateway('claude', async ({ socket, runs }) => {
@@ -140,7 +150,7 @@ test('an edit resumes through the turn before the one being replaced', async () 
       anchorId: 'e-u2',
       content: 'a better second prompt',
     }));
-    await settle();
+    await settle(() => runs.length > 0 || socket.frames.some((frame) => frame.code));
 
     assert.equal(runs.length, 1);
     assert.equal(runs[0].command, 'a better second prompt');
@@ -150,7 +160,7 @@ test('an edit resumes through the turn before the one being replaced', async () 
   });
 });
 
-test('editing the first prompt starts the conversation over', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, async () => {
+test('editing the first prompt starts the conversation over', async () => {
   await withGateway('claude', async ({ socket, runs }) => {
     socket.emit('message', JSON.stringify({
       type: 'chat.edit-send',
@@ -158,7 +168,7 @@ test('editing the first prompt starts the conversation over', { skip: 'uses a pr
       anchorId: 'e-u1',
       content: 'a better first prompt',
     }));
-    await settle();
+    await settle(() => runs.length > 0 || socket.frames.some((frame) => frame.code));
 
     assert.equal(runs.length, 1);
     assert.equal(runs[0].options.resumeAnchorId, undefined);
@@ -167,14 +177,14 @@ test('editing the first prompt starts the conversation over', { skip: 'uses a pr
 });
 
 test('every subscribed client is told to drop the superseded turns', async () => {
-  await withGateway('claude', async ({ socket }) => {
+  await withGateway('claude', async ({ socket, runs }) => {
     socket.emit('message', JSON.stringify({
       type: 'chat.edit-send',
       sessionId: SESSION_ID,
       anchorId: 'e-u2',
       content: 'replacement',
     }));
-    await settle();
+    await settle(() => runs.length > 0 || socket.frames.some((frame) => frame.code));
 
     const truncation = socket.frames.find((frame) => frame.kind === 'history_truncated');
     assert.ok(truncation, 'a history_truncated frame is emitted');
@@ -192,14 +202,14 @@ test('an edit without an anchor is refused', async () => {
       sessionId: SESSION_ID,
       content: 'no anchor',
     }));
-    await settle();
+    await settle(() => runs.length > 0 || socket.frames.some((frame) => frame.code));
 
     assert.equal(runs.length, 0);
     assert.equal(socket.frames.at(-1)?.code, 'ANCHOR_REQUIRED');
   });
 });
 
-test('an anchor the transcript does not hold is refused', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, async () => {
+test('an anchor the transcript does not hold is refused', async () => {
   await withGateway('claude', async ({ socket, runs }) => {
     socket.emit('message', JSON.stringify({
       type: 'chat.edit-send',
@@ -207,7 +217,7 @@ test('an anchor the transcript does not hold is refused', { skip: 'uses a provid
       anchorId: 'not-in-transcript',
       content: 'replacement',
     }));
-    await settle();
+    await settle(() => runs.length > 0 || socket.frames.some((frame) => frame.code));
 
     assert.equal(runs.length, 0);
     assert.equal(socket.frames.at(-1)?.code, 'ANCHOR_NOT_FOUND');
@@ -222,7 +232,7 @@ test('a provider that cannot re-run from a point is refused rather than sending 
       anchorId: 'e-u2',
       content: 'replacement',
     }));
-    await settle();
+    await settle(() => runs.length > 0 || socket.frames.some((frame) => frame.code));
 
     assert.equal(runs.length, 0);
     assert.equal(socket.frames.at(-1)?.code, 'EDIT_NOT_SUPPORTED');
@@ -246,7 +256,7 @@ test('a refused send never rewinds the conversation', { skip: 'uses a provider t
         sessionId: SESSION_ID,
         content: 'a turn that is already running',
       }));
-      await settle();
+      await settle(() => runs.length > 0 || socket.frames.some((frame) => frame.code));
       assert.equal(runs.length, 1);
 
       socket.emit('message', JSON.stringify({
@@ -255,7 +265,7 @@ test('a refused send never rewinds the conversation', { skip: 'uses a provider t
         anchorId: 'turn-b',
         content: 'an edit that arrives too late',
       }));
-      await settle();
+      await settle(() => runs.length > 0 || socket.frames.some((frame) => frame.code));
     } finally {
       sessionsService.rewindSessionForEdit = realRewind;
     }
@@ -287,7 +297,7 @@ test('a provider that has to branch to rewind is rewound before the run, not dur
         anchorId: 'turn-b',
         content: 'a better second prompt',
       }));
-      await settle();
+      await settle(() => runs.length > 0 || socket.frames.some((frame) => frame.code));
     } finally {
       sessionsService.rewindSessionForEdit = realRewind;
     }

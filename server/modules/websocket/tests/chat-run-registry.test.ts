@@ -7,6 +7,7 @@ import test from 'node:test';
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 /**
  * Minimal stand-in for a websocket connection: collects every JSON frame the
@@ -35,7 +36,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   } finally {
     connectedClients.clear();
     chatRunRegistry.clearAll();
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -46,7 +47,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 test('live events are remapped to the app session id and sequenced', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-run-1', 'claude', '/workspace/demo');
     const connection = new FakeConnection();
     const run = chatRunRegistry.startRun({
@@ -70,7 +71,7 @@ test('live events are remapped to the app session id and sequenced', async () =>
 });
 
 test('session_created is swallowed and persisted as the provider-id mapping', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-run-2', 'cursor', '/workspace/demo');
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
@@ -91,8 +92,10 @@ test('session_created is swallowed and persisted as the provider-id mapping', as
     });
 
     // The upsert is broadcast without blocking the run: resolving the owning
-    // project's display name is async, so let that settle before asserting.
-    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    // project's display name is async (database reads), so wait for it before asserting.
+    for (let waited = 0; waited < 5000 && !connection.frames.some((frame) => frame.kind === 'session_upserted'); waited += 10) {
+      await new Promise((resolve) => { setTimeout(resolve, 10); });
+    }
 
     // The provider-native event itself is never forwarded...
     const sessionUpserts = connection.frames.filter((frame) => frame.kind === 'session_upserted');
@@ -106,7 +109,7 @@ test('session_created is swallowed and persisted as the provider-id mapping', as
 });
 
 test('complete marks the run finished and duplicate completes are dropped', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-run-3', 'codex', '/workspace/demo');
     const connection = new FakeConnection();
     const run = chatRunRegistry.startRun({
@@ -134,7 +137,7 @@ test('complete marks the run finished and duplicate completes are dropped', asyn
 });
 
 test('a finished run\'s safety net cannot complete the session\'s next run', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-run-9', 'codex', '/workspace/demo');
     const connection = new FakeConnection();
 
@@ -172,7 +175,7 @@ test('a finished run\'s safety net cannot complete the session\'s next run', asy
 });
 
 test('listRunningRuns returns only currently running app sessions', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-run-7', 'claude', '/workspace/demo');
     await sessionsDb.createAppSession('app-run-8', 'codex', '/workspace/demo');
     const connection = new FakeConnection();
@@ -204,7 +207,7 @@ test('listRunningRuns returns only currently running app sessions', async () => 
 });
 
 test('replayEvents returns only events after the requested seq', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-run-4', 'claude', '/workspace/demo');
     const connection = new FakeConnection();
     const run = chatRunRegistry.startRun({
@@ -227,7 +230,7 @@ test('replayEvents returns only events after the requested seq', async () => {
 });
 
 test('attachConnection adds a socket without cutting off the ones already watching', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-run-5', 'opencode', '/workspace/demo');
     const firstConnection = new FakeConnection();
     const run = chatRunRegistry.startRun({
@@ -252,7 +255,7 @@ test('attachConnection adds a socket without cutting off the ones already watchi
 });
 
 test('a refreshed tab stops receiving once its old socket is closed', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-run-5b', 'opencode', '/workspace/demo');
     const staleConnection = new FakeConnection();
     const run = chatRunRegistry.startRun({
@@ -278,7 +281,7 @@ test('a refreshed tab stops receiving once its old socket is closed', async () =
 });
 
 test('startRun rejects a second concurrent run for the same session', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('app-run-6', 'opencode', '/workspace/demo');
     const connection = new FakeConnection();
     const first = chatRunRegistry.startRun({

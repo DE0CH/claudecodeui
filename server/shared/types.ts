@@ -650,10 +650,10 @@ export type ProviderRuntimeContext = {
    * runtime uses the SDK's own; tests supply a scripted stream so the hold
    * and background-work paths can be driven without a CLI process.
    */
-  createQuery?: (input: { prompt: AsyncIterable<unknown>; options: AnyRecord }) => Promise<AsyncIterable<unknown> & {
+  createQuery?: (input: { prompt: AsyncIterable<unknown>; options: AnyRecord }) => AsyncIterable<unknown> & {
     interrupt(): Promise<void>;
     stopTask?(taskId: string): Promise<void>;
-  }>;
+  };
 };
 
 export type ProviderRunFunction = (

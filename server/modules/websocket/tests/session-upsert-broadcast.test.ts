@@ -10,6 +10,7 @@ import {
   broadcastSessionUpsertedBatch,
 } from '@/modules/websocket/services/session-upsert-broadcast.service.js';
 import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 class FakeConnection {
   readyState = 1; // WS_OPEN_STATE
@@ -32,7 +33,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
     await runTest();
   } finally {
     connectedClients.clear();
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {

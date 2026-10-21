@@ -13,8 +13,8 @@ type ProjectRow = {
   isArchived: number;
 };
 
-test('toggleProjectStar throws when projectId is missing', () => {
-  assert.throws(
+test('toggleProjectStar throws when projectId is missing', async () => {
+  await assert.rejects(
     async () => await toggleProjectStar('   '),
     (error: unknown) =>
       error instanceof AppError
@@ -23,11 +23,11 @@ test('toggleProjectStar throws when projectId is missing', () => {
   );
 });
 
-test('toggleProjectStar throws when project does not exist', () => {
+test('toggleProjectStar throws when project does not exist', async () => {
   const originalGetProjectById = projectsDb.getProjectById;
   try {
     projectsDb.getProjectById = async () => null;
-    assert.throws(
+    await assert.rejects(
       async () => await toggleProjectStar('project-1'),
       (error: unknown) =>
         error instanceof AppError
@@ -55,7 +55,7 @@ test('toggleProjectStar flips star state and persists it', async () => {
         isStarred: 0,
         isArchived: 0,
       }) as ProjectRow;
-    projectsDb.updateProjectIsStarredById = (projectId: string, isStarred: boolean) => {
+    projectsDb.updateProjectIsStarredById = async (projectId: string, isStarred: boolean) => {
       capturedProjectId = projectId;
       capturedState = isStarred;
     };
@@ -78,7 +78,7 @@ test('applyLegacyStarredProjectIds stars only valid, unstarred projects', async 
   const updatedProjectIds: string[] = [];
 
   try {
-    projectsDb.getProjectById = (projectId: string) => {
+    projectsDb.getProjectById = async (projectId: string) => {
       if (projectId === 'project-a') {
         return {
           project_id: 'project-a',
@@ -101,7 +101,7 @@ test('applyLegacyStarredProjectIds stars only valid, unstarred projects', async 
 
       return null;
     };
-    projectsDb.updateProjectIsStarredById = (projectId: string) => {
+    projectsDb.updateProjectIsStarredById = async (projectId: string) => {
       updatedProjectIds.push(projectId);
     };
 

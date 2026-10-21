@@ -4,8 +4,10 @@
  * The schema mirrors upstream's SQLite one exactly (schema.ts): timestamps are text in SQLite's
  * `YYYY-MM-DD HH:MM:SS` form, booleans are 0/1 integers, ids are plain numbers, so the repositories and their
  * callers see the same values as before. Every query goes through `all`/`get`/`run`, which take the repositories'
- * SQLite SQL and translate the few dialect differences (`?` placeholders, CURRENT_TIMESTAMP, `datetime(x)`,
- * the camel-case columns `isStarred`/`isArchived`, which SQLite matches case-insensitively).
+ * SQLite SQL and translate the few dialect differences (`?` placeholders, untyped `? IS NULL`, CURRENT_TIMESTAMP,
+ * NULL ordering of explicit ASC/DESC,
+ * the camel-case columns `isStarred`/`isArchived`, which SQLite matches case-insensitively); SQLite's `julianday()`
+ * and `datetime()` exist as functions in each schema (schema.ts).
  *
  * Where the data lives:
  *   - DATABASE_URL: the Postgres server (default: TEST_DATABASE_URL, else the local test server);
@@ -59,14 +61,17 @@ export function translateSql(sql: string): string {
     if (c === "'") inStr = !inStr;
     if (c === '?' && !inStr) {
       n += 1;
-      out += `$${n}`;
+      // `? IS NULL` gives Postgres no context for the parameter's type (SQLite has none to need): call it text.
+      out += /^\s+IS\s+(NOT\s+)?NULL\b/i.test(sql.slice(i + 1)) ? `$${n}::text` : `$${n}`;
       continue;
     }
     out += c;
   }
   return out
     .replace(/\bCURRENT_TIMESTAMP\b/g, NOW_TEXT)
-    .replace(/\bdatetime\(/gi, '(')
+    // SQLite sorts NULL below every value; Postgres above. Keep SQLite's order.
+    .replace(/\bDESC\b(?!\s+NULLS\b)/g, 'DESC NULLS LAST')
+    .replace(/\bASC\b(?!\s+NULLS\b)/g, 'ASC NULLS FIRST')
     .replace(/(?<!")\bisStarred\b(?!")/g, '"isStarred"')
     .replace(/(?<!")\bisArchived\b(?!")/g, '"isArchived"');
 }

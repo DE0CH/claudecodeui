@@ -7,6 +7,7 @@ import test from 'node:test';
 import { closeConnection } from '@/modules/database/connection.js';
 import { initializeDatabase } from '@/modules/database/init-db.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promise<void> {
   const previousDatabasePath = process.env.DATABASE_PATH;
@@ -20,7 +21,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   try {
     await runTest();
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -31,7 +32,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 test('projectsDb.createProjectPath returns created for fresh paths', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     const created = await projectsDb.createProjectPath('/workspace/new-project');
 
     assert.equal(created.outcome, 'created');
@@ -42,7 +43,7 @@ test('projectsDb.createProjectPath returns created for fresh paths', async () =>
 });
 
 test('projectsDb.createProjectPath returns reactivated_archived for archived duplicates', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     const initial = await projectsDb.createProjectPath('/workspace/archived-project', 'Archived Project');
     assert.equal(initial.outcome, 'created');
     assert.ok(initial.project);
@@ -58,7 +59,7 @@ test('projectsDb.createProjectPath returns reactivated_archived for archived dup
 });
 
 test('projectsDb.createProjectPath returns active_conflict for active duplicates', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     const initial = await projectsDb.createProjectPath('/workspace/active-project');
     assert.equal(initial.outcome, 'created');
     assert.ok(initial.project);

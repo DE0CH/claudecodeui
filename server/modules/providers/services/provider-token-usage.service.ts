@@ -3,11 +3,10 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import Database from 'better-sqlite3';
 
 import { sessionsDb } from '@/modules/database/index.js';
 import type { AnyRecord } from '@/shared/types.js';
-import { AppError, getOpenCodeDatabasePath } from '@/shared/utils.js';
+import { AppError } from '@/shared/utils.js';
 
 type SessionRow = NonNullable<Awaited<ReturnType<typeof sessionsDb.getSessionById>>>;
 
@@ -20,7 +19,6 @@ type FileTail = {
 type ProviderTokenUsageServiceDependencies = {
   getSessionById: (sessionId: string) => Promise<SessionRow | null | undefined>;
   getHomeDirectory: () => string;
-  getOpenCodeDatabasePath: () => string;
   fileExists: (filePath: string) => boolean;
   readDirectory: (directoryPath: string) => Promise<Dirent[]>;
   readTextFile: (filePath: string) => Promise<string>;
@@ -46,14 +44,6 @@ type TokenUsageResult = {
   message?: string;
 };
 
-type OpenCodeTokenRow = {
-  inputTokens: number | null;
-  outputTokens: number | null;
-  reasoningTokens: number | null;
-  cacheReadTokens: number | null;
-  cacheWriteTokens: number | null;
-};
-
 /**
  * Both JSONL usage readers below only need the newest usage row, which sits at
  * or near the end of the transcript. Reading just this much of the tail keeps
@@ -65,7 +55,6 @@ const TOKEN_USAGE_TAIL_BYTES = 4 * 1024 * 1024;
 const defaultDependencies: ProviderTokenUsageServiceDependencies = {
   getSessionById: async (sessionId) => await sessionsDb.getSessionById(sessionId),
   getHomeDirectory: () => os.homedir(),
-  getOpenCodeDatabasePath,
   fileExists: (filePath) => fsSync.existsSync(filePath),
   readDirectory: (directoryPath) => fsp.readdir(directoryPath, { withFileTypes: true }),
   readTextFile: (filePath) => fsp.readFile(filePath, 'utf8'),
@@ -331,67 +320,6 @@ function claudeEntriesHaveUsage(entries: AnyRecord[]): boolean {
   return entries.some((entry) => entry?.type === 'assistant' && entry.message?.usage);
 }
 
-function readOpenCodeTokenUsage(databasePath: string, providerSessionId: string): TokenUsageResult {
-  const database = new Database(databasePath, { readonly: true, fileMustExist: true });
-  try {
-    const columns = database.prepare('PRAGMA table_info(session)').all() as Array<{ name: string }>;
-    const columnNames = new Set(columns.map((column) => column.name));
-    const requiredColumns = [
-      'tokens_input',
-      'tokens_output',
-      'tokens_reasoning',
-      'tokens_cache_read',
-      'tokens_cache_write',
-    ];
-
-    if (!requiredColumns.every((column) => columnNames.has(column))) {
-      return {
-        used: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        breakdown: { input: 0, output: 0 },
-        unsupported: true,
-        message: 'Token usage tracking is not available in this OpenCode database schema',
-      };
-    }
-
-    const row = database.prepare(`
-      SELECT
-        tokens_input AS inputTokens,
-        tokens_output AS outputTokens,
-        tokens_reasoning AS reasoningTokens,
-        tokens_cache_read AS cacheReadTokens,
-        tokens_cache_write AS cacheWriteTokens
-      FROM session
-      WHERE id = ?
-    `).get(providerSessionId) as OpenCodeTokenRow | undefined;
-
-    if (!row) {
-      throw new AppError('OpenCode session was not found.', {
-        code: 'OPENCODE_SESSION_NOT_FOUND',
-        statusCode: 404,
-      });
-    }
-
-    const inputTokens = readUsageNumber(row.inputTokens) + readUsageNumber(row.cacheReadTokens);
-    const outputTokens = readUsageNumber(row.outputTokens);
-    const used = readUsageNumber(row.inputTokens)
-      + outputTokens
-      + readUsageNumber(row.reasoningTokens)
-      + readUsageNumber(row.cacheReadTokens)
-      + readUsageNumber(row.cacheWriteTokens);
-
-    return {
-      used,
-      inputTokens,
-      outputTokens,
-      breakdown: { input: inputTokens, output: outputTokens },
-    };
-  } finally {
-    database.close();
-  }
-}
-
 /**
  * Creates the provider token-usage service used by the provider routes. The
  * provider test suite supplies isolated filesystem and session dependencies so
@@ -449,15 +377,16 @@ export function createProviderTokenUsageService(
       }
 
       if (session.provider === 'opencode') {
-        const databasePath = dependencies.getOpenCodeDatabasePath();
-        if (!dependencies.fileExists(databasePath)) {
-          throw new AppError('OpenCode database was not found.', {
-            code: 'OPENCODE_DATABASE_NOT_FOUND',
-            statusCode: 404,
-          });
-        }
-
-        return readOpenCodeTokenUsage(databasePath, providerSessionId);
+        // The Jarvis fork dropped the OpenCode provider (and the SQLite reader its usage needed).
+        return {
+          used: 0,
+          total: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          breakdown: { input: 0, output: 0 },
+          unsupported: true,
+          message: 'Token usage tracking not available for OpenCode sessions',
+        };
       }
 
       if (session.provider === 'codex') {

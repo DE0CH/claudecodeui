@@ -29,15 +29,15 @@ const createSessionStore = (
   ]));
   return {
     sessions,
-    getSessionById: (sessionId: string) =>
+    getSessionById: async (sessionId: string) =>
       sessions.get(sessionId) ?? null,
-    setSessionModel: (sessionId: string, model: string) => {
+    setSessionModel: async (sessionId: string, model: string) => {
       const session = sessions.get(sessionId);
       if (session) {
         session.model = model;
       }
     },
-    setSessionEffort: (sessionId: string, effort: string) => {
+    setSessionEffort: async (sessionId: string, effort: string) => {
       const session = sessions.get(sessionId);
       if (session) {
         session.effort = effort;
@@ -56,16 +56,16 @@ const createCatalogStore = () => {
   return {
     rows,
     deleteFallbacks,
-    listCustomProviderModels(provider: LLMProvider) {
+    async listCustomProviderModels(provider: LLMProvider) {
       return [...readRows(provider)];
     },
-    getCustomProviderModel(provider: LLMProvider, recordId: number) {
+    async getCustomProviderModel(provider: LLMProvider, recordId: number) {
       return readRows(provider).find((record) => record.recordId === recordId) ?? null;
     },
-    findCustomProviderModelByModelId(provider: LLMProvider, modelId: string) {
+    async findCustomProviderModelByModelId(provider: LLMProvider, modelId: string) {
       return readRows(provider).find((record) => record.modelId === modelId) ?? null;
     },
-    createCustomProviderModel(provider: LLMProvider, input: CustomProviderModelInput) {
+    async createCustomProviderModel(provider: LLMProvider, input: CustomProviderModelInput) {
       const record: CustomProviderModelRecord = {
         recordId: nextRecordId++,
         provider,
@@ -77,7 +77,7 @@ const createCatalogStore = () => {
       rows.set(provider, [...readRows(provider), record]);
       return record;
     },
-    updateCustomProviderModel(
+    async updateCustomProviderModel(
       provider: LLMProvider,
       recordId: number,
       input: CustomProviderModelInput,
@@ -98,7 +98,7 @@ const createCatalogStore = () => {
       )));
       return updated;
     },
-    deleteCustomProviderModel(provider: LLMProvider, recordId: number, fallbackModelId: string) {
+    async deleteCustomProviderModel(provider: LLMProvider, recordId: number, fallbackModelId: string) {
       const existing = readRows(provider).find((record) => record.recordId === recordId);
       if (!existing) {
         return null;
@@ -115,14 +115,14 @@ const createSettingsStore = () => {
   const values = new Map<string, string>();
   return {
     values,
-    get: (key: string) => values.get(key) ?? null,
-    set: (key: string, value: string) => {
+    get: async (key: string) => values.get(key) ?? null,
+    set: async (key: string, value: string) => {
       values.set(key, value);
     },
   };
 };
 
-const createTestService = async (options: {
+const createTestService = (options: {
   catalog?: ReturnType<typeof createCatalogStore>;
   sessions?: ReturnType<typeof createSessionStore>;
   settings?: ReturnType<typeof createSettingsStore>;

@@ -36,7 +36,7 @@ async function runScripted(
     getProviderModels: async () => CLAUDE_PREDEFINED_MODELS as never,
     normalizeMessage: (raw, sessionId) => sessions.normalizeMessage(raw, sessionId),
     isProviderInstalled: async () => true,
-    createQuery: async ({ prompt }) => {
+    createQuery: ({ prompt }) => {
       // Drain the held prompt like the CLI would read its stdin.
       void (async () => { for await (const _message of prompt) { /* read */ } })();
       const iterator = (async function* () { yield* stream; })();

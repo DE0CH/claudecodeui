@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import Database from 'better-sqlite3';
 
 import {
   createProviderTokenUsageService,
@@ -111,53 +110,6 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
       inputTokens: 40,
       outputTokens: 9,
       breakdown: { input: 40, output: 9 },
-    });
-  } finally {
-    await rm(tempDirectory, { recursive: true, force: true });
-  }
-});
-
-test('OpenCode token usage resolves its provider-native id from the session row', async () => {
-  const tempDirectory = await mkdtemp(path.join(tmpdir(), 'provider-token-usage-opencode-'));
-  const databasePath = path.join(tempDirectory, 'opencode.db');
-  const database = new Database(databasePath);
-
-  try {
-    database.exec(`
-      CREATE TABLE session (
-        id TEXT PRIMARY KEY,
-        tokens_input INTEGER,
-        tokens_output INTEGER,
-        tokens_reasoning INTEGER,
-        tokens_cache_read INTEGER,
-        tokens_cache_write INTEGER
-      )
-    `);
-    database.prepare(`
-      INSERT INTO session (
-        id,
-        tokens_input,
-        tokens_output,
-        tokens_reasoning,
-        tokens_cache_read,
-        tokens_cache_write
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run('provider-session', 12, 7, 3, 5, 2);
-  } finally {
-    database.close();
-  }
-
-  try {
-    const service = createProviderTokenUsageService({
-      getSessionById: async () => createSessionRow({ provider: 'opencode' }),
-      getOpenCodeDatabasePath: () => databasePath,
-    });
-
-    assert.deepEqual(await service.getSessionTokenUsage('app-session'), {
-      used: 29,
-      inputTokens: 17,
-      outputTokens: 7,
-      breakdown: { input: 17, output: 7 },
     });
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });

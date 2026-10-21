@@ -289,7 +289,7 @@ async function startServer() {
         await initializeDatabase();
 
         // Configure Web Push (VAPID keys)
-        configureWebPush();
+        await configureWebPush();
 
         // Check if running in production mode (dist folder exists)
         const distIndexPath = path.join(APP_ROOT, 'dist', 'index.html');

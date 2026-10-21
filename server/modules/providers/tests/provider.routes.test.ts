@@ -14,6 +14,7 @@ import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type { IProvider } from '@/shared/interfaces.js';
 import type { BackgroundTaskSummary, WorkflowAgentActivity } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 async function withProviderServer(
   run: (baseUrl: string, workspacePath: string) => Promise<void>,
@@ -47,7 +48,7 @@ async function withProviderServer(
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     });
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -85,23 +86,21 @@ test('conversation search streams title matches before transcript results', asyn
   await withProviderServer(async (baseUrl, workspacePath) => {
     await sessionsDb.createAppSession(
       'title-only-session',
-      'codex',
+      'claude',
       workspacePath,
       'Release planning notes',
     );
-    const transcriptPath = path.join(path.dirname(workspacePath), 'codex-search.jsonl');
+    const transcriptPath = path.join(path.dirname(workspacePath), 'claude-search.jsonl');
     await writeFile(transcriptPath, `${JSON.stringify({
-      type: 'event_msg',
+      type: 'user',
+      uuid: 'search-user-1',
+      sessionId: 'transcript-session',
       timestamp: '2026-08-12T09:00:00.000Z',
-      payload: {
-        type: 'user_message',
-        kind: 'plain',
-        message: 'Release planning also appears in this conversation.',
-      },
+      message: { role: 'user', content: 'Release planning also appears in this conversation.' },
     })}\n`);
     await sessionsDb.createSession(
       'transcript-session',
-      'codex',
+      'claude',
       workspacePath,
       'Unrelated session',
       undefined,
@@ -138,7 +137,7 @@ test('conversation search streams title matches before transcript results', asyn
     assert.equal(titlePayload.titleResults.length, 1);
     assert.equal(titlePayload.titleResults[0]?.sessionId, 'title-only-session');
     assert.equal(titlePayload.titleResults[0]?.sessionTitle, 'Release planning notes');
-    assert.equal(titlePayload.titleResults[0]?.provider, 'codex');
+    assert.equal(titlePayload.titleResults[0]?.provider, 'claude');
   });
 });
 

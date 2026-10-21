@@ -35,7 +35,7 @@ test('getGitConfig imports system configuration when the repository is empty', a
   const service = createUserService(createDependencies({
     users: {
       getGitConfig: async () => undefined,
-      updateGitConfig: async (...args) => updates.push(args),
+      updateGitConfig: async (...args) => { updates.push(args); },
       completeOnboarding: async () => undefined,
       hasCompletedOnboarding: async () => false,
     },
@@ -53,7 +53,7 @@ test('updateGitConfig persists valid input and invokes the Git adapter', async (
   const service = createUserService(createDependencies({
     users: {
       getGitConfig: async () => undefined,
-      updateGitConfig: async (_id, name, email) => operations.push(`persist:${name}:${email}`),
+      updateGitConfig: async (_id, name, email) => { operations.push(`persist:${name}:${email}`); },
       completeOnboarding: async () => undefined,
       hasCompletedOnboarding: async () => false,
     },
@@ -74,7 +74,7 @@ test('savePreferences forwards only the keys the client sent', async () => {
   const service = createUserService(createDependencies({
     preferences: {
       getPreferences: async () => ({ theme: 'dark' }),
-      savePreferences: async (_id, updates) => saved.push(updates),
+      savePreferences: async (_id, updates) => { saved.push(updates); },
     },
   }));
 
@@ -84,17 +84,17 @@ test('savePreferences forwards only the keys the client sent', async () => {
   assert.deepEqual(result.preferences, { theme: 'dark' });
 });
 
-test('savePreferences rejects a non-object body', () => {
+test('savePreferences rejects a non-object body', async () => {
   const service = createUserService(createDependencies());
 
-  assert.throws(async () => await service.savePreferences(3, ['theme']), /object/i);
-  assert.throws(async () => await service.savePreferences(3, 'theme'), /object/i);
+  await assert.rejects(async () => await service.savePreferences(3, ['theme']), /object/i);
+  await assert.rejects(async () => await service.savePreferences(3, 'theme'), /object/i);
 });
 
-test('savePreferences rejects an over-long preference key', () => {
+test('savePreferences rejects an over-long preference key', async () => {
   const service = createUserService(createDependencies());
 
-  assert.throws(async () => await service.savePreferences(3, { ['k'.repeat(201)]: 1 }), /1-200/);
+  await assert.rejects(async () => await service.savePreferences(3, { ['k'.repeat(201)]: 1 }), /1-200/);
 });
 
 test('saveDraft stores the text and queued message under the given scope', async () => {
@@ -102,7 +102,7 @@ test('saveDraft stores the text and queued message under the given scope', async
   const service = createUserService(createDependencies({
     drafts: {
       getDrafts: async () => [],
-      saveDraft: async (...args) => saved.push(args),
+      saveDraft: async (...args) => { saved.push(args); },
       deleteDraft: async () => undefined,
     },
   }));
@@ -124,7 +124,7 @@ test('saveDraft defaults a missing queued message to null rather than dropping t
   const service = createUserService(createDependencies({
     drafts: {
       getDrafts: async () => [],
-      saveDraft: async (...args) => saved.push(args),
+      saveDraft: async (...args) => { saved.push(args); },
       deleteDraft: async () => undefined,
     },
   }));
@@ -134,17 +134,17 @@ test('saveDraft defaults a missing queued message to null rather than dropping t
   assert.deepEqual(saved, [[5, 'session-1', { text: 'typing', queuedMessage: null }]]);
 });
 
-test('saveDraft rejects a blank or over-long scope', () => {
+test('saveDraft rejects a blank or over-long scope', async () => {
   const service = createUserService(createDependencies());
 
-  assert.throws(async () => await service.saveDraft(5, '   ', { text: 'x' }), /scope/i);
-  assert.throws(async () => await service.saveDraft(5, 'x'.repeat(201), { text: 'x' }), /scope/i);
+  await assert.rejects(async () => await service.saveDraft(5, '   ', { text: 'x' }), /scope/i);
+  await assert.rejects(async () => await service.saveDraft(5, 'x'.repeat(201), { text: 'x' }), /scope/i);
 });
 
-test('saveDraft rejects text past the storage limit', () => {
+test('saveDraft rejects text past the storage limit', async () => {
   const service = createUserService(createDependencies());
 
-  assert.throws(
+  await assert.rejects(
     async () => await service.saveDraft(5, 'session-1', { text: 'x'.repeat(100_001) }),
     /too long/i,
   );

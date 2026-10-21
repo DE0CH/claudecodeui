@@ -8,6 +8,7 @@ import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/datab
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
 import type { IProviderFork } from '@/shared/interfaces.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 const SOURCE_ID = 'fork-source';
 
@@ -51,7 +52,7 @@ async function withForkableClaude(
     await runTest({ calls, directory });
   } finally {
     Object.defineProperty(claude, 'fork', { value: realFork, configurable: true, writable: true });
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {

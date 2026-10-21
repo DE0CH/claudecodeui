@@ -8,6 +8,7 @@ import { closeConnection } from '@/modules/database/connection.js';
 import { initializeDatabase } from '@/modules/database/init-db.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
 import { sessionsDb } from '@/modules/database/repositories/sessions.db.js';
+import { releaseTestDatabase } from '@/modules/database/testing.js';
 
 async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promise<void> {
   const previousDatabasePath = process.env.DATABASE_PATH;
@@ -21,7 +22,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   try {
     await runTest();
   } finally {
-    await closeConnection();
+    await releaseTestDatabase();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -32,7 +33,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 test('session archive queries hide archived rows from active project views', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createSession('session-active', 'claude', '/workspace/demo-project', 'Active Session');
     await sessionsDb.createSession('session-archived', 'claude', '/workspace/demo-project', 'Archived Session');
     await sessionsDb.updateSessionIsArchived('session-archived', true);
@@ -54,7 +55,7 @@ test('session archive queries hide archived rows from active project views', asy
 });
 
 test('createSession reactivates archived rows when the session becomes active again', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createSession('session-reused', 'claude', '/workspace/demo-project', 'First Name');
     await sessionsDb.updateSessionIsArchived('session-reused', true);
 
@@ -73,7 +74,7 @@ test('createSession reactivates archived rows when the session becomes active ag
 });
 
 test("createSession leaves an archived row archived when the transcript has not changed", async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     const createdAt = "2026-07-18T09:00:00.000Z";
     const updatedAt = "2026-07-18T10:00:00.000Z";
     const jsonlPath = "/transcripts/session-untouched.jsonl";
@@ -97,7 +98,7 @@ test("createSession leaves an archived row archived when the transcript has not 
 });
 
 test("the upsert path counts an omitted timestamp as activity", async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     // An app-created row carries no provider id, so indexing it takes the
     // INSERT ... ON CONFLICT branch rather than the UPDATE above. Its
     // updated_at is CURRENT_TIMESTAMP, which resolves to whole seconds, so a
@@ -113,7 +114,7 @@ test("the upsert path counts an omitted timestamp as activity", async () => {
 });
 
 test("the upsert path leaves an archived row alone for a transcript older than it", async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession("session-stale", "claude", "/workspace/demo-project");
     await sessionsDb.updateSessionIsArchived("session-stale", true);
 
@@ -125,7 +126,7 @@ test("the upsert path leaves an archived row alone for a transcript older than i
 
 
 test('repository reads normalize SQLite UTC timestamps to ISO strings', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     await sessionsDb.createAppSession('session-timezone', 'claude', '/workspace/demo-project');
 
     const row = await sessionsDb.getSessionById('session-timezone');
@@ -137,7 +138,7 @@ test('repository reads normalize SQLite UTC timestamps to ISO strings', async ()
 });
 
 test('recent sessions are globally ordered, paginated, and limited to visible conversations', async () => {
-  withIsolatedDatabase(async () => {
+  await withIsolatedDatabase(async () => {
     const fixtures: Array<Parameters<typeof sessionsDb.createSession>> = [
       ['session-oldest', 'claude', '/workspace/project-a', 'Oldest', '2026-07-18T09:00:00.000Z', '2026-07-18T10:00:00.000Z'],
       ['session-newest', 'codex', '/workspace/project-b', 'Newest', '2026-07-18T11:00:00.000Z', '2026-07-18T12:00:00.900Z'],
@@ -146,7 +147,9 @@ test('recent sessions are globally ordered, paginated, and limited to visible co
       ['session-archived', 'claude', '/workspace/project-a', 'Archived session', '2026-07-18T13:00:00.000Z', '2026-07-18T13:00:00.000Z'],
       ['session-hidden-project', 'claude', '/workspace/project-hidden', 'Archived project session', '2026-07-18T14:00:00.000Z', '2026-07-18T14:00:00.000Z'],
     ];
-    fixtures.forEach((fixture) => sessionsDb.createSession(...fixture));
+    for (const fixture of fixtures) {
+      await sessionsDb.createSession(...fixture);
+    }
 
     await sessionsDb.updateSessionIsArchived('session-archived', true);
     await projectsDb.updateProjectIsArchived('/workspace/project-hidden', true);
