@@ -63,7 +63,7 @@ type SearchSessionConversationsInput = {
   onProgress?: (update: SessionConversationSearchProgressUpdate) => void;
 };
 
-type SessionRepositoryRow = ReturnType<typeof sessionsDb.getAllSessions>[number];
+type SessionRepositoryRow = Awaited<ReturnType<typeof sessionsDb.getAllSessions>>[number];
 type SearchableSessionRow = SessionRepositoryRow & {
   provider: SearchableProvider;
   jsonl_path: string;
@@ -172,13 +172,19 @@ function toSummaryText(customName: string | null, fallback: string | null | unde
  * matches are resolved from the database before transcript scanning so the UI
  * can always present them first, including sessions without a transcript yet.
  */
-function findSessionTitleResults(
+async function findSessionTitleResults(
   sessions: SessionRepositoryRow[],
   query: string,
   limit: number,
-): SessionTitleSearchResult[] {
+): Promise<SessionTitleSearchResult[]> {
   const normalizedQuery = query.toLocaleLowerCase().replace(/\s+/g, ' ');
-  const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
+  // each session's project, looked up once per path before the (synchronous) filtering below
+  const projectCache = new Map<string, Awaited<ReturnType<typeof projectsDb.getProjectPath>> | null>();
+  for (const session of sessions) {
+    const p = typeof session.project_path === 'string' && session.project_path.trim() ? session.project_path.trim() : null;
+    const key = p ?? UNKNOWN_PROJECT_KEY;
+    if (!projectCache.has(key)) projectCache.set(key, p ? await projectsDb.getProjectPath(p) : null);
+  }
 
   return sessions
     .flatMap((session) => {
@@ -193,13 +199,6 @@ function findSessionTitleResults(
         ? session.project_path.trim()
         : null;
       const projectKey = projectPath ?? UNKNOWN_PROJECT_KEY;
-      if (!projectCache.has(projectKey)) {
-        projectCache.set(
-          projectKey,
-          projectPath ? projectsDb.getProjectPath(projectPath) : null,
-        );
-      }
-
       const project = projectCache.get(projectKey) ?? null;
       if (project?.isArchived) {
         return [];
@@ -523,7 +522,7 @@ function extractCodexText(content: unknown): string {
     .join(' ');
 }
 
-function normalizeSearchableSessions(rows: SessionRepositoryRow[]): SearchableSessionRow[] {
+async function normalizeSearchableSessions(rows: SessionRepositoryRow[]): Promise<SearchableSessionRow[]> {
   const normalizedRows: SearchableSessionRow[] = [];
   const projectArchiveStateByPath = new Map<string, boolean>();
 
@@ -555,7 +554,7 @@ function normalizeSearchableSessions(rows: SessionRepositoryRow[]): SearchableSe
     const normalizedProjectPath = typeof row.project_path === 'string' ? row.project_path.trim() : '';
     if (normalizedProjectPath) {
       if (!projectArchiveStateByPath.has(normalizedProjectPath)) {
-        const projectRow = projectsDb.getProjectPath(normalizedProjectPath);
+        const projectRow = await projectsDb.getProjectPath(normalizedProjectPath);
         projectArchiveStateByPath.set(normalizedProjectPath, Boolean(projectRow?.isArchived));
       }
 
@@ -574,7 +573,7 @@ function normalizeSearchableSessions(rows: SessionRepositoryRow[]): SearchableSe
   return normalizedRows;
 }
 
-function buildProjectBuckets(searchableSessions: SearchableSessionRow[]): ProjectBucket[] {
+async function buildProjectBuckets(searchableSessions: SearchableSessionRow[]): Promise<ProjectBucket[]> {
   const projectBuckets = new Map<string, ProjectBucket>();
   const projectMetadataCache = new Map<string, { projectId: string | null; projectDisplayName: string }>();
 
@@ -588,7 +587,7 @@ function buildProjectBuckets(searchableSessions: SearchableSessionRow[]): Projec
             projectDisplayName: 'Unknown Project',
           });
         } else {
-          const projectRow = projectsDb.getProjectPath(key);
+          const projectRow = await projectsDb.getProjectPath(key);
           const customProjectName = typeof projectRow?.custom_project_name === 'string'
             ? projectRow.custom_project_name.trim()
             : '';
@@ -1168,11 +1167,11 @@ export async function searchConversations(
     return { results: [], titleResults: [], totalMatches: 0, query: safeQuery };
   }
 
-  const activeSessions = sessionsDb.getAllSessions();
-  const titleResults = findSessionTitleResults(activeSessions, safeQuery, safeLimit);
+  const activeSessions = await sessionsDb.getAllSessions();
+  const titleResults = await findSessionTitleResults(activeSessions, safeQuery, safeLimit);
   onTitleResults?.(titleResults);
 
-  const searchableSessions = normalizeSearchableSessions(activeSessions);
+  const searchableSessions = await normalizeSearchableSessions(activeSessions);
   if (searchableSessions.length === 0) {
     return { results: [], titleResults, totalMatches: 0, query: safeQuery };
   }
@@ -1220,7 +1219,7 @@ export async function searchConversations(
     }
   }
 
-  const projectBuckets = buildProjectBuckets(searchableSessions);
+  const projectBuckets = await buildProjectBuckets(searchableSessions);
   const totalProjects = projectBuckets.length;
   const results: ProjectConversationResult[] = [];
   let scannedProjects = 0;

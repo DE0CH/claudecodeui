@@ -338,7 +338,7 @@ test('providerSkillsService lists claude user, project, and enabled plugin skill
  * This test covers Codex repository/user/system skill folders, including both
  * supported user roots, and verifies repository lookup across cwd, parent, and git root.
  */
-test('providerSkillsService lists codex repository, user, and system skills', { concurrency: false }, async () => {
+test('providerSkillsService lists codex repository, user, and system skills', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, { concurrency: false }, async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'llm-skills-codex-'));
   const repoRoot = path.join(tempRoot, 'repo');
   const workspacePath = path.join(repoRoot, 'packages', 'app');
@@ -404,7 +404,7 @@ test('providerSkillsService lists codex repository, user, and system skills', { 
  * This test covers OpenCode skill lookup across cwd-to-git-root project folders
  * plus the global OpenCode/Claude/Agents compatibility locations.
  */
-test('providerSkillsService lists opencode project and user compatibility skills', { concurrency: false }, async () => {
+test('providerSkillsService lists opencode project and user compatibility skills', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, { concurrency: false }, async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'llm-skills-opencode-'));
   const repoRoot = path.join(tempRoot, 'repo');
   const workspacePath = path.join(repoRoot, 'packages', 'app');
@@ -470,7 +470,7 @@ test('providerSkillsService lists opencode project and user compatibility skills
  * This test covers Cursor skill directory rules, including shared
  * `.agents/skills` project support.
  */
-test('providerSkillsService lists cursor skills from its configured directories', { concurrency: false }, async () => {
+test('providerSkillsService lists cursor skills from its configured directories', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, { concurrency: false }, async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'llm-skills-gc-'));
   const workspacePath = path.join(tempRoot, 'workspace');
   await fs.mkdir(workspacePath, { recursive: true });
@@ -518,7 +518,7 @@ test('providerSkillsService lists cursor skills from its configured directories'
  * This test covers managed global skill creation for providers that own a
  * writable user skill directory.
  */
-test('providerSkillsService adds global skills for claude, codex, and cursor', { concurrency: false }, async () => {
+test('providerSkillsService adds global skills for claude, codex, and cursor', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, { concurrency: false }, async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'llm-skills-create-'));
   const restoreHomeDir = patchHomeDir(tempRoot);
 
@@ -686,7 +686,7 @@ test('providerSkillsService adds global skills for claude, codex, and cursor', {
  * OpenCode reuses other providers' skill folders, so it should not accept
  * direct skill writes through the managed provider endpoint.
  */
-test('providerSkillsService rejects managed skill creation for opencode', { concurrency: false }, async () => {
+test('providerSkillsService rejects managed skill creation for opencode', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, { concurrency: false }, async () => {
   await assert.rejects(
     providerSkillsService.addProviderSkills('opencode', {
       entries: [

@@ -19,14 +19,14 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   const temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'notification-orchestrator-'));
   const databasePath = path.join(temporaryDirectory, 'auth.db');
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = databasePath;
   await initializeDatabase();
 
   try {
     await runTest();
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -37,11 +37,11 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 test('notification payload uses the app session id for a provider session id', async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createAppSession('app-session-1', 'claude', '/workspace/demo');
-    sessionsDb.assignProviderSessionId('app-session-1', 'claude-native-1');
+  withIsolatedDatabase(async () => {
+    await sessionsDb.createAppSession('app-session-1', 'claude', '/workspace/demo');
+    await sessionsDb.assignProviderSessionId('app-session-1', 'claude-native-1');
 
-    const payload = buildNotificationPayload({
+    const payload = await buildNotificationPayload({
       provider: 'claude',
       sessionId: 'claude-native-1',
       kind: 'stop',

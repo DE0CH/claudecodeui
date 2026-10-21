@@ -101,17 +101,17 @@ function rowMatchesProvider(row, provider) {
   return row && (!provider || row.provider === provider);
 }
 
-function resolveSessionRow(sessionId, provider) {
+async function resolveSessionRow(sessionId, provider) {
   if (!sessionId) {
     return null;
   }
 
-  const appSessionRow = sessionsDb.getSessionById(sessionId);
+  const appSessionRow = await sessionsDb.getSessionById(sessionId);
   if (rowMatchesProvider(appSessionRow, provider)) {
     return appSessionRow;
   }
 
-  const providerSessionRow = sessionsDb.getSessionByProviderSessionId(sessionId);
+  const providerSessionRow = await sessionsDb.getSessionByProviderSessionId(sessionId);
   if (rowMatchesProvider(providerSessionRow, provider)) {
     return providerSessionRow;
   }
@@ -119,12 +119,12 @@ function resolveSessionRow(sessionId, provider) {
   return null;
 }
 
-function normalizeNotificationSession(event) {
+async function normalizeNotificationSession(event) {
   if (!event?.sessionId || !event.provider || event.provider === 'system') {
     return event;
   }
 
-  const row = resolveSessionRow(event.sessionId, event.provider);
+  const row = await resolveSessionRow(event.sessionId, event.provider);
   if (!row || row.session_id === event.sessionId) {
     return event;
   }
@@ -135,7 +135,7 @@ function normalizeNotificationSession(event) {
   };
 }
 
-function resolveSessionName(event) {
+async function resolveSessionName(event) {
   const explicitSessionName = normalizeSessionName(event.meta?.sessionName);
   if (explicitSessionName) {
     return explicitSessionName;
@@ -145,11 +145,11 @@ function resolveSessionName(event) {
     return null;
   }
 
-  return normalizeSessionName(sessionsDb.getSessionName(event.sessionId, event.provider));
+  return normalizeSessionName(await sessionsDb.getSessionName(event.sessionId, event.provider));
 }
 
-function buildNotificationPayload(event) {
-  const normalizedEvent = normalizeNotificationSession(event);
+async function buildNotificationPayload(event) {
+  const normalizedEvent = await normalizeNotificationSession(event);
   const CODE_MAP = {
     'permission.required': normalizedEvent.meta?.toolName
       ? `Action Required: Tool "${normalizedEvent.meta.toolName}" needs approval`
@@ -161,7 +161,7 @@ function buildNotificationPayload(event) {
     'push.enabled': 'Push notifications are now enabled!'
   };
   const providerLabel = PROVIDER_LABELS[normalizedEvent.provider] || 'Assistant';
-  const sessionName = resolveSessionName(normalizedEvent);
+  const sessionName = await resolveSessionName(normalizedEvent);
   const message = CODE_MAP[normalizedEvent.code] || 'You have a new notification';
 
   return {
@@ -177,8 +177,8 @@ function buildNotificationPayload(event) {
   };
 }
 
-function sendWebPushPayload(userId, payload) {
-  const subscriptions = pushSubscriptionsDb.getSubscriptions(userId);
+async function sendWebPushPayload(userId, payload) {
+  const subscriptions = await pushSubscriptionsDb.getSubscriptions(userId);
   if (!subscriptions.length) return Promise.resolve();
 
   const serializedPayload = JSON.stringify(payload);
@@ -200,7 +200,8 @@ function sendWebPushPayload(userId, payload) {
       if (result.status === 'rejected') {
         const statusCode = result.reason?.statusCode;
         if (statusCode === 410 || statusCode === 404) {
-          pushSubscriptionsDb.removeSubscription(subscriptions[index].endpoint);
+          // fire and forget, as before: a stale subscription failing to delete is retried on the next send
+          void pushSubscriptionsDb.removeSubscription(subscriptions[index].endpoint).catch(() => {});
         }
       }
     });
@@ -213,22 +214,22 @@ const notificationChannels = [
     // TODO: Web push still uses push_subscriptions. Do not remove that table until
     // browser push subscriptions are migrated into notification_channel_endpoints.
     isEnabled: (preferences) => Boolean(preferences?.channels?.webPush),
-    send: ({ userId, payload }) => sendWebPushPayload(userId, payload)
+    send: async ({ userId, payload }) => await sendWebPushPayload(userId, payload)
   },
   {
     id: 'desktop',
     isEnabled: (preferences) => Boolean(preferences?.channels?.desktop),
-    send: ({ userId, payload }) => sendDesktopNotificationToClients(userId, payload)
+    send: async ({ userId, payload }) => await sendDesktopNotificationToClients(userId, payload)
   }
 ];
 
-function notifyUserIfEnabled({ userId, event }) {
+async function notifyUserIfEnabled({ userId, event }) {
   if (!userId || !event) {
     return;
   }
 
-  const normalizedEvent = normalizeNotificationSession(event);
-  const preferences = notificationPreferencesDb.getPreferences(userId);
+  const normalizedEvent = await normalizeNotificationSession(event);
+  const preferences = await notificationPreferencesDb.getPreferences(userId);
   if (!isNotificationEventEnabled(preferences, normalizedEvent)) {
     return;
   }
@@ -236,19 +237,19 @@ function notifyUserIfEnabled({ userId, event }) {
     return;
   }
 
-  const payload = buildNotificationPayload(normalizedEvent);
+  const payload = await buildNotificationPayload(normalizedEvent);
   for (const channel of notificationChannels) {
     if (!channel.isEnabled(preferences)) {
       continue;
     }
-    Promise.resolve(channel.send({ userId, event: normalizedEvent, payload })).catch((err) => {
+    Promise.resolve(await channel.send({ userId, event: normalizedEvent, payload })).catch((err) => {
       console.error(`Notification channel "${channel.id}" send error:`, err);
     });
   }
 }
 
-function notifyRunStopped({ userId, provider, sessionId = null, stopReason = 'completed', sessionName = null }) {
-  notifyUserIfEnabled({
+async function notifyRunStopped({ userId, provider, sessionId = null, stopReason = 'completed', sessionName = null }) {
+  await notifyUserIfEnabled({
     userId,
     event: createNotificationEvent({
       provider,
@@ -269,8 +270,8 @@ function notifyRunStopped({ userId, provider, sessionId = null, stopReason = 'co
  * than needing a new opt-in that would default to off. No explicit dedupeKey, so
  * the default composite key collapses repeats inside the dedupe window.
  */
-function notifyBackgroundWorkCompleted({ userId, provider, sessionId = null, sessionName = null }) {
-  notifyUserIfEnabled({
+async function notifyBackgroundWorkCompleted({ userId, provider, sessionId = null, sessionName = null }) {
+  await notifyUserIfEnabled({
     userId,
     event: createNotificationEvent({
       provider,
@@ -283,10 +284,10 @@ function notifyBackgroundWorkCompleted({ userId, provider, sessionId = null, ses
   });
 }
 
-function notifyRunFailed({ userId, provider, sessionId = null, error, sessionName = null }) {
+async function notifyRunFailed({ userId, provider, sessionId = null, error, sessionName = null }) {
   const errorMessage = normalizeErrorMessage(error);
 
-  notifyUserIfEnabled({
+  await notifyUserIfEnabled({
     userId,
     event: createNotificationEvent({
       provider,

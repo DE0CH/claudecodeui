@@ -152,7 +152,7 @@ async function handleChatSend(
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies
 ): Promise<void> {
-  const resolved = resolveSendTarget(ws, data, dependencies, 'chat.send');
+  const resolved = await resolveSendTarget(ws, data, dependencies, 'chat.send');
   if (!resolved) {
     return;
   }
@@ -162,7 +162,7 @@ async function handleChatSend(
 
 type ResolvedSendTarget = {
   sessionId: string;
-  session: NonNullable<ReturnType<typeof sessionsDb.getSessionById>>;
+  session: NonNullable<Awaited<ReturnType<typeof sessionsDb.getSessionById>>>;
   provider: LLMProvider;
 };
 
@@ -170,19 +170,19 @@ type ResolvedSendTarget = {
  * Shared front half of `chat.send` and `chat.edit-send`: the session row and
  * provider come from the database, never from the client.
  */
-function resolveSendTarget(
+async function resolveSendTarget(
   ws: WebSocket,
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies,
   frameName: string,
-): ResolvedSendTarget | null {
+): Promise<ResolvedSendTarget | null> {
   const sessionId = readRequiredSessionId(data);
   if (!sessionId) {
     sendProtocolError(ws, 'SESSION_ID_REQUIRED', `${frameName} requires a sessionId.`);
     return null;
   }
 
-  const session = sessionsDb.getSessionById(sessionId);
+  const session = await sessionsDb.getSessionById(sessionId);
   if (!session) {
     sendProtocolError(
       ws,
@@ -212,7 +212,7 @@ async function dispatchRun(
   ws: WebSocket | null,
   userId: string | number | null,
   sessionId: string,
-  session: NonNullable<ReturnType<typeof sessionsDb.getSessionById>>,
+  session: NonNullable<Awaited<ReturnType<typeof sessionsDb.getSessionById>>>,
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies,
   extraRuntimeOptions: AnyRecord = {},
@@ -247,10 +247,10 @@ async function dispatchRun(
   // same model and reasoning effort, and so the resume path has a
   // session-scoped model answer to use.
   if (typeof clientOptions.model === 'string' && clientOptions.model.trim()) {
-    providerModelsService.setSessionModel(provider, sessionId, clientOptions.model);
+    await providerModelsService.setSessionModel(provider, sessionId, clientOptions.model);
   }
   if (typeof clientOptions.effort === 'string' && clientOptions.effort.trim()) {
-    providerModelsService.setSessionEffort(provider, sessionId, clientOptions.effort);
+    await providerModelsService.setSessionEffort(provider, sessionId, clientOptions.effort);
   }
 
   const attachmentCandidates = [
@@ -320,7 +320,7 @@ async function handleChatEditSend(
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies
 ): Promise<void> {
-  const resolved = resolveSendTarget(ws, data, dependencies, 'chat.edit-send');
+  const resolved = await resolveSendTarget(ws, data, dependencies, 'chat.edit-send');
   if (!resolved) {
     return;
   }
@@ -361,7 +361,7 @@ async function handleChatEditSend(
   // the run that follows is an ordinary resume of whatever the session then
   // points at. Which of the two applies is decided here; the rewind itself
   // waits until the run has actually been admitted.
-  const rewinds = sessionsService.providerRewindsForEdit(sessionId);
+  const rewinds = await sessionsService.providerRewindsForEdit(sessionId);
 
   await dispatchRun(
     ws,
@@ -388,7 +388,7 @@ async function handleChatEditSend(
       // still ends the run, and the terminal `complete` makes every client
       // re-read the transcript, which puts back anything that turned out not
       // to have been replaced after all.
-      run.writer.send({
+      await run.writer.send({
         kind: 'history_truncated',
         provider,
         sessionId,
@@ -465,7 +465,7 @@ async function handleChatStopTask(
     return;
   }
 
-  const session = sessionsDb.getSessionById(sessionId);
+  const session = await sessionsDb.getSessionById(sessionId);
   if (!session) {
     sendProtocolError(ws, 'SESSION_NOT_FOUND', `Session "${sessionId}" was not found.`, sessionId);
     return;
@@ -617,7 +617,7 @@ export async function runDetachedChatTurn(
   },
   dependencies: ChatWebSocketDependencies,
 ): Promise<{ started: boolean; error: string | null }> {
-  const session = sessionsDb.getSessionById(input.sessionId);
+  const session = await sessionsDb.getSessionById(input.sessionId);
   if (!session) {
     return { started: false, error: 'The session no longer exists.' };
   }

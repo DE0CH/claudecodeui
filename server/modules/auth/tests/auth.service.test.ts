@@ -10,10 +10,10 @@ type AuthDependencies = Parameters<typeof createAuthService>[0];
 function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDependencies {
   return {
     users: {
-      hasUsers: () => false,
-      createUser: (username, passwordHash) => ({ id: 1, username, password_hash: passwordHash }),
-      getUserByUsername: () => undefined,
-      updateLastLogin: () => undefined,
+      hasUsers: async () => false,
+      createUser: async (username, passwordHash) => ({ id: 1, username, password_hash: passwordHash }),
+      getUserByUsername: async () => undefined,
+      updateLastLogin: async () => undefined,
     },
     transaction: {
       begin: () => undefined,
@@ -40,13 +40,13 @@ test('register hashes credentials and commits through injected dependencies', as
       return 'hash';
     },
     users: {
-      hasUsers: () => false,
-      createUser: (username, passwordHash) => {
+      hasUsers: async () => false,
+      createUser: async (username, passwordHash) => {
         operations.push(`create:${username}:${passwordHash}`);
         return { id: 1, username, password_hash: passwordHash };
       },
-      getUserByUsername: () => undefined,
-      updateLastLogin: (userId) => operations.push(`login:${userId}`),
+      getUserByUsername: async () => undefined,
+      updateLastLogin: async (userId) => operations.push(`login:${userId}`),
     },
   }));
 
@@ -60,10 +60,10 @@ test('login rejects an invalid password without issuing a token', async () => {
   let tokenIssued = false;
   const service = createAuthService(createDependencies({
     users: {
-      hasUsers: () => true,
+      hasUsers: async () => true,
       createUser: () => { throw new Error('unused'); },
-      getUserByUsername: () => ({ id: 1, username: 'alice', password_hash: 'hash' }),
-      updateLastLogin: () => undefined,
+      getUserByUsername: async () => ({ id: 1, username: 'alice', password_hash: 'hash' }),
+      updateLastLogin: async () => undefined,
     },
     comparePassword: async () => false,
     generateToken: () => {

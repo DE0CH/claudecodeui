@@ -42,23 +42,22 @@ async function unlinkJsonlIfExists(filePath: string): Promise<void> {
  * Loads all session rows for the project path and removes each distinct `jsonl_path` file on disk.
  */
 export async function deleteSessionJsonlFilesForProjectPath(projectPath: string): Promise<void> {
-  const sessions = sessionsDb.getSessionsByProjectPathIncludingArchived(projectPath);
+  const sessions = await sessionsDb.getSessionsByProjectPathIncludingArchived(projectPath);
   // Including the transcripts a session has left behind: editing a message on
   // a provider that rewinds by branching moves the session onto a copy, and
   // the row stops pointing at the file the replaced turns are still in.
-  const paths = uniqueJsonlPathsFromSessions([
-    ...sessions,
-    ...sessions.flatMap((session) => sessionsDb
-      .getSupersededTranscriptPaths(session.session_id)
-      .map((jsonl_path) => ({ jsonl_path }))),
-  ]);
+  const superseded: Array<{ jsonl_path: string }> = [];
+  for (const session of sessions) {
+    for (const jsonl_path of await sessionsDb.getSupersededTranscriptPaths(session.session_id)) superseded.push({ jsonl_path });
+  }
+  const paths = uniqueJsonlPathsFromSessions([...sessions, ...superseded]);
 
   for (const filePath of paths) {
     await unlinkJsonlIfExists(filePath);
   }
 
   for (const session of sessions) {
-    sessionsDb.clearSupersededProviderSessions(session.session_id);
+    await sessionsDb.clearSupersededProviderSessions(session.session_id);
   }
 }
 
@@ -68,7 +67,7 @@ export async function deleteSessionJsonlFilesForProjectPath(projectPath: string)
  *   (when set), then remove session rows and the `projects` row.
  */
 export async function deleteOrArchiveProject(projectId: string, force: boolean): Promise<void> {
-  const row = projectsDb.getProjectById(projectId);
+  const row = await projectsDb.getProjectById(projectId);
   if (!row) {
     throw new AppError(`Unknown projectId: ${projectId}`, {
       code: 'PROJECT_NOT_FOUND',
@@ -77,20 +76,20 @@ export async function deleteOrArchiveProject(projectId: string, force: boolean):
   }
 
   if (!force) {
-    projectsDb.updateProjectIsArchivedById(projectId, true);
+    await projectsDb.updateProjectIsArchivedById(projectId, true);
     return;
   }
 
   await deleteSessionJsonlFilesForProjectPath(row.project_path);
-  sessionsDb.deleteSessionsByProjectPath(row.project_path);
-  projectsDb.deleteProjectById(projectId);
+  await sessionsDb.deleteSessionsByProjectPath(row.project_path);
+  await projectsDb.deleteProjectById(projectId);
 }
 
 /**
  * Restores one archived project row back into the active project list.
  */
-export function restoreArchivedProject(projectId: string): void {
-  const row = projectsDb.getProjectById(projectId);
+export async function restoreArchivedProject(projectId: string): Promise<void> {
+  const row = await projectsDb.getProjectById(projectId);
   if (!row) {
     throw new AppError(`Unknown projectId: ${projectId}`, {
       code: 'PROJECT_NOT_FOUND',
@@ -98,5 +97,5 @@ export function restoreArchivedProject(projectId: string): void {
     });
   }
 
-  projectsDb.updateProjectIsArchivedById(projectId, false);
+  await projectsDb.updateProjectIsArchivedById(projectId, false);
 }

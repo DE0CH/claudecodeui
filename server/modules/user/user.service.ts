@@ -15,19 +15,19 @@ type DraftRecord = {
 
 type UserDependencies = {
   users: {
-    getGitConfig(userId: number): GitConfig | undefined;
-    updateGitConfig(userId: number, gitName: string | null, gitEmail: string | null): void;
-    completeOnboarding(userId: number): void;
-    hasCompletedOnboarding(userId: number): boolean;
+    getGitConfig(userId: number): Promise<GitConfig | undefined>;
+    updateGitConfig(userId: number, gitName: string | null, gitEmail: string | null): Promise<void>;
+    completeOnboarding(userId: number): Promise<void>;
+    hasCompletedOnboarding(userId: number): Promise<boolean>;
   };
   preferences: {
-    getPreferences(userId: number): Record<string, unknown>;
-    savePreferences(userId: number, updates: Record<string, unknown>): void;
+    getPreferences(userId: number): Promise<Record<string, unknown>>;
+    savePreferences(userId: number, updates: Record<string, unknown>): Promise<void>;
   };
   drafts: {
-    getDrafts(userId: number): DraftRecord[];
-    saveDraft(userId: number, scope: string, draft: { text: string; queuedMessage: unknown | null }): void;
-    deleteDraft(userId: number, scope: string): void;
+    getDrafts(userId: number): Promise<DraftRecord[]>;
+    saveDraft(userId: number, scope: string, draft: { text: string; queuedMessage: unknown | null }): Promise<void>;
+    deleteDraft(userId: number, scope: string): Promise<void>;
   };
   readSystemGitConfig(): Promise<GitConfig>;
   applyGlobalGitConfig(gitName: string, gitEmail: string): Promise<void>;
@@ -83,11 +83,11 @@ const readPreferenceUpdates = (body: unknown): Record<string, unknown> => {
 export function createUserService(dependencies: UserDependencies) {
   return {
     async getGitConfig(userId: number) {
-      let gitConfig = dependencies.users.getGitConfig(userId);
+      let gitConfig = await dependencies.users.getGitConfig(userId);
       if (!gitConfig || (!gitConfig.git_name && !gitConfig.git_email)) {
         const systemConfig = await dependencies.readSystemGitConfig();
         if (systemConfig.git_name || systemConfig.git_email) {
-          dependencies.users.updateGitConfig(
+          await dependencies.users.updateGitConfig(
             userId,
             systemConfig.git_name,
             systemConfig.git_email,
@@ -120,7 +120,7 @@ export function createUserService(dependencies: UserDependencies) {
         });
       }
 
-      dependencies.users.updateGitConfig(userId, gitName, gitEmail);
+      await dependencies.users.updateGitConfig(userId, gitName, gitEmail);
       try {
         await dependencies.applyGlobalGitConfig(gitName, gitEmail);
       } catch (error) {
@@ -131,21 +131,21 @@ export function createUserService(dependencies: UserDependencies) {
       return { success: true, gitName, gitEmail };
     },
 
-    completeOnboarding(userId: number) {
-      dependencies.users.completeOnboarding(userId);
+    async completeOnboarding(userId: number) {
+      await dependencies.users.completeOnboarding(userId);
       return { success: true, message: 'Onboarding completed successfully' };
     },
 
-    getOnboardingStatus(userId: number) {
+    async getOnboardingStatus(userId: number) {
       return {
         success: true,
-        hasCompletedOnboarding: dependencies.users.hasCompletedOnboarding(userId),
+        hasCompletedOnboarding: await dependencies.users.hasCompletedOnboarding(userId),
       };
     },
 
     /** Every stored preference at once; the client fills gaps with its defaults. */
-    getPreferences(userId: number) {
-      return { success: true, preferences: dependencies.preferences.getPreferences(userId) };
+    async getPreferences(userId: number) {
+      return { success: true, preferences: await dependencies.preferences.getPreferences(userId) };
     },
 
     /**
@@ -153,17 +153,17 @@ export function createUserService(dependencies: UserDependencies) {
      * independent settings screens can save concurrently without one erasing
      * the other's work.
      */
-    savePreferences(userId: number, body: unknown) {
+    async savePreferences(userId: number, body: unknown) {
       const updates = readPreferenceUpdates(body);
-      dependencies.preferences.savePreferences(userId, updates);
-      return { success: true, preferences: dependencies.preferences.getPreferences(userId) };
+      await dependencies.preferences.savePreferences(userId, updates);
+      return { success: true, preferences: await dependencies.preferences.getPreferences(userId) };
     },
 
-    getDrafts(userId: number) {
-      return { success: true, drafts: dependencies.drafts.getDrafts(userId) };
+    async getDrafts(userId: number) {
+      return { success: true, drafts: await dependencies.drafts.getDrafts(userId) };
     },
 
-    saveDraft(userId: number, scopeInput: unknown, body: unknown) {
+    async saveDraft(userId: number, scopeInput: unknown, body: unknown) {
       const scope = readDraftScope(scopeInput);
       const payload = (body ?? {}) as { text?: unknown; queuedMessage?: unknown };
       const text = typeof payload.text === 'string' ? payload.text : '';
@@ -175,15 +175,15 @@ export function createUserService(dependencies: UserDependencies) {
         });
       }
 
-      dependencies.drafts.saveDraft(userId, scope, {
+      await dependencies.drafts.saveDraft(userId, scope, {
         text,
         queuedMessage: payload.queuedMessage ?? null,
       });
       return { success: true };
     },
 
-    deleteDraft(userId: number, scopeInput: unknown) {
-      dependencies.drafts.deleteDraft(userId, readDraftScope(scopeInput));
+    async deleteDraft(userId: number, scopeInput: unknown) {
+      await dependencies.drafts.deleteDraft(userId, readDraftScope(scopeInput));
       return { success: true };
     },
   };

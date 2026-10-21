@@ -14,14 +14,14 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   const previousDatabasePath = process.env.DATABASE_PATH;
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'claude-api-request-log-db-'));
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await initializeDatabase();
 
   try {
     await runTest();
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -94,7 +94,7 @@ test('logged API requests do not repeat the prompt or tool call in history', { c
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'API request log', now, now, transcriptPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'API request log', now, now, transcriptPath);
 
       const history = await new ClaudeSessionsProvider().fetchHistory(SESSION_ID, {
         providerSessionId: SESSION_ID,

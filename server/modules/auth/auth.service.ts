@@ -9,16 +9,13 @@ type AuthLoginUser = AuthUser & { password_hash: string };
 
 type AuthDependencies = {
   users: {
-    hasUsers(): boolean;
-    createUser(username: string, passwordHash: string): AuthUser;
-    getUserByUsername(username: string): AuthLoginUser | undefined;
-    updateLastLogin(userId: number): void;
+    hasUsers(): Promise<boolean>;
+    createUser(username: string, passwordHash: string): Promise<AuthUser>;
+    getUserByUsername(username: string): Promise<AuthLoginUser | undefined>;
+    updateLastLogin(userId: number): Promise<void>;
   };
-  transaction: {
-    begin(): void;
-    commit(): void;
-    rollback(): void;
-  };
+  /** Runs `fn` in one database transaction (rolled back if it throws). */
+  withTransaction<T>(fn: () => Promise<T>): Promise<T>;
   hashPassword(password: string): Promise<string>;
   comparePassword(password: string, passwordHash: string): Promise<boolean>;
   generateToken(user: AuthUser): string;
@@ -32,7 +29,7 @@ function isUniqueConstraintError(error: unknown): boolean {
   return typeof error === 'object'
     && error !== null
     && 'code' in error
-    && error.code === 'SQLITE_CONSTRAINT_UNIQUE';
+    && (error.code === '23505' || error.code === 'SQLITE_CONSTRAINT_UNIQUE');
 }
 
 /**
@@ -41,9 +38,9 @@ function isUniqueConstraintError(error: unknown): boolean {
  */
 export function createAuthService(dependencies: AuthDependencies) {
   return {
-    getStatus() {
+    async getStatus() {
       return {
-        needsSetup: !dependencies.users.hasUsers(),
+        needsSetup: !(await dependencies.users.hasUsers()),
         isAuthenticated: false,
       };
     },
@@ -65,20 +62,19 @@ export function createAuthService(dependencies: AuthDependencies) {
         );
       }
 
-      dependencies.transaction.begin();
       try {
-        if (dependencies.users.hasUsers()) {
-          throw new AppError('User already exists. This is a single-user system.', {
-            code: 'AUTH_USER_ALREADY_CONFIGURED',
-            statusCode: 403,
-          });
-        }
-
         const passwordHash = await dependencies.hashPassword(password);
-        const user = dependencies.users.createUser(username, passwordHash);
-        const token = dependencies.generateToken(user);
-        dependencies.transaction.commit();
-        dependencies.users.updateLastLogin(numericUserId(user.id));
+        const { user, token } = await dependencies.withTransaction(async () => {
+          if (await dependencies.users.hasUsers()) {
+            throw new AppError('User already exists. This is a single-user system.', {
+              code: 'AUTH_USER_ALREADY_CONFIGURED',
+              statusCode: 403,
+            });
+          }
+          const created = await dependencies.users.createUser(username, passwordHash);
+          return { user: created, token: dependencies.generateToken(created) };
+        });
+        await dependencies.users.updateLastLogin(numericUserId(user.id));
 
         return {
           success: true,
@@ -86,7 +82,6 @@ export function createAuthService(dependencies: AuthDependencies) {
           token,
         };
       } catch (error) {
-        dependencies.transaction.rollback();
         if (isUniqueConstraintError(error)) {
           throw new AppError('Username already exists', {
             code: 'AUTH_USERNAME_CONFLICT',
@@ -107,7 +102,7 @@ export function createAuthService(dependencies: AuthDependencies) {
         });
       }
 
-      const user = dependencies.users.getUserByUsername(username);
+      const user = await dependencies.users.getUserByUsername(username);
       const validPassword = user
         ? await dependencies.comparePassword(password, user.password_hash)
         : false;
@@ -118,7 +113,7 @@ export function createAuthService(dependencies: AuthDependencies) {
         });
       }
 
-      dependencies.users.updateLastLogin(numericUserId(user.id));
+      await dependencies.users.updateLastLogin(numericUserId(user.id));
       return {
         success: true,
         user: { id: user.id, username: user.username },

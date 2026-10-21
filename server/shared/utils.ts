@@ -241,7 +241,7 @@ export async function resolvePathUnderRoots(targetPath: string, roots: string[])
  * Resolves a path that is readable because it lives under a read-only root,
  * or `null` when it does not.
  */
-export function resolveReadOnlyRootPath(targetPath: string): Promise<string | null> {
+export async function resolveReadOnlyRootPath(targetPath: string): Promise<string | null> {
   return resolvePathUnderRoots(targetPath, READ_ONLY_ROOTS);
 }
 

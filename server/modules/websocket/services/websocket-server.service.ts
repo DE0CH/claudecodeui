@@ -4,16 +4,12 @@ import { WebSocket, WebSocketServer, type VerifyClientCallbackSync } from 'ws';
 
 import { handleChatConnection } from '@/modules/websocket/services/chat-websocket.service.js';
 import { verifyWebSocketClient } from '@/modules/websocket/services/websocket-auth.service.js';
-import { handlePluginWsProxy } from '@/modules/websocket/services/plugin-websocket-proxy.service.js';
-import { handleShellConnection } from '@/modules/websocket/services/shell-websocket.service.js';
 import { handleDesktopNotificationsConnection } from '@/modules/notifications/index.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 
 type WebSocketServerDependencies = {
   verifyClient: Parameters<typeof verifyWebSocketClient>[1];
   chat: Parameters<typeof handleChatConnection>[2];
-  shell: Parameters<typeof handleShellConnection>[1];
-  getPluginPort: Parameters<typeof handlePluginWsProxy>[2];
 };
 
 /**
@@ -86,9 +82,16 @@ export function createWebSocketServer(
 ): WebSocketServer {
   const wss = new WebSocketServer({
     server,
+    // async: the user lookup is a database query (ws accepts a callback-style verifyClient)
     verifyClient: ((
-      info: Parameters<VerifyClientCallbackSync<AuthenticatedWebSocketRequest>>[0]
-    ) => verifyWebSocketClient(info, dependencies.verifyClient)),
+      info: Parameters<VerifyClientCallbackSync<AuthenticatedWebSocketRequest>>[0],
+      done: (ok: boolean, code?: number) => void,
+    ) => {
+      verifyWebSocketClient(info, dependencies.verifyClient).then(
+        (ok) => done(ok, ok ? undefined : 401),
+        () => done(false, 500),
+      );
+    }),
   });
 
   wss.on('connection', (ws, request) => {
@@ -98,11 +101,6 @@ export function createWebSocketServer(
     const url = incomingRequest.url ?? '/';
     const pathname = new URL(url, 'http://localhost').pathname;
 
-    if (pathname === '/shell') {
-      handleShellConnection(ws, dependencies.shell);
-      return;
-    }
-
     if (pathname === '/ws') {
       handleChatConnection(ws, incomingRequest, dependencies.chat);
       return;
@@ -110,11 +108,6 @@ export function createWebSocketServer(
 
     if (pathname === '/desktop-notifications') {
       handleDesktopNotificationsConnection(ws, incomingRequest);
-      return;
-    }
-
-    if (pathname.startsWith('/plugin-ws/')) {
-      handlePluginWsProxy(ws, pathname, dependencies.getPluginPort);
       return;
     }
 

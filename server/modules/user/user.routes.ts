@@ -30,41 +30,41 @@ export function createUserRouter(service: ReturnType<typeof createUserService>):
     }
   });
 
-  router.post('/complete-onboarding', (req, res, next) => {
+  router.post('/complete-onboarding', async (req, res, next) => {
     try {
-      res.json(service.completeOnboarding(readUserId(req)));
+      res.json(await service.completeOnboarding(readUserId(req)));
     } catch (error) {
       next(error);
     }
   });
 
-  router.get('/onboarding-status', (req, res, next) => {
+  router.get('/onboarding-status', async (req, res, next) => {
     try {
-      res.json(service.getOnboardingStatus(readUserId(req)));
+      res.json(await service.getOnboardingStatus(readUserId(req)));
     } catch (error) {
       next(error);
     }
   });
 
-  router.get('/preferences', (req, res, next) => {
+  router.get('/preferences', async (req, res, next) => {
     try {
-      res.json(service.getPreferences(readUserId(req)));
+      res.json(await service.getPreferences(readUserId(req)));
     } catch (error) {
       next(error);
     }
   });
 
-  router.patch('/preferences', (req, res, next) => {
+  router.patch('/preferences', async (req, res, next) => {
     try {
-      res.json(service.savePreferences(readUserId(req), req.body));
+      res.json(await service.savePreferences(readUserId(req), req.body));
     } catch (error) {
       next(error);
     }
   });
 
-  router.get('/drafts', (req, res, next) => {
+  router.get('/drafts', async (req, res, next) => {
     try {
-      res.json(service.getDrafts(readUserId(req)));
+      res.json(await service.getDrafts(readUserId(req)));
     } catch (error) {
       next(error);
     }
@@ -72,19 +72,19 @@ export function createUserRouter(service: ReturnType<typeof createUserService>):
 
   // The scope is a session id or `project:<id>`, so it is read from the body
   // rather than the path: neither form is guaranteed to be URL-path-safe.
-  router.put('/drafts', (req, res, next) => {
+  router.put('/drafts', async (req, res, next) => {
     try {
       const body = req.body as { scope?: unknown };
-      res.json(service.saveDraft(readUserId(req), body?.scope, req.body));
+      res.json(await service.saveDraft(readUserId(req), body?.scope, req.body));
     } catch (error) {
       next(error);
     }
   });
 
-  router.delete('/drafts', (req, res, next) => {
+  router.delete('/drafts', async (req, res, next) => {
     try {
       const body = req.body as { scope?: unknown };
-      res.json(service.deleteDraft(readUserId(req), body?.scope));
+      res.json(await service.deleteDraft(readUserId(req), body?.scope));
     } catch (error) {
       next(error);
     }

@@ -9,7 +9,7 @@ import { AppError } from '@/shared/utils.js';
 
 test('getProjectTaskMasterById returns null when project path is missing', async () => {
   const result = await getProjectTaskMasterById('project-1', {
-    resolveProjectPathById: () => null,
+    resolveProjectPathById: async () => null,
     detectTaskMasterFolder: async () => {
       throw new Error('detectTaskMasterFolder should not be called when path is missing');
     },
@@ -20,7 +20,7 @@ test('getProjectTaskMasterById returns null when project path is missing', async
 
 test('getProjectTaskMasterById returns configured status when taskmaster exists with essential files', async () => {
   const result = await getProjectTaskMasterById('project-1', {
-    resolveProjectPathById: () => '/workspace/project-1',
+    resolveProjectPathById: async () => '/workspace/project-1',
     detectTaskMasterFolder: async () => ({
       hasTaskmaster: true,
       hasEssentialFiles: true,
@@ -57,7 +57,7 @@ test('getProjectTaskMasterById returns configured status when taskmaster exists 
 
 test('getProjectTaskMasterById returns not-configured status when taskmaster is missing', async () => {
   const result = await getProjectTaskMasterById('project-1', {
-    resolveProjectPathById: () => '/workspace/project-1',
+    resolveProjectPathById: async () => '/workspace/project-1',
     detectTaskMasterFolder: async () => ({
       hasTaskmaster: false,
     }),

@@ -30,16 +30,16 @@ function readUserId(req: express.Request): number {
   return userId;
 }
 
-function updateChannelPreference(userId: number, channel: string): unknown {
-  const currentPrefs = notificationPreferencesDb.getPreferences(userId);
-  const hasEnabledEndpoint = notificationChannelEndpointsDb.getEnabledEndpoints(userId, channel).length > 0;
-  return notificationPreferencesDb.updatePreferences(userId, {
+async function updateChannelPreference(userId: number, channel: string): Promise<unknown> {
+  const currentPrefs = await notificationPreferencesDb.getPreferences(userId);
+  const hasEnabledEndpoint = (await notificationChannelEndpointsDb.getEnabledEndpoints(userId, channel)).length > 0;
+  return await notificationPreferencesDb.updatePreferences(userId, {
     ...currentPrefs,
     channels: { ...currentPrefs.channels, [channel]: hasEnabledEndpoint },
   });
 }
 
-router.get('/endpoints', (req, res) => {
+router.get('/endpoints', async (req, res) => {
   try {
     const channel = readText(req.query.channel);
     if (!channel) {
@@ -47,8 +47,8 @@ router.get('/endpoints', (req, res) => {
     }
 
     const userId = readUserId(req);
-    const endpoints = notificationChannelEndpointsDb
-      .getEndpoints(userId, channel)
+    const endpoints = (await notificationChannelEndpointsDb
+      .getEndpoints(userId, channel))
       .map(sanitizeEndpoint);
     return res.json({ success: true, endpoints });
   } catch (error) {
@@ -57,7 +57,7 @@ router.get('/endpoints', (req, res) => {
   }
 });
 
-router.post('/endpoints/current', (req, res) => {
+router.post('/endpoints/current', async (req, res) => {
   try {
     const { channel, endpointId, label, metadata = {}, enabled = true } = req.body || {};
     const normalizedChannel = readText(channel);
@@ -67,7 +67,7 @@ router.post('/endpoints/current', (req, res) => {
     }
 
     const userId = readUserId(req);
-    const endpoint = notificationChannelEndpointsDb.upsertEndpoint({
+    const endpoint = await notificationChannelEndpointsDb.upsertEndpoint({
       userId,
       channel: normalizedChannel,
       endpointId: normalizedEndpointId,
@@ -76,7 +76,7 @@ router.post('/endpoints/current', (req, res) => {
       enabled: enabled !== false,
     });
 
-    const preferences = updateChannelPreference(userId, normalizedChannel);
+    const preferences = await updateChannelPreference(userId, normalizedChannel);
     return res.json({ success: true, endpoint: sanitizeEndpoint(endpoint), preferences });
   } catch (error) {
     console.error('Error registering notification endpoint:', error);
@@ -84,7 +84,7 @@ router.post('/endpoints/current', (req, res) => {
   }
 });
 
-router.patch('/endpoints/:channel/:endpointId', (req, res) => {
+router.patch('/endpoints/:channel/:endpointId', async (req, res) => {
   try {
     const { channel, endpointId } = req.params;
     const { enabled } = req.body || {};
@@ -93,13 +93,13 @@ router.patch('/endpoints/:channel/:endpointId', (req, res) => {
     }
 
     const userId = readUserId(req);
-    const updated = notificationChannelEndpointsDb.setEndpointEnabled(userId, channel, endpointId, enabled);
+    const updated = await notificationChannelEndpointsDb.setEndpointEnabled(userId, channel, endpointId, enabled);
     if (!updated) {
       return res.status(404).json({ error: 'Notification endpoint not found' });
     }
 
-    const endpoint = notificationChannelEndpointsDb.getEndpoint(userId, channel, endpointId);
-    const preferences = updateChannelPreference(userId, channel);
+    const endpoint = await notificationChannelEndpointsDb.getEndpoint(userId, channel, endpointId);
+    const preferences = await updateChannelPreference(userId, channel);
     return res.json({ success: true, endpoint: endpoint ? sanitizeEndpoint(endpoint) : null, preferences });
   } catch (error) {
     console.error('Error updating notification endpoint:', error);
@@ -107,16 +107,16 @@ router.patch('/endpoints/:channel/:endpointId', (req, res) => {
   }
 });
 
-router.delete('/endpoints/:channel/:endpointId', (req, res) => {
+router.delete('/endpoints/:channel/:endpointId', async (req, res) => {
   try {
     const { channel, endpointId } = req.params;
     const userId = readUserId(req);
-    const removed = notificationChannelEndpointsDb.removeEndpoint(userId, channel, endpointId);
+    const removed = await notificationChannelEndpointsDb.removeEndpoint(userId, channel, endpointId);
     if (!removed) {
       return res.status(404).json({ error: 'Notification endpoint not found' });
     }
 
-    const preferences = updateChannelPreference(userId, channel);
+    const preferences = await updateChannelPreference(userId, channel);
     return res.json({ success: true, preferences });
   } catch (error) {
     console.error('Error removing notification endpoint:', error);

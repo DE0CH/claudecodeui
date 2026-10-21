@@ -141,7 +141,7 @@ router.post(
     const projectIds = Array.isArray((req.body as { projectIds?: unknown })?.projectIds)
       ? ((req.body as { projectIds: unknown[] }).projectIds as unknown[]).map((x) => String(x))
       : [];
-    const { updated } = applyLegacyStarredProjectIds(projectIds);
+    const { updated } = await applyLegacyStarredProjectIds(projectIds);
     res.json({ success: true, updated });
   }),
 );
@@ -162,11 +162,11 @@ router.get(
   }),
 );
 
-router.put('/:projectId/rename', (req, res) => {
+router.put('/:projectId/rename', async (req, res) => {
   try {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
     const { displayName } = req.body as { displayName?: unknown };
-    updateProjectDisplayName(projectId, displayName);
+    await updateProjectDisplayName(projectId, displayName);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to rename project' });
@@ -177,7 +177,7 @@ router.post(
   '/:projectId/toggle-star',
   asyncHandler(async (req, res) => {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
-    const { isStarred } = toggleProjectStar(projectId);
+    const { isStarred } = await toggleProjectStar(projectId);
     res.json({ success: true, isStarred });
   }),
 );
@@ -186,7 +186,7 @@ router.post(
   '/:projectId/restore',
   asyncHandler(async (req, res) => {
     const projectId = typeof req.params.projectId === 'string' ? req.params.projectId : '';
-    restoreArchivedProject(projectId);
+    await restoreArchivedProject(projectId);
     res.json(createApiSuccessResponse({ projectId, isArchived: false }));
   }),
 );

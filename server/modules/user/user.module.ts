@@ -36,23 +36,23 @@ async function readSystemGitConfig() {
 
 const userService = createUserService({
   users: {
-    getGitConfig: (userId) => userDb.getGitConfig(userId),
-    updateGitConfig: (userId, gitName, gitEmail) => userDb.updateGitConfig(
+    getGitConfig: async (userId) => await userDb.getGitConfig(userId),
+    updateGitConfig: async (userId, gitName, gitEmail) => await userDb.updateGitConfig(
       userId,
       gitName ?? '',
       gitEmail ?? '',
     ),
-    completeOnboarding: (userId) => userDb.completeOnboarding(userId),
-    hasCompletedOnboarding: (userId) => userDb.hasCompletedOnboarding(userId),
+    completeOnboarding: async (userId) => await userDb.completeOnboarding(userId),
+    hasCompletedOnboarding: async (userId) => await userDb.hasCompletedOnboarding(userId),
   },
   preferences: {
-    getPreferences: (userId) => userPreferencesDb.getPreferences(userId),
-    savePreferences: (userId, updates) => userPreferencesDb.savePreferences(userId, updates),
+    getPreferences: async (userId) => await userPreferencesDb.getPreferences(userId),
+    savePreferences: async (userId, updates) => await userPreferencesDb.savePreferences(userId, updates),
   },
   drafts: {
-    getDrafts: (userId) => sessionDraftsDb.getDrafts(userId),
-    saveDraft: (userId, scope, draft) => sessionDraftsDb.saveDraft(userId, scope, draft),
-    deleteDraft: (userId, scope) => sessionDraftsDb.deleteDraft(userId, scope),
+    getDrafts: async (userId) => await sessionDraftsDb.getDrafts(userId),
+    saveDraft: async (userId, scope, draft) => await sessionDraftsDb.saveDraft(userId, scope, draft),
+    deleteDraft: async (userId, scope) => await sessionDraftsDb.deleteDraft(userId, scope),
   },
   readSystemGitConfig,
   applyGlobalGitConfig: async (gitName, gitEmail) => {

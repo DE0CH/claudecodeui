@@ -147,7 +147,7 @@ const defaultDependencies: CloneProjectDependencies = {
     tokenId: number,
     userId: number,
   ): Promise<{ github_token: string } | null> => {
-    const tokenRow = githubTokensDb.getGithubTokenById(userId, tokenId) as
+    const tokenRow = await githubTokensDb.getGithubTokenById(userId, tokenId) as
       | { github_token: string }
       | null;
     return tokenRow;

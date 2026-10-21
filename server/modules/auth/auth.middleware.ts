@@ -6,7 +6,7 @@ import { IS_PLATFORM } from '@/shared/utils.js';
 import { userDb, appConfigDb } from '../database/index.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
-const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
+const JWT_SECRET = process.env.JWT_SECRET || await appConfigDb.getOrCreateJwtSecret();
 
 // Optional API key middleware
 const validateApiKey = (req, res, next) => {
@@ -27,7 +27,7 @@ const authenticateToken = async (req, res, next) => {
   // Platform mode:  use single database user
   if (IS_PLATFORM) {
     try {
-      const user = userDb.getFirstUser();
+      const user = await userDb.getFirstUser();
       if (!user) {
         return res.status(500).json({ error: 'Platform mode: No user found in database' });
       }
@@ -60,7 +60,7 @@ const authenticateToken = async (req, res, next) => {
     const decoded = jwt.verify(token, JWT_SECRET);
 
     // Verify user still exists and is active
-    const user = userDb.getUserById(decoded.userId);
+    const user = await userDb.getUserById(decoded.userId);
     if (!user) {
       res.setHeader('X-Auth-Error', 'invalid-token');
       return res.status(401).json({
@@ -115,11 +115,11 @@ const generateToken = (user) => {
 };
 
 // WebSocket authentication function
-const authenticateWebSocket = (token) => {
+const authenticateWebSocket = async (token) => {
   // Platform mode: bypass token validation, return first user
   if (IS_PLATFORM) {
     try {
-      const user = userDb.getFirstUser();
+      const user = await userDb.getFirstUser();
       if (user) {
         return { id: user.id, userId: user.id, username: user.username };
       }
@@ -138,7 +138,7 @@ const authenticateWebSocket = (token) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     // Verify user actually exists in database (matches REST authenticateToken behavior)
-    const user = userDb.getUserById(decoded.userId);
+    const user = await userDb.getUserById(decoded.userId);
     if (!user) {
       return null;
     }

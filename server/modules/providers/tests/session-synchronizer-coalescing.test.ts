@@ -38,14 +38,14 @@ async function withIsolatedDatabase(runTest: () => Promise<void>): Promise<void>
   const previousDatabasePath = process.env.DATABASE_PATH;
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'session-sync-db-'));
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await initializeDatabase();
 
   try {
     await runTest();
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {

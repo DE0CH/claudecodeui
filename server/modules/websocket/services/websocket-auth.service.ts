@@ -4,21 +4,21 @@ import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 
 type WebSocketAuthDependencies = {
   isPlatform: boolean;
-  authenticateWebSocket: (token: string | null) => {
+  authenticateWebSocket: (token: string | null) => Promise<{
     id?: string | number;
     userId?: string | number;
     username?: string;
     [key: string]: unknown;
-  } | null;
+  } | null>;
 };
 
 /**
  * Authenticates websocket upgrade requests before the `connection` handler runs.
  */
-export function verifyWebSocketClient(
+export async function verifyWebSocketClient(
   info: Parameters<VerifyClientCallbackSync<AuthenticatedWebSocketRequest>>[0],
   dependencies: WebSocketAuthDependencies
-): boolean {
+): Promise<boolean> {
   const request = info.req as AuthenticatedWebSocketRequest;
   const upgradeUrl = new URL(request.url ?? '/', 'http://localhost');
   const loggedUrl = new URL(upgradeUrl);
@@ -30,7 +30,7 @@ export function verifyWebSocketClient(
 
   // Platform mode: use the first DB user and skip token checks.
   if (dependencies.isPlatform) {
-    const user = dependencies.authenticateWebSocket(null);
+    const user = await dependencies.authenticateWebSocket(null);
     if (!user) {
       console.log('[WARN] Platform mode: No user found in database');
       return false;
@@ -47,7 +47,7 @@ export function verifyWebSocketClient(
     request.headers.authorization?.split(' ')[1] ??
     null;
 
-  const user = dependencies.authenticateWebSocket(token);
+  const user = await dependencies.authenticateWebSocket(token);
   if (!user) {
     console.log('[WARN] WebSocket authentication failed');
     return false;

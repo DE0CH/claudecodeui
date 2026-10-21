@@ -1,4 +1,4 @@
-import { getConnection } from '@/modules/database/connection.js';
+import { all, get, run, transaction } from '@/modules/database/connection.js';
 
 type PreferenceRow = {
   preference_key: string;
@@ -26,15 +26,10 @@ export const userPreferencesDb = {
    * The client fetches this once on start-up, so absent keys simply mean "the
    * user never changed this" and the client applies its own default.
    */
-  getPreferences(userId: number): Record<string, unknown> {
-    const db = getConnection();
-    const rows = db
-      .prepare(
-        `SELECT preference_key, preference_value
+  async getPreferences(userId: number): Promise<Record<string, unknown>> {
+    const rows = (await all(`SELECT preference_key, preference_value
          FROM user_preferences
-         WHERE user_id = ?`
-      )
-      .all(userId) as PreferenceRow[];
+         WHERE user_id = ?`, [userId])) as PreferenceRow[];
 
     const preferences: Record<string, unknown> = {};
     for (const row of rows) {
@@ -54,27 +49,23 @@ export const userPreferencesDb = {
    * Runs in one transaction so a multi-key save from the settings dialog can
    * never be observed half-applied.
    */
-  savePreferences(userId: number, updates: Record<string, unknown>): void {
-    const db = getConnection();
-    const upsert = db.prepare(
+  async savePreferences(userId: number, updates: Record<string, unknown>): Promise<void> {
+    const upsertSql =
       `INSERT INTO user_preferences (user_id, preference_key, preference_value, updated_at)
        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(user_id, preference_key) DO UPDATE SET
          preference_value = excluded.preference_value,
-         updated_at = CURRENT_TIMESTAMP`
-    );
-    const remove = db.prepare(
-      'DELETE FROM user_preferences WHERE user_id = ? AND preference_key = ?'
-    );
+         updated_at = CURRENT_TIMESTAMP`;
+    const removeSql = 'DELETE FROM user_preferences WHERE user_id = ? AND preference_key = ?';
 
-    db.transaction(() => {
+    await transaction(async () => {
       for (const [key, value] of Object.entries(updates)) {
         if (value === undefined) {
-          remove.run(userId, key);
+          await run(removeSql, [userId, key]);
           continue;
         }
-        upsert.run(userId, key, JSON.stringify(value));
+        await run(upsertSql, [userId, key, JSON.stringify(value)]);
       }
-    })();
+    });
   },
 };

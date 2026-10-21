@@ -15,7 +15,7 @@ type ProjectRow = {
 
 test('toggleProjectStar throws when projectId is missing', () => {
   assert.throws(
-    () => toggleProjectStar('   '),
+    async () => await toggleProjectStar('   '),
     (error: unknown) =>
       error instanceof AppError
       && error.code === 'PROJECT_ID_REQUIRED'
@@ -26,9 +26,9 @@ test('toggleProjectStar throws when projectId is missing', () => {
 test('toggleProjectStar throws when project does not exist', () => {
   const originalGetProjectById = projectsDb.getProjectById;
   try {
-    projectsDb.getProjectById = () => null;
+    projectsDb.getProjectById = async () => null;
     assert.throws(
-      () => toggleProjectStar('project-1'),
+      async () => await toggleProjectStar('project-1'),
       (error: unknown) =>
         error instanceof AppError
         && error.code === 'PROJECT_NOT_FOUND'
@@ -39,7 +39,7 @@ test('toggleProjectStar throws when project does not exist', () => {
   }
 });
 
-test('toggleProjectStar flips star state and persists it', () => {
+test('toggleProjectStar flips star state and persists it', async () => {
   const originalGetProjectById = projectsDb.getProjectById;
   const originalUpdateProjectIsStarredById = projectsDb.updateProjectIsStarredById;
 
@@ -47,7 +47,7 @@ test('toggleProjectStar flips star state and persists it', () => {
   let capturedState = false;
 
   try {
-    projectsDb.getProjectById = () =>
+    projectsDb.getProjectById = async () =>
       ({
         project_id: 'project-1',
         project_path: '/workspace/project-1',
@@ -60,7 +60,7 @@ test('toggleProjectStar flips star state and persists it', () => {
       capturedState = isStarred;
     };
 
-    const result = toggleProjectStar('project-1');
+    const result = await toggleProjectStar('project-1');
 
     assert.equal(result.isStarred, true);
     assert.equal(capturedProjectId, 'project-1');
@@ -71,7 +71,7 @@ test('toggleProjectStar flips star state and persists it', () => {
   }
 });
 
-test('applyLegacyStarredProjectIds stars only valid, unstarred projects', () => {
+test('applyLegacyStarredProjectIds stars only valid, unstarred projects', async () => {
   const originalGetProjectById = projectsDb.getProjectById;
   const originalUpdateProjectIsStarredById = projectsDb.updateProjectIsStarredById;
 
@@ -105,7 +105,7 @@ test('applyLegacyStarredProjectIds stars only valid, unstarred projects', () => 
       updatedProjectIds.push(projectId);
     };
 
-    const result = applyLegacyStarredProjectIds([
+    const result = await applyLegacyStarredProjectIds([
       'project-a',
       'project-b',
       'missing-project',

@@ -127,8 +127,8 @@ function mapSessionRowToSummary(row: SessionRepositoryRow): SessionSummary {
   };
 }
 
-function readProjectSessionsIncludingArchived(projectPath: string): ProjectSessionsPageResult {
-  const rows = sessionsDb.getSessionsByProjectPathIncludingArchived(projectPath) as SessionRepositoryRow[];
+async function readProjectSessionsIncludingArchived(projectPath: string): Promise<ProjectSessionsPageResult> {
+  const rows = await sessionsDb.getSessionsByProjectPathIncludingArchived(projectPath) as SessionRepositoryRow[];
 
   return {
     sessions: rows.map(mapSessionRowToSummary),
@@ -140,17 +140,17 @@ function readProjectSessionsIncludingArchived(projectPath: string): ProjectSessi
 /**
  * Reads one paginated project session slice from the DB and groups rows by provider.
  */
-function readProjectSessionsPageByPath(
+async function readProjectSessionsPageByPath(
   projectPath: string,
   options: SessionPaginationOptions = {},
-): ProjectSessionsPageResult {
+): Promise<ProjectSessionsPageResult> {
   const pagination = normalizeSessionPagination(options);
-  const rows = sessionsDb.getSessionsByProjectPathPage(
+  const rows = await sessionsDb.getSessionsByProjectPathPage(
     projectPath,
     pagination.limit,
     pagination.offset,
   ) as SessionRepositoryRow[];
-  const total = sessionsDb.countSessionsByProjectPath(projectPath);
+  const total = await sessionsDb.countSessionsByProjectPath(projectPath);
 
   return {
     sessions: rows.map(mapSessionRowToSummary),
@@ -184,7 +184,7 @@ export async function getProjectsWithSessions(
     await sessionSynchronizerService.synchronizeSessions();
   }
 
-  const projectRows = projectsDb.getProjectPaths() as Array<{
+  const projectRows = await projectsDb.getProjectPaths() as Array<{
     project_id: string;
     project_path: string;
     custom_project_name?: string | null;
@@ -212,7 +212,7 @@ export async function getProjectsWithSessions(
         ? row.custom_project_name
         : await generateDisplayName(path.basename(projectPath) || projectPath, projectPath);
 
-    const sessionsPage = readProjectSessionsPageByPath(projectPath, {
+    const sessionsPage = await readProjectSessionsPageByPath(projectPath, {
       limit: options.sessionsLimit,
       offset: options.sessionsOffset,
     });
@@ -252,7 +252,7 @@ export async function getArchivedProjectsWithSessions(
     await sessionSynchronizerService.synchronizeSessions();
   }
 
-  const projectRows = projectsDb.getArchivedProjectPaths() as Array<{
+  const projectRows = await projectsDb.getArchivedProjectPaths() as Array<{
     project_id: string;
     project_path: string;
     custom_project_name?: string | null;
@@ -267,7 +267,7 @@ export async function getArchivedProjectsWithSessions(
         ? row.custom_project_name
         : await generateDisplayName(path.basename(row.project_path) || row.project_path, row.project_path);
 
-    const sessionsPage = readProjectSessionsIncludingArchived(row.project_path);
+    const sessionsPage = await readProjectSessionsIncludingArchived(row.project_path);
 
     archivedProjects.push({
       projectId: row.project_id,
@@ -294,7 +294,7 @@ export async function getProjectSessionsPage(
   projectId: string,
   options: SessionPaginationOptions = {},
 ): Promise<ProjectSessionsPageApiView> {
-  const projectRow = projectsDb.getProjectById(projectId);
+  const projectRow = await projectsDb.getProjectById(projectId);
   if (!projectRow) {
     throw new AppError(`Project "${projectId}" was not found.`, {
       code: 'PROJECT_NOT_FOUND',
@@ -302,7 +302,7 @@ export async function getProjectSessionsPage(
     });
   }
 
-  const sessionsPage = readProjectSessionsPageByPath(projectRow.project_path, options);
+  const sessionsPage = await readProjectSessionsPageByPath(projectRow.project_path, options);
   return {
     projectId: projectRow.project_id,
     sessions: sessionsPage.sessions,

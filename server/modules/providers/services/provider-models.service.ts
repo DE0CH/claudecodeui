@@ -178,19 +178,19 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
   const sessions = dependencies.sessions ?? sessionsDb;
   const settings = dependencies.settings ?? appConfigDb;
 
-  const isCustomModelsOnly = (provider: LLMProvider): boolean => (
-    settings.get(customModelsOnlyConfigKey(provider)) === 'true'
+  const isCustomModelsOnly = async (provider: LLMProvider): Promise<boolean> => (
+    await settings.get(customModelsOnlyConfigKey(provider)) === 'true'
   );
 
   /** Merges the adapter catalog with the provider's stored custom rows and flag. */
-  const readMergedCatalog = (
+  const readMergedCatalog = async (
     provider: LLMProvider,
     predefined: ProviderModelsDefinition,
-  ): ProviderModelsDefinition => mergeProviderModels(
+  ): Promise<ProviderModelsDefinition> => mergeProviderModels(
     provider,
     predefined,
-    catalog.listCustomProviderModels(provider),
-    isCustomModelsOnly(provider),
+    await catalog.listCustomProviderModels(provider),
+    await isCustomModelsOnly(provider),
   );
 
   const getProviderModels = async (provider: LLMProvider): Promise<ProviderModelsDefinition> => {
@@ -208,7 +208,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     enabled: boolean,
   ): Promise<ProviderModelsDefinition> => {
     const predefined = await resolveProvider(provider).models.getSupportedModels();
-    settings.set(customModelsOnlyConfigKey(provider), enabled ? 'true' : 'false');
+    await settings.set(customModelsOnlyConfigKey(provider), enabled ? 'true' : 'false');
     return readMergedCatalog(provider, predefined);
   };
 
@@ -217,11 +217,11 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     sessionId?: string,
   ): Promise<ProviderCurrentActiveModel> => resolveProvider(provider).models.getCurrentActiveModel(sessionId);
 
-  const readCustomModel = (
+  const readCustomModel = async (
     provider: LLMProvider,
     recordId: number,
-  ): CustomProviderModelRecord => {
-    const existing = catalog.getCustomProviderModel(provider, recordId);
+  ): Promise<CustomProviderModelRecord> => {
+    const existing = await catalog.getCustomProviderModel(provider, recordId);
     if (!existing) {
       throw new AppError('Model not found.', {
         code: 'MODEL_NOT_FOUND',
@@ -232,12 +232,12 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     return existing;
   };
 
-  const assertModelIdAvailable = (
+  const assertModelIdAvailable = async (
     provider: LLMProvider,
     predefined: ProviderModelsDefinition,
     modelId: string,
     currentRecordId?: number,
-  ): void => {
+  ): Promise<void> => {
     if (predefined.OPTIONS.some((option) => option.value === modelId)) {
       throw new AppError(`A ${provider} model with this ID already exists.`, {
         code: 'MODEL_ID_ALREADY_EXISTS',
@@ -245,7 +245,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
       });
     }
 
-    const duplicate = catalog.findCustomProviderModelByModelId(provider, modelId);
+    const duplicate = await catalog.findCustomProviderModelByModelId(provider, modelId);
     if (duplicate && duplicate.recordId !== currentRecordId) {
       throw new AppError(`A ${provider} model with this ID already exists.`, {
         code: 'MODEL_ID_ALREADY_EXISTS',
@@ -260,14 +260,14 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
   ): Promise<{ model: ProviderModelOption; models: ProviderModelsDefinition }> => {
     const predefined = await resolveProvider(provider).models.getSupportedModels();
     const normalized = normalizeCustomModelInput(input);
-    assertModelIdAvailable(provider, predefined, normalized.id);
+    await assertModelIdAvailable(provider, predefined, normalized.id);
     assertEffortLevelsSupported(provider, normalized);
 
     try {
-      const created = catalog.createCustomProviderModel(provider, normalized);
+      const created = await catalog.createCustomProviderModel(provider, normalized);
       return {
         model: toCustomProviderModelOption(created),
-        models: readMergedCatalog(provider, predefined),
+        models: await readMergedCatalog(provider, predefined),
       };
     } catch (error) {
       if (isUniqueConstraintError(error)) {
@@ -286,13 +286,13 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     input: CustomProviderModelInput,
   ): Promise<{ model: ProviderModelOption; models: ProviderModelsDefinition }> => {
     const predefined = await resolveProvider(provider).models.getSupportedModels();
-    readCustomModel(provider, recordId);
+    await readCustomModel(provider, recordId);
     const normalized = normalizeCustomModelInput(input);
-    assertModelIdAvailable(provider, predefined, normalized.id, recordId);
+    await assertModelIdAvailable(provider, predefined, normalized.id, recordId);
     assertEffortLevelsSupported(provider, normalized);
 
     try {
-      const updated = catalog.updateCustomProviderModel(provider, recordId, normalized);
+      const updated = await catalog.updateCustomProviderModel(provider, recordId, normalized);
       if (!updated) {
         throw new AppError('Model not found.', {
           code: 'MODEL_NOT_FOUND',
@@ -302,7 +302,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
 
       return {
         model: toCustomProviderModelOption(updated),
-        models: readMergedCatalog(provider, predefined),
+        models: await readMergedCatalog(provider, predefined),
       };
     } catch (error) {
       if (isUniqueConstraintError(error)) {
@@ -320,17 +320,17 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     recordId: number,
   ): Promise<{ model: ProviderModelOption; models: ProviderModelsDefinition }> => {
     const predefined = await resolveProvider(provider).models.getSupportedModels();
-    readCustomModel(provider, recordId);
+    await readCustomModel(provider, recordId);
     // Sessions on the deleted model move to the default of the catalog left
     // behind: the first remaining custom model (the new DEFAULT) while only
     // custom models are listed, or the built-in default once none remain.
     const fallbackModelId = mergeProviderModels(
       provider,
       predefined,
-      catalog.listCustomProviderModels(provider).filter((record) => record.recordId !== recordId),
-      isCustomModelsOnly(provider),
+      (await catalog.listCustomProviderModels(provider)).filter((record) => record.recordId !== recordId),
+      await isCustomModelsOnly(provider),
     ).DEFAULT;
-    const removed = catalog.deleteCustomProviderModel(provider, recordId, fallbackModelId);
+    const removed = await catalog.deleteCustomProviderModel(provider, recordId, fallbackModelId);
     if (!removed) {
       throw new AppError('Model not found.', {
         code: 'MODEL_NOT_FOUND',
@@ -340,14 +340,14 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
 
     return {
       model: toCustomProviderModelOption(removed),
-      models: readMergedCatalog(provider, predefined),
+      models: await readMergedCatalog(provider, predefined),
     };
   };
 
-  const readRecordedSessionSelection = (
+  const readRecordedSessionSelection = async (
     sessionId: string,
-  ): { model: string | null; effort: string | null } | null => {
-    const session = sessions.getSessionById(sessionId);
+  ): Promise<{ model: string | null; effort: string | null } | null> => {
+    const session = await sessions.getSessionById(sessionId);
     if (!session) {
       return null;
     }
@@ -367,23 +367,23 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
    * than treated as an error: the client keeps its own pending selection and
    * the value lands on the row with the first send.
    */
-  const setSessionModel = (
+  const setSessionModel = async (
     provider: LLMProvider,
     sessionId: string,
     model: string,
-  ): ProviderSessionModel | null => {
+  ): Promise<ProviderSessionModel | null> => {
     const normalizedSessionId = sessionId.trim();
     const normalizedModel = model.trim();
     if (!normalizedSessionId || !normalizedModel) {
       return null;
     }
 
-    const recordedSelection = readRecordedSessionSelection(normalizedSessionId);
+    const recordedSelection = await readRecordedSessionSelection(normalizedSessionId);
     if (!recordedSelection) {
       return null;
     }
 
-    sessions.setSessionModel(normalizedSessionId, normalizedModel);
+    await sessions.setSessionModel(normalizedSessionId, normalizedModel);
     return {
       provider,
       sessionId: normalizedSessionId,
@@ -400,22 +400,22 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
    * the session gateway yet. The websocket send path records it once the row
    * exists, so a pre-session composer choice is not lost.
    */
-  const setSessionEffort = (
+  const setSessionEffort = async (
     provider: LLMProvider,
     sessionId: string,
     effort: string,
-  ): { provider: LLMProvider; sessionId: string; effort: string; source: 'session' } | null => {
+  ): Promise<{ provider: LLMProvider; sessionId: string; effort: string; source: 'session' } | null> => {
     const normalizedSessionId = sessionId.trim();
     const normalizedEffort = effort.trim();
     if (!normalizedSessionId || !normalizedEffort) {
       return null;
     }
 
-    if (!readRecordedSessionSelection(normalizedSessionId)) {
+    if (!await readRecordedSessionSelection(normalizedSessionId)) {
       return null;
     }
 
-    sessions.setSessionEffort(normalizedSessionId, normalizedEffort);
+    await sessions.setSessionEffort(normalizedSessionId, normalizedEffort);
     return {
       provider,
       sessionId: normalizedSessionId,
@@ -443,7 +443,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
       : '';
 
     if (normalizedSessionId) {
-      const recordedSelection = readRecordedSessionSelection(normalizedSessionId);
+      const recordedSelection = await readRecordedSessionSelection(normalizedSessionId);
       if (recordedSelection?.model) {
         return {
           provider,
@@ -455,7 +455,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
       }
 
       const predefined = await resolveProvider(provider).models.getSupportedModels();
-      const providerCatalog = readMergedCatalog(provider, predefined);
+      const providerCatalog = await readMergedCatalog(provider, predefined);
       const providerModel = await getCurrentActiveModel(provider, normalizedSessionId);
       const resolvedProviderModel = providerModel.model?.trim();
       // Adapters answer with their own built-in default when they know nothing
@@ -518,7 +518,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
       return normalizedRequestedModel || undefined;
     }
 
-    const recordedModel = readRecordedSessionSelection(normalizedSessionId)?.model;
+    const recordedModel = (await readRecordedSessionSelection(normalizedSessionId))?.model;
     return recordedModel || normalizedRequestedModel || undefined;
   };
 

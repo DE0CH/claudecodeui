@@ -36,14 +36,14 @@ async function withIsolatedDatabase(runTest: (workspace: string) => Promise<void
   const previousDatabasePath = process.env.DATABASE_PATH;
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'session-prune-db-'));
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await initializeDatabase();
 
   try {
     await runTest(tempDirectory);
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -64,15 +64,15 @@ test('synchronizeSessions drops indexed sessions whose transcript file was delet
     await writeFile(livePath, '{}\n');
     const deletedPath = path.join(transcriptDirectory, 'deleted.jsonl');
 
-    sessionsDb.createSession('live-session', 'claude', PROJECT_PATH, 'Live', undefined, undefined, livePath);
-    sessionsDb.createSession('orphan-session', 'claude', PROJECT_PATH, 'Untitled Claude Session', undefined, undefined, deletedPath);
+    await sessionsDb.createSession('live-session', 'claude', PROJECT_PATH, 'Live', undefined, undefined, livePath);
+    await sessionsDb.createSession('orphan-session', 'claude', PROJECT_PATH, 'Untitled Claude Session', undefined, undefined, deletedPath);
 
     const result = await sessionSynchronizerService.synchronizeSessions();
 
     assert.deepEqual(result.failures, []);
     assert.equal(result.prunedOrphans, 1);
-    assert.equal(sessionsDb.getSessionById('orphan-session'), null);
-    assert.ok(sessionsDb.getSessionById('live-session'), 'a session whose transcript still exists must survive');
+    assert.equal(await sessionsDb.getSessionById('orphan-session'), null);
+    assert.ok(await sessionsDb.getSessionById('live-session'), 'a session whose transcript still exists must survive');
   });
 });
 
@@ -82,12 +82,12 @@ test('synchronizeSessions keeps sessions whose whole transcript directory is mis
     // "looks" deleted, so pruning here would wipe the entire index.
     const unmountedPath = path.join(workspace, 'not-mounted', 'session.jsonl');
 
-    sessionsDb.createSession('unmounted-session', 'claude', PROJECT_PATH, 'Unmounted', undefined, undefined, unmountedPath);
+    await sessionsDb.createSession('unmounted-session', 'claude', PROJECT_PATH, 'Unmounted', undefined, undefined, unmountedPath);
 
     const result = await sessionSynchronizerService.synchronizeSessions();
 
     assert.equal(result.prunedOrphans, 0);
-    assert.ok(sessionsDb.getSessionById('unmounted-session'));
+    assert.ok(await sessionsDb.getSessionById('unmounted-session'));
   });
 });
 
@@ -95,13 +95,13 @@ test('synchronizeSessions keeps sessions that have no transcript path yet', asyn
   await withIsolatedDatabase(async () => {
     // App-created rows (jsonl_path NULL until the first provider write) and
     // OpenCode rows (one shared sqlite file, so jsonl_path stays NULL).
-    sessionsDb.createAppSession('pending-app-session', 'claude', PROJECT_PATH, 'Pending');
-    sessionsDb.createSession('opencode-session', 'opencode', PROJECT_PATH, 'OpenCode', undefined, undefined, null);
+    await sessionsDb.createAppSession('pending-app-session', 'claude', PROJECT_PATH, 'Pending');
+    await sessionsDb.createSession('opencode-session', 'opencode', PROJECT_PATH, 'OpenCode', undefined, undefined, null);
 
     const result = await sessionSynchronizerService.synchronizeSessions();
 
     assert.equal(result.prunedOrphans, 0);
-    assert.ok(sessionsDb.getSessionById('pending-app-session'));
-    assert.ok(sessionsDb.getSessionById('opencode-session'));
+    assert.ok(await sessionsDb.getSessionById('pending-app-session'));
+    assert.ok(await sessionsDb.getSessionById('opencode-session'));
   });
 });

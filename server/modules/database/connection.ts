@@ -1,144 +1,162 @@
 /**
- * Database connection management.
+ * Database connection: Postgres (Jarvis 3 fork; upstream uses a local better-sqlite3 file).
  *
- * Owns the single SQLite connection used across all repositories.
- * Handles path resolution, directory creation, legacy database migration,
- * and eager app_config bootstrap so the auth middleware can read the
- * JWT secret before the full schema is applied.
+ * The schema mirrors upstream's SQLite one exactly (schema.ts): timestamps are text in SQLite's
+ * `YYYY-MM-DD HH:MM:SS` form, booleans are 0/1 integers, ids are plain numbers, so the repositories and their
+ * callers see the same values as before. Every query goes through `all`/`get`/`run`, which take the repositories'
+ * SQLite SQL and translate the few dialect differences (`?` placeholders, CURRENT_TIMESTAMP, `datetime(x)`,
+ * the camel-case columns `isStarred`/`isArchived`, which SQLite matches case-insensitively).
  *
- * Consumers should never create their own Database instance — they use
- * `getConnection()` to obtain the shared singleton.
+ * Where the data lives:
+ *   - DATABASE_URL: the Postgres server (default: TEST_DATABASE_URL, else the local test server);
+ *   - DATABASE_SCHEMA: this installation's schema (one per CloudCLI user process), created on first use.
+ *     Without it (the tests), the schema is derived from DATABASE_PATH, so a test's private database path still
+ *     gives it a private, empty schema.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import pg from 'pg';
 
-import Database from 'better-sqlite3';
+// int8 (count(*), sums) as numbers, like SQLite
+pg.types.setTypeParser(20, (v: string) => Number(v));
 
-import { APP_CONFIG_TABLE_SCHEMA_SQL } from '@/modules/database/schema.js';
+type Queryable = { query: (text: string, values?: unknown[]) => Promise<pg.QueryResult> };
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+let pool: pg.Pool | null = null;
+let poolSchema = '';
+let schemaReady: Promise<void> | null = null;
+const txClient = new AsyncLocalStorage<pg.PoolClient>();
 
-// ---------------------------------------------------------------------------
-// Path resolution
-// ---------------------------------------------------------------------------
+const TEST_URL = 'postgres://claude:dev@127.0.0.1:5432/postgres';
 
-/**
- * Resolves the database file path from environment or falls back
- * to the legacy location inside the server/database/ folder.
- *
- * Priority:
- *   1. DATABASE_PATH environment variable (set by cli.js or load-env-vars.js)
- *   2. Legacy path: server/database/auth.db
- */
-function resolveDatabasePath(): string {
-    // process.env.DATABASE_PATH is set by load-env-vars.js to either the .env value or a default(~/.cloudcli/auth.db) in the user's home directory. 
-    return process.env.DATABASE_PATH || resolveLegacyDatabasePath();
+function resolveUrl(): string {
+  return process.env.DATABASE_URL || process.env.TEST_DATABASE_URL || TEST_URL;
 }
 
-/**
- * Resolves the legacy database path (always inside server/database/).
- * Used for the one-time migration to the new external location.
- */
-function resolveLegacyDatabasePath(): string {
-  const serverDir = path.resolve(__dirname, '..', '..', '..');
-  return path.join(serverDir, 'database', 'auth.db');
-}
-
-// ---------------------------------------------------------------------------
-// Directory & migration helpers
-// ---------------------------------------------------------------------------
-
-function ensureDatabaseDirectory(dbPath: string): void {
-  const dir = path.dirname(dbPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-    console.log('Created database directory:', dir);
+/** The schema name: DATABASE_SCHEMA, else one derived from DATABASE_PATH (tests), else `cloudcli`. */
+export function resolveSchema(): string {
+  const explicit = process.env.DATABASE_SCHEMA;
+  if (explicit) {
+    if (!/^[a-z_][a-z0-9_]{0,62}$/.test(explicit)) throw new Error('DATABASE_SCHEMA must be a lowercase identifier');
+    return explicit;
   }
+  const p = process.env.DATABASE_PATH;
+  if (p) return `cc_t_${createHash('sha256').update(p).digest('hex').slice(0, 20)}`;
+  return 'cloudcli';
 }
 
-/**
- * If the database was moved to an external location (e.g. ~/.cloudcli/)
- * but the user still has a legacy auth.db inside the install directory,
- * copy it to the new location as a one-time migration.
- */
-function migrateLegacyDatabase(targetPath: string): void {
-  const legacyPath = resolveLegacyDatabasePath();
+/** SQLite's CURRENT_TIMESTAMP text, in UTC. */
+export const NOW_TEXT = "to_char(now() at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS')";
 
-  if (targetPath === legacyPath) return;
-  if (fs.existsSync(targetPath)) return;
-  if (!fs.existsSync(legacyPath)) return;
-
-  try {
-    fs.copyFileSync(legacyPath, targetPath);
-    console.log('Migrated legacy database', { from: legacyPath, to: targetPath });
-
-
-    // copy the write-ahead log and shared memory files (auth.db-wal, auth.db-shm) if they exist, to preserve any uncommitted transactions
-    for (const suffix of ['-wal', '-shm']) {
-      const src = legacyPath + suffix;
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, targetPath + suffix);
-      }
+/** The repositories' SQLite SQL as Postgres SQL. */
+export function translateSql(sql: string): string {
+  let out = '';
+  let n = 0;
+  let inStr = false;
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i]!;
+    if (c === "'") inStr = !inStr;
+    if (c === '?' && !inStr) {
+      n += 1;
+      out += `$${n}`;
+      continue;
     }
-  } catch (err: any) {
-    console.error('Could not migrate legacy database', { error: err.message });
+    out += c;
+  }
+  return out
+    .replace(/\bCURRENT_TIMESTAMP\b/g, NOW_TEXT)
+    .replace(/\bdatetime\(/gi, '(')
+    .replace(/(?<!")\bisStarred\b(?!")/g, '"isStarred"')
+    .replace(/(?<!")\bisArchived\b(?!")/g, '"isArchived"');
+}
+
+function getPool(): pg.Pool {
+  const schema = resolveSchema();
+  if (pool && poolSchema === schema) return pool;
+  if (pool) void pool.end().catch(() => {});
+  poolSchema = schema;
+  pool = new pg.Pool({
+    connectionString: resolveUrl(),
+    max: Number(process.env.DATABASE_POOL_MAX || 5),
+    options: `-c search_path=${schema}`,
+  });
+  pool.on('error', (e) => console.error('[database] idle client error', e.message));
+  schemaReady = null;
+  return pool;
+}
+
+function target(): Queryable {
+  return txClient.getStore() ?? getPool();
+}
+
+/** Makes this installation's schema if it doesn't exist yet (run before any table is touched). */
+export async function ensureSchema(): Promise<void> {
+  const p = getPool();
+  schemaReady ??= p.query(`create schema if not exists ${poolSchema}`).then(() => undefined);
+  await schemaReady;
+}
+
+export async function all<T = any>(sql: string, params: unknown[] = []): Promise<T[]> {
+  const r = await target().query(translateSql(sql), params);
+  return r.rows as T[];
+}
+
+export async function get<T = any>(sql: string, params: unknown[] = []): Promise<T | undefined> {
+  const r = await target().query(translateSql(sql), params);
+  return r.rows[0] as T | undefined;
+}
+
+/** `changes`: rows affected; `lastInsertRowid`: the `id` a `RETURNING id` gave (SQLite's run() result shape). */
+export async function run(sql: string, params: unknown[] = []): Promise<{ changes: number; lastInsertRowid?: number }> {
+  const r = await target().query(translateSql(sql), params);
+  const id = r.rows?.[0]?.id;
+  return { changes: r.rowCount ?? 0, ...(id !== undefined ? { lastInsertRowid: Number(id) } : {}) };
+}
+
+/** Several statements without parameters (schema). */
+export async function exec(sql: string): Promise<void> {
+  await target().query(sql);
+}
+
+/**
+ * Runs `fn` in one transaction; every all/get/run inside it (in this async context) uses the transaction's
+ * connection. Nested calls join the outer transaction.
+ */
+export async function transaction<T>(fn: () => Promise<T>): Promise<T> {
+  if (txClient.getStore()) return await fn();
+  const client = await getPool().connect();
+  try {
+    await client.query('begin');
+    const result = await txClient.run(client, fn);
+    await client.query('commit');
+    return result;
+  } catch (e) {
+    await client.query('rollback').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
   }
 }
 
-
-// ---------------------------------------------------------------------------
-// Singleton connection
-// ---------------------------------------------------------------------------
-
-let instance: Database.Database | null = null;
-
-/**
- * Returns the shared database connection, creating it on first call.
- *
- * The first invocation:
- *   1. Resolves the target database path
- *   2. Ensures the parent directory exists
- *   3. Migrates from the legacy install-directory path if needed
- *   4. Opens the SQLite connection
- *   5. Eagerly creates the app_config table (auth reads JWT secret at import time)
- *   6. Logs the database location
- */
-export function getConnection(): Database.Database {
-  if (instance) return instance;
-
-  const dbPath = resolveDatabasePath();
-
-  ensureDatabaseDirectory(dbPath);
-  migrateLegacyDatabase(dbPath);
-
-  instance = new Database(dbPath);
-
-  // app_config must exist immediately — the auth middleware reads
-  // the JWT secret at module-load time, before initializeDatabase() runs.
-  instance.exec(APP_CONFIG_TABLE_SCHEMA_SQL);
-
-  return instance;
-}
-
-/**
- * Returns the resolved database file path without opening a connection.
- * Useful for diagnostics and CLI status commands.
- */
+/** Where the data is, for diagnostics (upstream returned the SQLite file path). */
 export function getDatabasePath(): string {
-  return resolveDatabasePath();
+  const u = new URL(resolveUrl());
+  return `postgres://${u.host}${u.pathname} schema ${resolveSchema()}`;
 }
 
-/**
- * Closes the database connection and clears the singleton.
- * Primarily used for graceful shutdown or testing.
- */
-export function closeConnection(): void {
-  if (instance) {
-    instance.close();
-    instance = null;
-    console.log('Database connection closed');
+/** Closes the pool (graceful shutdown, tests). */
+export async function closeConnection(): Promise<void> {
+  if (pool) {
+    const p = pool;
+    pool = null;
+    schemaReady = null;
+    await p.end();
   }
+}
+
+/** Drops this installation's schema (tests only). */
+export async function dropSchema(): Promise<void> {
+  const schema = resolveSchema();
+  await getPool().query(`drop schema if exists ${schema} cascade`);
 }

@@ -51,7 +51,7 @@ export function handleDesktopNotificationsConnection(
 
   let registered = false;
 
-  ws.on('message', (rawMessage) => {
+  ws.on('message', async (rawMessage) => {
     const data = parseIncomingJsonObject(rawMessage) as DesktopNotificationRegisterMessage | null;
     if (!data) {
       return;
@@ -77,7 +77,7 @@ export function handleDesktopNotificationsConnection(
       return;
     }
 
-    const device = registerDesktopNotificationClient({
+    const device = await registerDesktopNotificationClient({
       userId,
       deviceId,
       label: readOptionalString(data.label),

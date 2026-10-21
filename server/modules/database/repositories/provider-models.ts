@@ -1,4 +1,4 @@
-import { getConnection } from '@/modules/database/connection.js';
+import { all, get, run, transaction } from '@/modules/database/connection.js';
 import type {
   CustomProviderModelEffort,
   CustomProviderModelInput,
@@ -75,15 +75,15 @@ const toCustomProviderModelRecord = (
   effort: readStoredEffort(row),
 });
 
-const readCustomProviderModelRow = (
+const readCustomProviderModelRow = async (
   provider: LLMProvider,
   recordId: number,
-): CustomProviderModelRow | null => {
-  const row = getConnection().prepare(`
+): Promise<CustomProviderModelRow | null> => {
+  const row = (await get(`
     SELECT ${CUSTOM_PROVIDER_MODEL_COLUMNS}
     FROM provider_models
     WHERE provider = ? AND id = ?
-  `).get(provider, recordId) as CustomProviderModelRow | undefined;
+  `, [provider, recordId])) as CustomProviderModelRow | undefined;
 
   return row ?? null;
 };
@@ -97,65 +97,62 @@ const readCustomProviderModelRow = (
  * the predefined default supplied by the Providers service.
  */
 export const providerModelsDb = {
-  listCustomProviderModels(provider: LLMProvider): CustomProviderModelRecord[] {
-    const rows = getConnection().prepare(`
+  async listCustomProviderModels(provider: LLMProvider): Promise<CustomProviderModelRecord[]> {
+    const rows = (await all(`
       SELECT ${CUSTOM_PROVIDER_MODEL_COLUMNS}
       FROM provider_models
       WHERE provider = ?
       ORDER BY sort_order ASC, lower(model_name) ASC, id ASC
-    `).all(provider) as CustomProviderModelRow[];
+    `, [provider])) as CustomProviderModelRow[];
 
     return rows.map(toCustomProviderModelRecord);
   },
 
-  getCustomProviderModel(
+  async getCustomProviderModel(
     provider: LLMProvider,
     recordId: number,
-  ): CustomProviderModelRecord | null {
-    const row = readCustomProviderModelRow(provider, recordId);
+  ): Promise<CustomProviderModelRecord | null> {
+    const row = await readCustomProviderModelRow(provider, recordId);
     return row ? toCustomProviderModelRecord(row) : null;
   },
 
-  findCustomProviderModelByModelId(
+  async findCustomProviderModelByModelId(
     provider: LLMProvider,
     modelId: string,
-  ): CustomProviderModelRecord | null {
-    const row = getConnection().prepare(`
+  ): Promise<CustomProviderModelRecord | null> {
+    const row = (await get(`
       SELECT ${CUSTOM_PROVIDER_MODEL_COLUMNS}
       FROM provider_models
       WHERE provider = ? AND model_id = ?
-    `).get(provider, modelId) as CustomProviderModelRow | undefined;
+    `, [provider, modelId])) as CustomProviderModelRow | undefined;
 
     return row ? toCustomProviderModelRecord(row) : null;
   },
 
-  createCustomProviderModel(
+  async createCustomProviderModel(
     provider: LLMProvider,
     input: CustomProviderModelInput,
-  ): CustomProviderModelRecord {
-    const db = getConnection();
-    const nextOrder = db.prepare(`
+  ): Promise<CustomProviderModelRecord> {
+    const nextOrder = (await get(`
       SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
       FROM provider_models
       WHERE provider = ?
-    `).get(provider) as { next_order: number };
+    `, [provider])) as { next_order: number };
 
     const effort = toStoredEffortColumns(input.effort);
-    const result = db.prepare(`
+    const result = (await run(`
       INSERT INTO provider_models (
         provider, model_id, model_name, sort_order, effort_values, effort_default
       )
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      provider,
+    `, [provider,
       input.id,
       input.model,
       nextOrder.next_order,
       effort.values,
-      effort.defaultValue,
-    );
+      effort.defaultValue,]));
 
-    const row = readCustomProviderModelRow(provider, Number(result.lastInsertRowid));
+    const row = await readCustomProviderModelRow(provider, Number(result.lastInsertRowid));
     if (!row) {
       throw new Error('Created provider model could not be read back.');
     }
@@ -163,79 +160,77 @@ export const providerModelsDb = {
     return toCustomProviderModelRecord(row);
   },
 
-  updateCustomProviderModel(
+  async updateCustomProviderModel(
     provider: LLMProvider,
     recordId: number,
     input: CustomProviderModelInput,
-  ): CustomProviderModelRecord | null {
-    const db = getConnection();
-    const update = db.transaction(() => {
-      const previous = readCustomProviderModelRow(provider, recordId);
+  ): Promise<CustomProviderModelRecord | null> {
+    const update = async () => await transaction(async () => {
+      const previous = await readCustomProviderModelRow(provider, recordId);
       if (!previous) {
         return null;
       }
 
-      db.prepare(`
+      (await run(`
         UPDATE provider_models
         SET model_id = ?, model_name = ?, updated_at = CURRENT_TIMESTAMP
         WHERE provider = ? AND id = ?
-      `).run(input.id, input.model, provider, recordId);
+      `, [input.id, input.model, provider, recordId]));
 
       // An omitted `effort` keeps the stored levels so clients that only edit
       // the name or id cannot wipe them; `null` explicitly clears them.
       if (input.effort !== undefined) {
         const effort = toStoredEffortColumns(input.effort);
-        db.prepare(`
+        (await run(`
           UPDATE provider_models
           SET effort_values = ?, effort_default = ?
           WHERE provider = ? AND id = ?
-        `).run(effort.values, effort.defaultValue, provider, recordId);
+        `, [effort.values, effort.defaultValue, provider, recordId]));
       }
 
       if (previous.model_id !== input.id) {
-        db.prepare(`
+        (await run(`
           UPDATE sessions
           SET model = ?, updated_at = CURRENT_TIMESTAMP
           WHERE provider = ? AND model = ?
-        `).run(input.id, provider, previous.model_id);
+        `, [input.id, provider, previous.model_id]));
       }
 
       return readCustomProviderModelRow(provider, recordId);
     });
 
-    const row = update();
+    const row = await update();
     return row ? toCustomProviderModelRecord(row) : null;
   },
 
-  deleteCustomProviderModel(
+  async deleteCustomProviderModel(
     provider: LLMProvider,
     recordId: number,
     fallbackModelId: string,
-  ): CustomProviderModelRecord | null {
-    const db = getConnection();
-    const remove = db.transaction(() => {
-      const row = readCustomProviderModelRow(provider, recordId);
+  ): Promise<CustomProviderModelRecord | null> {
+    const remove = async () => await transaction(async () => {
+      const row = await readCustomProviderModelRow(provider, recordId);
       if (!row) {
         return null;
       }
 
       // The effort is cleared alongside the model because it was chosen for the
       // deleted model; replaced sessions resume on the fallback model's default.
-      db.prepare(`
+      (await run(`
         UPDATE sessions
         SET model = ?, effort = NULL, updated_at = CURRENT_TIMESTAMP
         WHERE provider = ? AND model = ?
-      `).run(fallbackModelId, provider, row.model_id);
+      `, [fallbackModelId, provider, row.model_id]));
 
-      db.prepare(`
+      (await run(`
         DELETE FROM provider_models
         WHERE provider = ? AND id = ?
-      `).run(provider, recordId);
+      `, [provider, recordId]));
 
       return row;
     });
 
-    const row = remove();
+    const row = await remove();
     return row ? toCustomProviderModelRecord(row) : null;
   },
 };

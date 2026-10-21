@@ -26,7 +26,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   const tempDirectory = await mkdtemp(path.join(tmpdir(), 'chat-run-registry-'));
   const databasePath = path.join(tempDirectory, 'auth.db');
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = databasePath;
   await initializeDatabase();
 
@@ -35,7 +35,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   } finally {
     connectedClients.clear();
     chatRunRegistry.clearAll();
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -46,8 +46,8 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 test('live events are remapped to the app session id and sequenced', async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createAppSession('app-run-1', 'claude', '/workspace/demo');
+  withIsolatedDatabase(async () => {
+    await sessionsDb.createAppSession('app-run-1', 'claude', '/workspace/demo');
     const connection = new FakeConnection();
     const run = chatRunRegistry.startRun({
       appSessionId: 'app-run-1',
@@ -58,8 +58,8 @@ test('live events are remapped to the app session id and sequenced', async () =>
     });
     assert.ok(run);
 
-    run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'provider-id-9', content: 'hello' });
-    run.writer.send({ kind: 'text', provider: 'claude', sessionId: 'provider-id-9', content: 'hello world' });
+    await run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'provider-id-9', content: 'hello' });
+    await run.writer.send({ kind: 'text', provider: 'claude', sessionId: 'provider-id-9', content: 'hello world' });
 
     assert.equal(connection.frames.length, 2);
     assert.equal(connection.frames[0]?.sessionId, 'app-run-1');
@@ -70,8 +70,8 @@ test('live events are remapped to the app session id and sequenced', async () =>
 });
 
 test('session_created is swallowed and persisted as the provider-id mapping', async () => {
-  await withIsolatedDatabase(async () => {
-    sessionsDb.createAppSession('app-run-2', 'cursor', '/workspace/demo');
+  withIsolatedDatabase(async () => {
+    await sessionsDb.createAppSession('app-run-2', 'cursor', '/workspace/demo');
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
     const run = chatRunRegistry.startRun({
@@ -83,7 +83,7 @@ test('session_created is swallowed and persisted as the provider-id mapping', as
     });
     assert.ok(run);
 
-    run.writer.send({
+    await run.writer.send({
       kind: 'session_created',
       provider: 'cursor',
       sessionId: 'cursor-native-7',
@@ -101,13 +101,13 @@ test('session_created is swallowed and persisted as the provider-id mapping', as
     assert.equal(sessionUpserts[0]?.providerSessionId, 'cursor-native-7');
     // ...but the canonical mapping is recorded and persisted in the database.
     assert.equal(run.providerSessionId, 'cursor-native-7');
-    assert.equal(sessionsDb.getSessionById('app-run-2')?.provider_session_id, 'cursor-native-7');
+    assert.equal((await sessionsDb.getSessionById('app-run-2'))?.provider_session_id, 'cursor-native-7');
   });
 });
 
 test('complete marks the run finished and duplicate completes are dropped', async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createAppSession('app-run-3', 'codex', '/workspace/demo');
+  withIsolatedDatabase(async () => {
+    await sessionsDb.createAppSession('app-run-3', 'codex', '/workspace/demo');
     const connection = new FakeConnection();
     const run = chatRunRegistry.startRun({
       appSessionId: 'app-run-3',
@@ -118,9 +118,9 @@ test('complete marks the run finished and duplicate completes are dropped', asyn
     });
     assert.ok(run);
 
-    run.writer.send({ kind: 'complete', provider: 'codex', sessionId: 'native-3', exitCode: 0 });
+    await run.writer.send({ kind: 'complete', provider: 'codex', sessionId: 'native-3', exitCode: 0 });
     // Late duplicate from a killed runtime's exit handler.
-    run.writer.send({ kind: 'complete', provider: 'codex', sessionId: 'native-3', exitCode: 1 });
+    await run.writer.send({ kind: 'complete', provider: 'codex', sessionId: 'native-3', exitCode: 1 });
 
     const completes = connection.frames.filter((frame) => frame.kind === 'complete');
     assert.equal(completes.length, 1);
@@ -134,8 +134,8 @@ test('complete marks the run finished and duplicate completes are dropped', asyn
 });
 
 test('a finished run\'s safety net cannot complete the session\'s next run', async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createAppSession('app-run-9', 'codex', '/workspace/demo');
+  withIsolatedDatabase(async () => {
+    await sessionsDb.createAppSession('app-run-9', 'codex', '/workspace/demo');
     const connection = new FakeConnection();
 
     const firstRun = chatRunRegistry.startRun({
@@ -146,7 +146,7 @@ test('a finished run\'s safety net cannot complete the session\'s next run', asy
       userId: null,
     });
     assert.ok(firstRun);
-    firstRun.writer.send({ kind: 'complete', provider: 'codex', sessionId: 'native-9', exitCode: 0 });
+    await firstRun.writer.send({ kind: 'complete', provider: 'codex', sessionId: 'native-9', exitCode: 0 });
 
     // A queued message starts the next run before the first run's runtime
     // promise settles (the chat handler's `finally` hasn't executed yet).
@@ -172,9 +172,9 @@ test('a finished run\'s safety net cannot complete the session\'s next run', asy
 });
 
 test('listRunningRuns returns only currently running app sessions', async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createAppSession('app-run-7', 'claude', '/workspace/demo');
-    sessionsDb.createAppSession('app-run-8', 'codex', '/workspace/demo');
+  withIsolatedDatabase(async () => {
+    await sessionsDb.createAppSession('app-run-7', 'claude', '/workspace/demo');
+    await sessionsDb.createAppSession('app-run-8', 'codex', '/workspace/demo');
     const connection = new FakeConnection();
 
     const completedRun = chatRunRegistry.startRun({
@@ -204,8 +204,8 @@ test('listRunningRuns returns only currently running app sessions', async () => 
 });
 
 test('replayEvents returns only events after the requested seq', async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createAppSession('app-run-4', 'claude', '/workspace/demo');
+  withIsolatedDatabase(async () => {
+    await sessionsDb.createAppSession('app-run-4', 'claude', '/workspace/demo');
     const connection = new FakeConnection();
     const run = chatRunRegistry.startRun({
       appSessionId: 'app-run-4',
@@ -216,9 +216,9 @@ test('replayEvents returns only events after the requested seq', async () => {
     });
     assert.ok(run);
 
-    run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'x', content: 'a' });
-    run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'x', content: 'b' });
-    run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'x', content: 'c' });
+    await run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'x', content: 'a' });
+    await run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'x', content: 'b' });
+    await run.writer.send({ kind: 'stream_delta', provider: 'claude', sessionId: 'x', content: 'c' });
 
     const replayed = chatRunRegistry.replayEvents('app-run-4', 1);
     assert.deepEqual(replayed.map((event) => event.content), ['b', 'c']);
@@ -227,8 +227,8 @@ test('replayEvents returns only events after the requested seq', async () => {
 });
 
 test('attachConnection adds a socket without cutting off the ones already watching', async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createAppSession('app-run-5', 'opencode', '/workspace/demo');
+  withIsolatedDatabase(async () => {
+    await sessionsDb.createAppSession('app-run-5', 'opencode', '/workspace/demo');
     const firstConnection = new FakeConnection();
     const run = chatRunRegistry.startRun({
       appSessionId: 'app-run-5',
@@ -239,12 +239,12 @@ test('attachConnection adds a socket without cutting off the ones already watchi
     });
     assert.ok(run);
 
-    run.writer.send({ kind: 'stream_delta', provider: 'opencode', sessionId: 'o', content: 'before' });
+    await run.writer.send({ kind: 'stream_delta', provider: 'opencode', sessionId: 'o', content: 'before' });
 
     // A second tab on the same session subscribes mid-run.
     const secondConnection = new FakeConnection();
     assert.equal(chatRunRegistry.attachConnection('app-run-5', secondConnection), true);
-    run.writer.send({ kind: 'stream_delta', provider: 'opencode', sessionId: 'o', content: 'after' });
+    await run.writer.send({ kind: 'stream_delta', provider: 'opencode', sessionId: 'o', content: 'after' });
 
     assert.deepEqual(firstConnection.frames.map((frame) => frame.content), ['before', 'after']);
     assert.deepEqual(secondConnection.frames.map((frame) => frame.content), ['after']);
@@ -252,8 +252,8 @@ test('attachConnection adds a socket without cutting off the ones already watchi
 });
 
 test('a refreshed tab stops receiving once its old socket is closed', async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createAppSession('app-run-5b', 'opencode', '/workspace/demo');
+  withIsolatedDatabase(async () => {
+    await sessionsDb.createAppSession('app-run-5b', 'opencode', '/workspace/demo');
     const staleConnection = new FakeConnection();
     const run = chatRunRegistry.startRun({
       appSessionId: 'app-run-5b',
@@ -269,8 +269,8 @@ test('a refreshed tab stops receiving once its old socket is closed', async () =
     const reloadedConnection = new FakeConnection();
     assert.equal(chatRunRegistry.attachConnection('app-run-5b', reloadedConnection), true);
 
-    run.writer.send({ kind: 'stream_delta', provider: 'opencode', sessionId: 'o', content: 'after' });
-    run.writer.send({ kind: 'stream_delta', provider: 'opencode', sessionId: 'o', content: 'later' });
+    await run.writer.send({ kind: 'stream_delta', provider: 'opencode', sessionId: 'o', content: 'after' });
+    await run.writer.send({ kind: 'stream_delta', provider: 'opencode', sessionId: 'o', content: 'later' });
 
     assert.deepEqual(staleConnection.frames, []);
     assert.deepEqual(reloadedConnection.frames.map((frame) => frame.content), ['after', 'later']);
@@ -278,8 +278,8 @@ test('a refreshed tab stops receiving once its old socket is closed', async () =
 });
 
 test('startRun rejects a second concurrent run for the same session', async () => {
-  await withIsolatedDatabase(() => {
-    sessionsDb.createAppSession('app-run-6', 'opencode', '/workspace/demo');
+  withIsolatedDatabase(async () => {
+    await sessionsDb.createAppSession('app-run-6', 'opencode', '/workspace/demo');
     const connection = new FakeConnection();
     const first = chatRunRegistry.startRun({
       appSessionId: 'app-run-6',

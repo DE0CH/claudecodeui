@@ -1,4 +1,4 @@
-import { getConnection } from '@/modules/database/connection.js';
+import { all, get, run, transaction } from '@/modules/database/connection.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
 
@@ -80,7 +80,7 @@ export const sessionsDb = {
    * app-created row keeps its existing name; synchronizer names only update
    * rows that were themselves created by indexing provider storage.
    */
-  createSession(
+  async createSession(
     providerSessionId: string,
     provider: string,
     projectPath: string,
@@ -88,27 +88,21 @@ export const sessionsDb = {
     createdAt?: string,
     updatedAt?: string,
     jsonlPath?: string | null
-  ): string {
-    const db = getConnection();
+  ): Promise<string> {
     const createdAtValue = normalizeTimestamp(createdAt);
     const updatedAtValue = normalizeTimestamp(updatedAt);
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
 
     // First, ensure the project path is recorded in the projects table,
     // since it's a foreign key in the sessions table.
-    projectsDb.createProjectPath(normalizedProjectPath);
+    await projectsDb.createProjectPath(normalizedProjectPath);
 
-    const existing = db
-      .prepare(
-        `SELECT session_id FROM sessions
+    const existing = (await get(`SELECT session_id FROM sessions
          WHERE provider_session_id = ? AND provider = ?
-         LIMIT 1`
-      )
-      .get(providerSessionId, provider) as { session_id: string } | undefined;
+         LIMIT 1`, [providerSessionId, provider])) as { session_id: string } | undefined;
 
     if (existing) {
-      db.prepare(
-        `UPDATE sessions SET
+      (await run(`UPDATE sessions SET
            provider = ?,
            updated_at = COALESCE(?, CURRENT_TIMESTAMP),
            project_path = ?,
@@ -118,17 +112,14 @@ export const sessionsDb = {
              WHEN session_id <> provider_session_id AND custom_name IS NOT NULL THEN custom_name
              ELSE COALESCE(?, custom_name)
            END
-         WHERE session_id = ?`
-      ).run(
-        provider,
+         WHERE session_id = ?`, [provider,
         updatedAtValue,
         normalizedProjectPath,
         jsonlPath ?? null,
         updatedAtValue,
         updatedAtValue,
         customName ?? null,
-        existing.session_id
-      );
+        existing.session_id]));
 
       return existing.session_id;
     }
@@ -136,8 +127,7 @@ export const sessionsDb = {
     // Sessions created outside the app (directly via the provider CLI) are
     // keyed by the provider-native id for both columns. The ON CONFLICT path
     // covers legacy rows that predate the provider_session_id mapping.
-    db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
+    (await run(`INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, 0, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
        ON CONFLICT(session_id) DO UPDATE SET
          provider = excluded.provider,
@@ -150,9 +140,7 @@ export const sessionsDb = {
            WHEN sessions.session_id <> sessions.provider_session_id AND sessions.custom_name IS NOT NULL
              THEN sessions.custom_name
            ELSE COALESCE(excluded.custom_name, sessions.custom_name)
-         END`
-    ).run(
-      providerSessionId,
+         END`, [providerSessionId,
       provider,
       providerSessionId,
       customName ?? null,
@@ -160,8 +148,7 @@ export const sessionsDb = {
       jsonlPath ?? null,
       createdAtValue,
       updatedAtValue,
-      updatedAtValue
-    );
+      updatedAtValue]));
 
     return providerSessionId;
   },
@@ -175,21 +162,18 @@ export const sessionsDb = {
    * `assignProviderSessionId` records the mapping. `customName` is derived
    * from the first visible CloudCLI message by the sessions service.
    */
-  createAppSession(
+  async createAppSession(
     sessionId: string,
     provider: string,
     projectPath: string,
     customName?: string,
-  ): string {
-    const db = getConnection();
+  ): Promise<string> {
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
 
-    projectsDb.createProjectPath(normalizedProjectPath);
+    await projectsDb.createProjectPath(normalizedProjectPath);
 
-    db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
-       VALUES (?, ?, NULL, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-    ).run(sessionId, provider, customName ?? null, normalizedProjectPath);
+    (await run(`INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, [sessionId, provider, customName ?? null, normalizedProjectPath]));
 
     return sessionId;
   },
@@ -202,7 +186,7 @@ export const sessionsDb = {
    * the row does — and the filesystem watcher would otherwise index it as an
    * unrelated session under its own id.
    */
-  createForkedSession(input: {
+  async createForkedSession(input: {
     sessionId: string;
     provider: string;
     projectPath: string;
@@ -212,23 +196,18 @@ export const sessionsDb = {
     forkedFromSessionId: string;
     model: string | null;
     effort: string | null;
-  }): string {
-    const db = getConnection();
+  }): Promise<string> {
     const normalizedProjectPath = normalizeProjectPathForProvider(input.provider, input.projectPath);
 
-    projectsDb.createProjectPath(normalizedProjectPath);
+    await projectsDb.createProjectPath(normalizedProjectPath);
 
     // The watcher may already have created a row for the new transcript. Its
     // id is the provider-native one, which is what this row claims, so replace
     // it rather than leaving two sidebar entries for one conversation.
-    db.transaction(() => {
-      db.prepare('DELETE FROM sessions WHERE session_id = ? AND session_id <> ?')
-        .run(input.providerSessionId, input.sessionId);
-      db.prepare(
-        `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, model, effort, forked_from_session_id, isArchived, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-      ).run(
-        input.sessionId,
+    await transaction(async () => {
+      (await run('DELETE FROM sessions WHERE session_id = ? AND session_id <> ?', [input.providerSessionId, input.sessionId]));
+      (await run(`INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, model, effort, forked_from_session_id, isArchived, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, [input.sessionId,
         input.provider,
         input.providerSessionId,
         input.customName,
@@ -236,9 +215,8 @@ export const sessionsDb = {
         input.jsonlPath,
         input.model,
         input.effort,
-        input.forkedFromSessionId,
-      );
-    })();
+        input.forkedFromSessionId,]));
+    });
 
     return input.sessionId;
   },
@@ -252,41 +230,32 @@ export const sessionsDb = {
    * are adopted and the duplicate row is removed. Runs in a transaction so
    * the sidebar can never observe both rows at once.
    */
-  assignProviderSessionId(sessionId: string, providerSessionId: string): void {
-    const db = getConnection();
+  async assignProviderSessionId(sessionId: string, providerSessionId: string): Promise<void> {
 
-    const merge = db.transaction(() => {
-      const duplicate = db
-        .prepare(
-          `SELECT ${SESSION_ROW_COLUMNS} FROM sessions
+    const merge = async () => await transaction(async () => {
+      const duplicate = (await get(`SELECT ${SESSION_ROW_COLUMNS} FROM sessions
            WHERE (session_id = ? OR provider_session_id = ?)
              AND session_id <> ?
-           LIMIT 1`
-        )
-        .get(providerSessionId, providerSessionId, sessionId) as SessionRow | undefined;
+           LIMIT 1`, [providerSessionId, providerSessionId, sessionId])) as SessionRow | undefined;
 
       if (duplicate) {
-        db.prepare('DELETE FROM sessions WHERE session_id = ?').run(duplicate.session_id);
-        db.prepare(
-          `UPDATE sessions SET
+        (await run('DELETE FROM sessions WHERE session_id = ?', [duplicate.session_id]));
+        (await run(`UPDATE sessions SET
              provider_session_id = ?,
              jsonl_path = COALESCE(jsonl_path, ?),
              custom_name = COALESCE(custom_name, ?),
              updated_at = CURRENT_TIMESTAMP
-           WHERE session_id = ?`
-        ).run(providerSessionId, duplicate.jsonl_path, duplicate.custom_name, sessionId);
+           WHERE session_id = ?`, [providerSessionId, duplicate.jsonl_path, duplicate.custom_name, sessionId]));
         return;
       }
 
-      db.prepare(
-        `UPDATE sessions SET
+      (await run(`UPDATE sessions SET
            provider_session_id = ?,
            updated_at = CURRENT_TIMESTAMP
-         WHERE session_id = ?`
-      ).run(providerSessionId, sessionId);
+         WHERE session_id = ?`, [providerSessionId, sessionId]));
     });
 
-    merge();
+    await merge();
   },
 
   /**
@@ -302,23 +271,19 @@ export const sessionsDb = {
    * That row is the same conversation this one is about to become, so it is
    * replaced rather than left behind as a second sidebar entry.
    */
-  repointSessionToProviderSession(
+  async repointSessionToProviderSession(
     sessionId: string,
     input: { providerSessionId: string; jsonlPath: string },
-  ): void {
-    const db = getConnection();
+  ): Promise<void> {
 
-    db.transaction(() => {
-      db.prepare('DELETE FROM sessions WHERE session_id = ? AND session_id <> ?')
-        .run(input.providerSessionId, sessionId);
-      db.prepare(
-        `UPDATE sessions SET
+    await transaction(async () => {
+      (await run('DELETE FROM sessions WHERE session_id = ? AND session_id <> ?', [input.providerSessionId, sessionId]));
+      (await run(`UPDATE sessions SET
            provider_session_id = ?,
            jsonl_path = ?,
            updated_at = CURRENT_TIMESTAMP
-         WHERE session_id = ?`
-      ).run(input.providerSessionId, input.jsonlPath, sessionId);
-    })();
+         WHERE session_id = ?`, [input.providerSessionId, input.jsonlPath, sessionId]));
+    });
   },
 
   /**
@@ -328,15 +293,12 @@ export const sessionsDb = {
    * Used when an edit replaces the very first prompt: there is no conversation
    * left to branch from, so the session starts over instead.
    */
-  detachProviderSession(sessionId: string): void {
-    const db = getConnection();
-    db.prepare(
-      `UPDATE sessions SET
+  async detachProviderSession(sessionId: string): Promise<void> {
+    (await run(`UPDATE sessions SET
          provider_session_id = NULL,
          jsonl_path = NULL,
          updated_at = CURRENT_TIMESTAMP
-       WHERE session_id = ?`
-    ).run(sessionId);
+       WHERE session_id = ?`, [sessionId]));
   },
 
   /**
@@ -347,32 +309,24 @@ export const sessionsDb = {
    * discovered from disk (whose app id *is* the provider id) rediscovering it
    * would repoint the row at the conversation the user edited away from.
    */
-  markProviderSessionSuperseded(input: {
+  async markProviderSessionSuperseded(input: {
     providerSessionId: string;
     provider: string;
     sessionId: string;
     jsonlPath: string | null;
-  }): void {
-    const db = getConnection();
-    db.prepare(
-      `INSERT INTO superseded_provider_sessions (provider_session_id, provider, session_id, jsonl_path)
+  }): Promise<void> {
+    (await run(`INSERT INTO superseded_provider_sessions (provider_session_id, provider, session_id, jsonl_path)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(provider_session_id, provider) DO UPDATE SET
          session_id = excluded.session_id,
          jsonl_path = excluded.jsonl_path,
-         created_at = CURRENT_TIMESTAMP`
-    ).run(input.providerSessionId, input.provider, input.sessionId, input.jsonlPath);
+         created_at = CURRENT_TIMESTAMP`, [input.providerSessionId, input.provider, input.sessionId, input.jsonlPath]));
   },
 
-  isProviderSessionSuperseded(providerSessionId: string, provider: string): boolean {
-    const db = getConnection();
-    const row = db
-      .prepare(
-        `SELECT 1 AS found FROM superseded_provider_sessions
+  async isProviderSessionSuperseded(providerSessionId: string, provider: string): Promise<boolean> {
+    const row = (await get(`SELECT 1 AS found FROM superseded_provider_sessions
          WHERE provider_session_id = ? AND provider = ?
-         LIMIT 1`
-      )
-      .get(providerSessionId, provider) as { found: number } | undefined;
+         LIMIT 1`, [providerSessionId, provider])) as { found: number } | undefined;
 
     return Boolean(row);
   },
@@ -384,14 +338,9 @@ export const sessionsDb = {
    * A conversation edited more than once has lived in more than one file, and
    * the session row only ever points at the newest.
    */
-  getSupersededTranscriptPaths(sessionId: string): string[] {
-    const db = getConnection();
-    const rows = db
-      .prepare(
-        `SELECT jsonl_path FROM superseded_provider_sessions
-         WHERE session_id = ? AND jsonl_path IS NOT NULL`
-      )
-      .all(sessionId) as Array<{ jsonl_path: string }>;
+  async getSupersededTranscriptPaths(sessionId: string): Promise<string[]> {
+    const rows = (await all(`SELECT jsonl_path FROM superseded_provider_sessions
+         WHERE session_id = ? AND jsonl_path IS NOT NULL`, [sessionId])) as Array<{ jsonl_path: string }>;
 
     return rows.map((row) => row.jsonl_path);
   },
@@ -403,9 +352,8 @@ export const sessionsDb = {
    * indexer refusing a transcript that no longer belongs to anything — a
    * conversation invisible to the app and impossible to delete through it.
    */
-  clearSupersededProviderSessions(sessionId: string): void {
-    const db = getConnection();
-    db.prepare('DELETE FROM superseded_provider_sessions WHERE session_id = ?').run(sessionId);
+  async clearSupersededProviderSessions(sessionId: string): Promise<void> {
+    (await run('DELETE FROM superseded_provider_sessions WHERE session_id = ?', [sessionId]));
   },
 
   /**
@@ -415,13 +363,10 @@ export const sessionsDb = {
    * so the row always reflects what the session last ran with and reopening it
    * restores that model instead of a catalog default.
    */
-  setSessionModel(sessionId: string, model: string): void {
-    const db = getConnection();
-    db.prepare(
-      `UPDATE sessions
+  async setSessionModel(sessionId: string, model: string): Promise<void> {
+    (await run(`UPDATE sessions
        SET model = ?
-       WHERE session_id = ?`
-    ).run(model, sessionId);
+       WHERE session_id = ?`, [model, sessionId]));
   },
 
   /**
@@ -430,35 +375,24 @@ export const sessionsDb = {
    * `default` is stored as an explicit choice rather than NULL so reopening
    * the session does not inherit a later per-provider effort preference.
    */
-  setSessionEffort(sessionId: string, effort: string): void {
-    const db = getConnection();
-    db.prepare(
-      `UPDATE sessions
+  async setSessionEffort(sessionId: string, effort: string): Promise<void> {
+    (await run(`UPDATE sessions
        SET effort = ?
-       WHERE session_id = ?`
-    ).run(effort, sessionId);
+       WHERE session_id = ?`, [effort, sessionId]));
   },
 
-  updateSessionCustomName(sessionId: string, customName: string): void {
-    const db = getConnection();
-    db.prepare(
-      `UPDATE sessions
+  async updateSessionCustomName(sessionId: string, customName: string): Promise<void> {
+    (await run(`UPDATE sessions
        SET custom_name = ?
-       WHERE session_id = ?`
-    ).run(customName, sessionId);
+       WHERE session_id = ?`, [customName, sessionId]));
   },
 
-  getSessionById(sessionId: string): SessionRow | null {
-    const db = getConnection();
-    const row = db
-      .prepare(
-        `SELECT ${SESSION_ROW_COLUMNS}
+  async getSessionById(sessionId: string): Promise<SessionRow | null> {
+    const row = (await get(`SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE session_id = ?
          ORDER BY updated_at DESC
-         LIMIT 1`
-      )
-      .get(sessionId) as SessionRow | undefined;
+         LIMIT 1`, [sessionId])) as SessionRow | undefined;
 
     return normalizeSessionRow(row) ?? null;
   },
@@ -470,17 +404,12 @@ export const sessionsDb = {
    * file names), so it uses this lookup to translate disk artifacts back to
    * the app-facing session row before broadcasting sidebar updates.
    */
-  getSessionByProviderSessionId(providerSessionId: string): SessionRow | null {
-    const db = getConnection();
-    const row = db
-      .prepare(
-        `SELECT ${SESSION_ROW_COLUMNS}
+  async getSessionByProviderSessionId(providerSessionId: string): Promise<SessionRow | null> {
+    const row = (await get(`SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE provider_session_id = ?
          ORDER BY updated_at DESC
-         LIMIT 1`
-      )
-      .get(providerSessionId) as SessionRow | undefined;
+         LIMIT 1`, [providerSessionId])) as SessionRow | undefined;
 
     return normalizeSessionRow(row) ?? null;
   },
@@ -503,34 +432,24 @@ export const sessionsDb = {
    * provider id is attached before any watcher-created row exists. The result
    * is simpler than frontend dedupe and keeps the race resolved at the source.
    */
-  findLatestPendingAppSession(provider: string, projectPath: string): SessionRow | null {
-    const db = getConnection();
+  async findLatestPendingAppSession(provider: string, projectPath: string): Promise<SessionRow | null> {
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
-    const row = db
-      .prepare(
-        `SELECT ${SESSION_ROW_COLUMNS}
+    const row = (await get(`SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE provider = ?
            AND project_path = ?
            AND provider_session_id IS NULL
            AND isArchived = 0
          ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC
-         LIMIT 1`
-      )
-      .get(provider, normalizedProjectPath) as SessionRow | undefined;
+         LIMIT 1`, [provider, normalizedProjectPath])) as SessionRow | undefined;
 
     return normalizeSessionRow(row) ?? null;
   },
 
-  getAllSessions(): SessionRow[] {
-    const db = getConnection();
-    const rows = db
-      .prepare(
-        `SELECT ${SESSION_ROW_COLUMNS}
+  async getAllSessions(): Promise<SessionRow[]> {
+    const rows = (await all(`SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
-         WHERE isArchived = 0`
-      )
-      .all() as SessionRow[];
+         WHERE isArchived = 0`)) as SessionRow[];
 
     return normalizeSessionRows(rows);
   },
@@ -543,31 +462,22 @@ export const sessionsDb = {
    * and correctly ordered across projects instead of flattening only the
    * per-project slices already loaded by the client.
    */
-  getRecentSessionsPage(limit: number, offset: number): RecentSessionsPage {
-    const db = getConnection();
+  async getRecentSessionsPage(limit: number, offset: number): Promise<RecentSessionsPage> {
     const visibilityClause = `
       sessions.isArchived = 0
       AND (projects.isArchived IS NULL OR projects.isArchived = 0)
     `;
-    const rows = db
-      .prepare(
-        `SELECT sessions.*
+    const rows = (await all(`SELECT sessions.*
          FROM sessions
          LEFT JOIN projects ON projects.project_path = sessions.project_path
          WHERE ${visibilityClause}
          ORDER BY julianday(COALESCE(sessions.updated_at, sessions.created_at)) DESC,
                   sessions.session_id DESC
-         LIMIT ? OFFSET ?`
-      )
-      .all(limit, offset) as SessionRow[];
-    const countRow = db
-      .prepare(
-        `SELECT COUNT(*) AS count
+         LIMIT ? OFFSET ?`, [limit, offset])) as SessionRow[];
+    const countRow = (await get(`SELECT COUNT(*) AS count
          FROM sessions
          LEFT JOIN projects ON projects.project_path = sessions.project_path
-         WHERE ${visibilityClause}`
-      )
-      .get() as { count: number } | undefined;
+         WHERE ${visibilityClause}`)) as { count: number } | undefined;
 
     return {
       sessions: normalizeSessionRows(rows),
@@ -579,31 +489,21 @@ export const sessionsDb = {
    * Archived rows are intentionally queried separately so the caller can render
    * them in a dedicated view without reintroducing them into active session lists.
    */
-  getArchivedSessions(): SessionRow[] {
-    const db = getConnection();
-    const rows = db
-      .prepare(
-        `SELECT ${SESSION_ROW_COLUMNS}
+  async getArchivedSessions(): Promise<SessionRow[]> {
+    const rows = (await all(`SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE isArchived = 1
-         ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC`
-      )
-      .all() as SessionRow[];
+         ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC`)) as SessionRow[];
 
     return normalizeSessionRows(rows);
   },
 
-  getSessionsByProjectPath(projectPath: string): SessionRow[] {
-    const db = getConnection();
+  async getSessionsByProjectPath(projectPath: string): Promise<SessionRow[]> {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    const rows = db
-      .prepare(
-        `SELECT ${SESSION_ROW_COLUMNS}
+    const rows = (await all(`SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE project_path = ?
-           AND isArchived = 0`
-      )
-      .all(normalizedProjectPath) as SessionRow[];
+           AND isArchived = 0`, [normalizedProjectPath])) as SessionRow[];
 
     return normalizeSessionRows(rows);
   },
@@ -612,67 +512,46 @@ export const sessionsDb = {
    * Permanent project deletion must see every session row for the path,
    * including archived ones, so their transcript files can be cleaned up.
    */
-  getSessionsByProjectPathIncludingArchived(projectPath: string): SessionRow[] {
-    const db = getConnection();
+  async getSessionsByProjectPathIncludingArchived(projectPath: string): Promise<SessionRow[]> {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    const rows = db
-      .prepare(
-        `SELECT ${SESSION_ROW_COLUMNS}
+    const rows = (await all(`SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
-         WHERE project_path = ?`
-      )
-      .all(normalizedProjectPath) as SessionRow[];
+         WHERE project_path = ?`, [normalizedProjectPath])) as SessionRow[];
 
     return normalizeSessionRows(rows);
   },
 
-  getSessionsByProjectPathPage(projectPath: string, limit: number, offset: number): SessionRow[] {
-    const db = getConnection();
+  async getSessionsByProjectPathPage(projectPath: string, limit: number, offset: number): Promise<SessionRow[]> {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    const rows = db
-      .prepare(
-        `SELECT ${SESSION_ROW_COLUMNS}
+    const rows = (await all(`SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
          WHERE project_path = ?
            AND isArchived = 0
          ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC
-         LIMIT ? OFFSET ?`
-      )
-      .all(normalizedProjectPath, limit, offset) as SessionRow[];
+         LIMIT ? OFFSET ?`, [normalizedProjectPath, limit, offset])) as SessionRow[];
 
     return normalizeSessionRows(rows);
   },
 
-  countSessionsByProjectPath(projectPath: string): number {
-    const db = getConnection();
+  async countSessionsByProjectPath(projectPath: string): Promise<number> {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    const row = db
-      .prepare(
-        `SELECT COUNT(*) AS count
+    const row = (await get(`SELECT COUNT(*) AS count
          FROM sessions
          WHERE project_path = ?
-           AND isArchived = 0`
-      )
-      .get(normalizedProjectPath) as { count: number } | undefined;
+           AND isArchived = 0`, [normalizedProjectPath])) as { count: number } | undefined;
 
     return Number(row?.count ?? 0);
   },
 
-  deleteSessionsByProjectPath(projectPath: string): void {
-    const db = getConnection();
+  async deleteSessionsByProjectPath(projectPath: string): Promise<void> {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
-    db.prepare(`DELETE FROM sessions WHERE project_path = ?`).run(normalizedProjectPath);
+    (await run(`DELETE FROM sessions WHERE project_path = ?`, [normalizedProjectPath]));
   },
 
-  getSessionName(sessionId: string, provider: string): string | null {
-    const db = getConnection();
-    const row = db
-      .prepare(
-        `SELECT custom_name
+  async getSessionName(sessionId: string, provider: string): Promise<string | null> {
+    const row = (await get(`SELECT custom_name
          FROM sessions
-         WHERE session_id = ? AND provider = ?`
-      )
-      .get(sessionId, provider) as { custom_name: string | null } | undefined;
+         WHERE session_id = ? AND provider = ?`, [sessionId, provider])) as { custom_name: string | null } | undefined;
 
     return row?.custom_name ?? null;
   },
@@ -681,26 +560,19 @@ export const sessionsDb = {
    * Soft-delete and restore both use the same flag update so callers keep the
    * row, metadata, and file path intact while toggling visibility.
    */
-  updateSessionIsArchived(sessionId: string, isArchived: boolean): void {
-    const db = getConnection();
-    db.prepare(
-      `UPDATE sessions
+  async updateSessionIsArchived(sessionId: string, isArchived: boolean): Promise<void> {
+    (await run(`UPDATE sessions
        SET isArchived = ?
-       WHERE session_id = ?`
-    ).run(isArchived ? 1 : 0, sessionId);
+       WHERE session_id = ?`, [isArchived ? 1 : 0, sessionId]));
   },
 
-  deleteSessionById(sessionId: string): boolean {
-    const db = getConnection();
-    return db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId).changes > 0;
+  async deleteSessionById(sessionId: string): Promise<boolean> {
+    return (await run('DELETE FROM sessions WHERE session_id = ?', [sessionId])).changes > 0;
   },
 
   /** Used by the OpenCode synchronizer to remove indexed child sessions by their native id. */
-  deleteSessionByProviderSessionId(providerSessionId: string, provider: string): boolean {
-    const db = getConnection();
-    return db
-      .prepare('DELETE FROM sessions WHERE provider_session_id = ? AND provider = ?')
-      .run(providerSessionId, provider).changes > 0;
+  async deleteSessionByProviderSessionId(providerSessionId: string, provider: string): Promise<boolean> {
+    return (await run('DELETE FROM sessions WHERE provider_session_id = ? AND provider = ?', [providerSessionId, provider])).changes > 0;
   },
 
   /**
@@ -712,14 +584,9 @@ export const sessionsDb = {
    * Used by the session synchronizer to find rows whose transcript has been
    * deleted underneath the index.
    */
-  getSessionsWithTranscriptPath(): Array<{ session_id: string; jsonl_path: string }> {
-    const db = getConnection();
-    return db
-      .prepare(
-        `SELECT session_id, jsonl_path
+  async getSessionsWithTranscriptPath(): Promise<Array<{ session_id: string; jsonl_path: string }>> {
+    return (await all(`SELECT session_id, jsonl_path
          FROM sessions
-         WHERE jsonl_path IS NOT NULL AND jsonl_path <> ''`
-      )
-      .all() as Array<{ session_id: string; jsonl_path: string }>;
+         WHERE jsonl_path IS NOT NULL AND jsonl_path <> ''`)) as Array<{ session_id: string; jsonl_path: string }>;
   },
 };

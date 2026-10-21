@@ -17,6 +17,15 @@ import type {
 } from '@/shared/types.js';
 import { AppError, sliceTailPage } from '@/shared/utils.js';
 
+/** The project rows of these paths (each looked up once; blank paths skipped). */
+async function loadProjects(paths: Array<string | null | undefined>): Promise<Map<string, Awaited<ReturnType<typeof projectsDb.getProjectPath>>>> {
+  const cache = new Map<string, Awaited<ReturnType<typeof projectsDb.getProjectPath>>>();
+  for (const projectPath of paths) {
+    if (projectPath?.trim() && !cache.has(projectPath)) cache.set(projectPath, await projectsDb.getProjectPath(projectPath));
+  }
+  return cache;
+}
+
 /**
  * One session the running-sessions poll reports as busy.
  *
@@ -190,7 +199,7 @@ export const sessionsService = {
     // CloudCLI spawned for its own Shell view — looks idle. A session already
     // listed above keeps its richer entry.
     for (const live of await listBusyClaudeCliSessions()) {
-      const session = sessionsDb.getSessionByProviderSessionId(live.providerSessionId);
+      const session = await sessionsDb.getSessionByProviderSessionId(live.providerSessionId);
       if (!session || runningById.has(session.session_id)) {
         continue;
       }
@@ -214,17 +223,14 @@ export const sessionsService = {
   /**
    * Returns the active conversation feed in true global activity order.
    */
-  listRecentSessions(limit: number, offset: number): RecentSessionsPage {
-    const page = sessionsDb.getRecentSessionsPage(limit, offset);
-    const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
+  async listRecentSessions(limit: number, offset: number): Promise<RecentSessionsPage> {
+    const page = await sessionsDb.getRecentSessionsPage(limit, offset);
+    const projectCache = await loadProjects(page.sessions.map((session) => session.project_path));
     const conversations = page.sessions.map((session) => {
       const projectPath = session.project_path?.trim() ? session.project_path : null;
       let project = null;
 
       if (projectPath) {
-        if (!projectCache.has(projectPath)) {
-          projectCache.set(projectPath, projectsDb.getProjectPath(projectPath));
-        }
         project = projectCache.get(projectPath) ?? null;
       }
 
@@ -253,12 +259,12 @@ export const sessionsService = {
    * row. Ids without a row are assumed to be provider-native already (direct
    * API callers that reference sessions the watcher has not indexed yet).
    */
-  resolveProviderSessionId(sessionId: string | null | undefined): string | null {
+  async resolveProviderSessionId(sessionId: string | null | undefined): Promise<string | null> {
     if (!sessionId) {
       return null;
     }
 
-    const session = sessionsDb.getSessionById(sessionId);
+    const session = await sessionsDb.getSessionById(sessionId);
     return session ? session.provider_session_id : sessionId;
   },
 
@@ -284,11 +290,11 @@ export const sessionsService = {
    * comes directly from the first visible CloudCLI message and is limited to
    * four whole words before any provider-owned storage exists.
    */
-  createAppSession(
+  async createAppSession(
     provider: LLMProvider,
     projectPath: string,
     initialMessage: string,
-  ): CreateAppSessionResult {
+  ): Promise<CreateAppSessionResult> {
     const normalizedProjectPath = projectPath.trim();
     if (!normalizedProjectPath) {
       throw new AppError('projectPath is required.', {
@@ -299,7 +305,7 @@ export const sessionsService = {
 
     const sessionId = randomUUID();
     const sessionName = buildCloudCliSessionName(initialMessage);
-    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, sessionName);
+    await sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, sessionName);
 
     return {
       sessionId,
@@ -320,7 +326,7 @@ export const sessionsService = {
     sessionId: string,
     options: { upToAnchorId?: string; title?: string } = {},
   ): Promise<CreateAppSessionResult> {
-    const source = sessionsDb.getSessionById(sessionId);
+    const source = await sessionsDb.getSessionById(sessionId);
     if (!source) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -358,7 +364,7 @@ export const sessionsService = {
     });
 
     const forkSessionId = randomUUID();
-    sessionsDb.createForkedSession({
+    await sessionsDb.createForkedSession({
       sessionId: forkSessionId,
       provider,
       projectPath: source.project_path ?? '',
@@ -386,8 +392,8 @@ export const sessionsService = {
    * Resolves the provider-native id only for an explicit user copy action.
    * Normal session payloads continue to expose only the stable app id.
    */
-  getProviderSessionId(sessionId: string): string {
-    const session = sessionsDb.getSessionById(sessionId);
+  async getProviderSessionId(sessionId: string): Promise<string> {
+    const session = await sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -426,7 +432,7 @@ export const sessionsService = {
     sessionId: string,
     anchorId: string,
   ): Promise<{ found: boolean; resumeThroughId: string | null } | null> {
-    const session = sessionsDb.getSessionById(sessionId);
+    const session = await sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -451,8 +457,8 @@ export const sessionsService = {
    * session onto a different provider transcript and cannot be undone, so the
    * gateway has to know which shape the run takes before it commits to one.
    */
-  providerRewindsForEdit(sessionId: string): boolean {
-    const session = sessionsDb.getSessionById(sessionId);
+  async providerRewindsForEdit(sessionId: string): Promise<boolean> {
+    const session = await sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -469,7 +475,7 @@ export const sessionsService = {
    * Only call this once the run is admitted — see `providerRewindsForEdit`.
    */
   async rewindSessionForEdit(sessionId: string, keepThroughId: string | null): Promise<void> {
-    const session = sessionsDb.getSessionById(sessionId);
+    const session = await sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -485,7 +491,7 @@ export const sessionsService = {
     sessionId: string,
     options: Pick<FetchHistoryOptions, 'limit' | 'offset'> = {},
   ): Promise<FetchHistoryResult> {
-    const session = sessionsDb.getSessionById(sessionId);
+    const session = await sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -569,7 +575,7 @@ export const sessionsService = {
    * show, and the card says so in one line.
    */
   async readWorkflowAgentActivity(sessionId: string, runId: string, agentId: string): Promise<WorkflowAgentActivity> {
-    const session = sessionsDb.getSessionById(sessionId);
+    const session = await sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -598,9 +604,9 @@ export const sessionsService = {
    * session opened directly by URL may not be present client-side at all —
    * this lookup is the authoritative way to learn which project owns it.
    */
-  getSessionDetailsById(sessionId: string): SessionDetails {
+  async getSessionDetailsById(sessionId: string): Promise<SessionDetails> {
     const session =
-      sessionsDb.getSessionById(sessionId) ?? sessionsDb.getSessionByProviderSessionId(sessionId);
+      await sessionsDb.getSessionById(sessionId) ?? await sessionsDb.getSessionByProviderSessionId(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -609,7 +615,7 @@ export const sessionsService = {
     }
 
     const projectPath = session.project_path?.trim() ? session.project_path : null;
-    const project = projectPath ? projectsDb.getProjectPath(projectPath) : null;
+    const project = projectPath ? await projectsDb.getProjectPath(projectPath) : null;
 
     return {
       sessionId: session.session_id,
@@ -636,18 +642,15 @@ export const sessionsService = {
    * Returns archived sessions with enough project metadata for the sidebar to
    * group, filter, open, and restore them without a per-row follow-up query.
    */
-  listArchivedSessions(): ArchivedSessionListItem[] {
-    const archivedSessions = sessionsDb.getArchivedSessions();
-    const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
+  async listArchivedSessions(): Promise<ArchivedSessionListItem[]> {
+    const archivedSessions = await sessionsDb.getArchivedSessions();
+    const projectCache = await loadProjects(archivedSessions.map((session) => session.project_path));
 
     return archivedSessions.map((session) => {
       const projectPath = session.project_path?.trim() ? session.project_path : null;
       let project = null;
 
       if (projectPath) {
-        if (!projectCache.has(projectPath)) {
-          projectCache.set(projectPath, projectsDb.getProjectPath(projectPath));
-        }
         project = projectCache.get(projectPath) ?? null;
       }
 
@@ -680,7 +683,7 @@ export const sessionsService = {
       deletedFromDisk?: boolean;
     } = {},
   ): Promise<{ sessionId: string; action: 'archived' | 'deleted'; deletedFromDisk: boolean }> {
-    const session = sessionsDb.getSessionById(sessionId);
+    const session = await sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -689,7 +692,7 @@ export const sessionsService = {
     }
 
     if (!options.force) {
-      sessionsDb.updateSessionIsArchived(sessionId, true);
+      await sessionsDb.updateSessionIsArchived(sessionId, true);
       return {
         sessionId,
         action: 'archived',
@@ -706,15 +709,15 @@ export const sessionsService = {
       // replaced turns on disk, and unreachable through the app.
       const transcripts = [
         ...(session.jsonl_path ? [session.jsonl_path] : []),
-        ...sessionsDb.getSupersededTranscriptPaths(sessionId),
+        ...await sessionsDb.getSupersededTranscriptPaths(sessionId),
       ];
       for (const transcript of transcripts) {
         removedFromDisk = (await removeFileIfExists(transcript)) || removedFromDisk;
       }
     }
 
-    sessionsDb.clearSupersededProviderSessions(sessionId);
-    const deleted = sessionsDb.deleteSessionById(sessionId);
+    await sessionsDb.clearSupersededProviderSessions(sessionId);
+    const deleted = await sessionsDb.deleteSessionById(sessionId);
     if (!deleted) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -732,8 +735,8 @@ export const sessionsService = {
   /**
    * Restores one archived session back into the active sidebar lists.
    */
-  restoreSessionById(sessionId: string): { sessionId: string; isArchived: false } {
-    const session = sessionsDb.getSessionById(sessionId);
+  async restoreSessionById(sessionId: string): Promise<{ sessionId: string; isArchived: false }> {
+    const session = await sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -741,15 +744,15 @@ export const sessionsService = {
       });
     }
 
-    sessionsDb.updateSessionIsArchived(sessionId, false);
+    await sessionsDb.updateSessionIsArchived(sessionId, false);
     return { sessionId, isArchived: false };
   },
 
   /**
    * Renames one session by id without requiring the caller to pass provider.
    */
-  renameSessionById(sessionId: string, summary: string): { sessionId: string; summary: string } {
-    const session = sessionsDb.getSessionById(sessionId);
+  async renameSessionById(sessionId: string, summary: string): Promise<{ sessionId: string; summary: string }> {
+    const session = await sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
@@ -757,7 +760,7 @@ export const sessionsService = {
       });
     }
 
-    sessionsDb.updateSessionCustomName(sessionId, summary);
+    await sessionsDb.updateSessionCustomName(sessionId, summary);
     return { sessionId, summary };
   },
 };

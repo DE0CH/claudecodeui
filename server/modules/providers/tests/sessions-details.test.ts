@@ -13,14 +13,14 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   const tempDirectory = await mkdtemp(path.join(tmpdir(), 'sessions-details-'));
   const databasePath = path.join(tempDirectory, 'auth.db');
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = databasePath;
   await initializeDatabase();
 
   try {
     await runTest();
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -31,13 +31,13 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 test('getSessionDetailsById resolves the owning project for a disk-indexed session', async () => {
-  await withIsolatedDatabase(() => {
+  withIsolatedDatabase(async () => {
     const projectPath = '/home/user/example-project';
-    const sessionId = sessionsDb.createSession('provider-abc', 'claude', projectPath, 'My session');
-    const projectRow = projectsDb.getProjectPath(projectPath);
+    const sessionId = await sessionsDb.createSession('provider-abc', 'claude', projectPath, 'My session');
+    const projectRow = await projectsDb.getProjectPath(projectPath);
     assert.ok(projectRow, 'project row should exist after createSession');
 
-    const details = sessionsService.getSessionDetailsById(sessionId);
+    const details = await sessionsService.getSessionDetailsById(sessionId);
 
     assert.equal(details.sessionId, sessionId);
     assert.equal(details.provider, 'claude');
@@ -51,12 +51,12 @@ test('getSessionDetailsById resolves the owning project for a disk-indexed sessi
 });
 
 test('getSessionDetailsById falls back to the provider-native id and returns the canonical app id', async () => {
-  await withIsolatedDatabase(() => {
+  withIsolatedDatabase(async () => {
     const projectPath = '/home/user/alias-project';
-    const appSessionId = sessionsDb.createAppSession('app-session-1', 'claude', projectPath);
-    sessionsDb.assignProviderSessionId(appSessionId, 'provider-native-1');
+    const appSessionId = await sessionsDb.createAppSession('app-session-1', 'claude', projectPath);
+    await sessionsDb.assignProviderSessionId(appSessionId, 'provider-native-1');
 
-    const details = sessionsService.getSessionDetailsById('provider-native-1');
+    const details = await sessionsService.getSessionDetailsById('provider-native-1');
 
     assert.equal(details.sessionId, appSessionId);
     assert.equal(details.project?.fullPath, normalizeProjectPath(projectPath));
@@ -66,7 +66,7 @@ test('getSessionDetailsById falls back to the provider-native id and returns the
 test('getSessionDetailsById throws SESSION_NOT_FOUND for unknown ids', async () => {
   await withIsolatedDatabase(() => {
     assert.throws(
-      () => sessionsService.getSessionDetailsById('does-not-exist'),
+      async () => await sessionsService.getSessionDetailsById('does-not-exist'),
       (error: unknown) => error instanceof AppError && error.code === 'SESSION_NOT_FOUND',
     );
   });

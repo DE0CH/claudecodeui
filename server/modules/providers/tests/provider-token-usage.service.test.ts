@@ -51,7 +51,7 @@ test('token usage lookup requires only the app-facing session id for Claude', as
     ].join('\n'));
 
     const service = createProviderTokenUsageService({
-      getSessionById: () => createSessionRow({ jsonl_path: sessionFilePath }),
+      getSessionById: async () => createSessionRow({ jsonl_path: sessionFilePath }),
       getClaudeContextWindow: () => '180000',
     });
 
@@ -99,7 +99,7 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
     ].join('\n'));
 
     const service = createProviderTokenUsageService({
-      getSessionById: () => createSessionRow({
+      getSessionById: async () => createSessionRow({
         provider: 'codex',
         jsonl_path: sessionFilePath,
       }),
@@ -149,7 +149,7 @@ test('OpenCode token usage resolves its provider-native id from the session row'
 
   try {
     const service = createProviderTokenUsageService({
-      getSessionById: () => createSessionRow({ provider: 'opencode' }),
+      getSessionById: async () => createSessionRow({ provider: 'opencode' }),
       getOpenCodeDatabasePath: () => databasePath,
     });
 
@@ -166,7 +166,7 @@ test('OpenCode token usage resolves its provider-native id from the session row'
 
 test('Cursor returns an explicit unsupported token usage result', async () => {
   const service = createProviderTokenUsageService({
-    getSessionById: () => createSessionRow({ provider: 'cursor' }),
+    getSessionById: async () => createSessionRow({ provider: 'cursor' }),
   });
 
   const result = await service.getSessionTokenUsage('app-session');
@@ -177,10 +177,10 @@ test('Cursor returns an explicit unsupported token usage result', async () => {
 });
 
 test('token usage reports SESSION_NOT_FOUND for an unknown app session id', async () => {
-  const service = createProviderTokenUsageService({ getSessionById: () => null });
+  const service = createProviderTokenUsageService({ getSessionById: async () => null });
 
   await assert.rejects(
-    () => service.getSessionTokenUsage('missing-session'),
+    async () => service.getSessionTokenUsage('missing-session'),
     (error: unknown) => (
       error instanceof AppError
       && error.code === 'SESSION_NOT_FOUND'
@@ -272,7 +272,7 @@ test('Claude token usage reads only the tail of a large transcript', async () =>
     ].join('\n'));
 
     const service = createProviderTokenUsageService({
-      getSessionById: () => createSessionRow({ jsonl_path: sessionFilePath }),
+      getSessionById: async () => createSessionRow({ jsonl_path: sessionFilePath }),
       getClaudeContextWindow: () => '180000',
       // Reading the whole file here would defeat the tail read; fail loudly.
       readTextFile: () => { throw new Error('full read must not happen when the tail has usage'); },
@@ -297,7 +297,7 @@ test('Claude token usage falls back to the whole file when the tail has no usage
     ].join('\n'));
 
     const service = createProviderTokenUsageService({
-      getSessionById: () => createSessionRow({ jsonl_path: sessionFilePath }),
+      getSessionById: async () => createSessionRow({ jsonl_path: sessionFilePath }),
       getClaudeContextWindow: () => '180000',
     });
 
@@ -329,7 +329,7 @@ test('Codex token usage reads only the tail of a large rollout', async () => {
     ].join('\n'));
 
     const service = createProviderTokenUsageService({
-      getSessionById: () => createSessionRow({ provider: 'codex', jsonl_path: sessionFilePath }),
+      getSessionById: async () => createSessionRow({ provider: 'codex', jsonl_path: sessionFilePath }),
       readTextFile: () => { throw new Error('full read must not happen when the tail has usage'); },
     });
 
@@ -362,7 +362,7 @@ test('Codex token usage falls back to the whole file when the tail has no token_
     ].join('\n'));
 
     const service = createProviderTokenUsageService({
-      getSessionById: () => createSessionRow({ provider: 'codex', jsonl_path: sessionFilePath }),
+      getSessionById: async () => createSessionRow({ provider: 'codex', jsonl_path: sessionFilePath }),
     });
 
     const usage = await service.getSessionTokenUsage('app-session');

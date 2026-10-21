@@ -19,7 +19,7 @@ async function withDatabase(runTest: () => void | Promise<void>): Promise<void> 
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'user-prefs-db-'));
   const databasePath = path.join(tempDirectory, 'auth.db');
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = databasePath;
   await writeFile(databasePath, '');
   await initializeDatabase();
@@ -32,7 +32,7 @@ async function withDatabase(runTest: () => void | Promise<void>): Promise<void> 
   try {
     await runTest();
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -43,14 +43,14 @@ async function withDatabase(runTest: () => void | Promise<void>): Promise<void> 
 }
 
 test('preferences round-trip every JSON shape a setting can take', async () => {
-  await withDatabase(() => {
-    userPreferencesDb.savePreferences(USER_ID, {
+  withDatabase(async () => {
+    await userPreferencesDb.savePreferences(USER_ID, {
       theme: 'dark',
       tasksEnabled: false,
       claudePermissions: { allowedTools: ['Read'], skipPermissions: true },
     });
 
-    assert.deepEqual(userPreferencesDb.getPreferences(USER_ID), {
+    assert.deepEqual(await userPreferencesDb.getPreferences(USER_ID), {
       theme: 'dark',
       tasksEnabled: false,
       claudePermissions: { allowedTools: ['Read'], skipPermissions: true },
@@ -59,11 +59,11 @@ test('preferences round-trip every JSON shape a setting can take', async () => {
 });
 
 test('saving preferences merge-patches instead of replacing the whole set', async () => {
-  await withDatabase(() => {
-    userPreferencesDb.savePreferences(USER_ID, { theme: 'dark', userLanguage: 'de' });
-    userPreferencesDb.savePreferences(USER_ID, { theme: 'light' });
+  withDatabase(async () => {
+    await userPreferencesDb.savePreferences(USER_ID, { theme: 'dark', userLanguage: 'de' });
+    await userPreferencesDb.savePreferences(USER_ID, { theme: 'light' });
 
-    assert.deepEqual(userPreferencesDb.getPreferences(USER_ID), {
+    assert.deepEqual(await userPreferencesDb.getPreferences(USER_ID), {
       theme: 'light',
       userLanguage: 'de',
     });
@@ -71,17 +71,17 @@ test('saving preferences merge-patches instead of replacing the whole set', asyn
 });
 
 test('a preference set to undefined is removed', async () => {
-  await withDatabase(() => {
-    userPreferencesDb.savePreferences(USER_ID, { theme: 'dark', userLanguage: 'de' });
-    userPreferencesDb.savePreferences(USER_ID, { userLanguage: undefined });
+  withDatabase(async () => {
+    await userPreferencesDb.savePreferences(USER_ID, { theme: 'dark', userLanguage: 'de' });
+    await userPreferencesDb.savePreferences(USER_ID, { userLanguage: undefined });
 
-    assert.deepEqual(userPreferencesDb.getPreferences(USER_ID), { theme: 'dark' });
+    assert.deepEqual(await userPreferencesDb.getPreferences(USER_ID), { theme: 'dark' });
   });
 });
 
 test('one unreadable preference value does not cost the user the others', async () => {
-  await withDatabase(() => {
-    userPreferencesDb.savePreferences(USER_ID, { theme: 'dark' });
+  withDatabase(async () => {
+    await userPreferencesDb.savePreferences(USER_ID, { theme: 'dark' });
     getConnection()
       .prepare(
         `INSERT INTO user_preferences (user_id, preference_key, preference_value)
@@ -89,19 +89,19 @@ test('one unreadable preference value does not cost the user the others', async 
       )
       .run(USER_ID, 'broken', 'not json');
 
-    assert.deepEqual(userPreferencesDb.getPreferences(USER_ID), { theme: 'dark' });
+    assert.deepEqual(await userPreferencesDb.getPreferences(USER_ID), { theme: 'dark' });
   });
 });
 
 test('drafts round-trip text and queued message per scope', async () => {
-  await withDatabase(() => {
-    sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: 'half typed', queuedMessage: null });
-    sessionDraftsDb.saveDraft(USER_ID, 'project:p1', {
+  withDatabase(async () => {
+    await sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: 'half typed', queuedMessage: null });
+    await sessionDraftsDb.saveDraft(USER_ID, 'project:p1', {
       text: '',
       queuedMessage: { content: 'run it' },
     });
 
-    const drafts = sessionDraftsDb.getDrafts(USER_ID);
+    const drafts = await sessionDraftsDb.getDrafts(USER_ID);
     const byScope = new Map(drafts.map((draft) => [draft.scope, draft]));
 
     assert.equal(byScope.get('session-a')?.text, 'half typed');
@@ -112,23 +112,23 @@ test('drafts round-trip text and queued message per scope', async () => {
 });
 
 test('saving an empty draft deletes the row rather than keeping a blank one', async () => {
-  await withDatabase(() => {
-    sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: 'typed', queuedMessage: null });
-    sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: '', queuedMessage: null });
+  withDatabase(async () => {
+    await sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: 'typed', queuedMessage: null });
+    await sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: '', queuedMessage: null });
 
-    assert.deepEqual(sessionDraftsDb.getDrafts(USER_ID), []);
+    assert.deepEqual(await sessionDraftsDb.getDrafts(USER_ID), []);
   });
 });
 
 test('deleteDraft removes only the named scope', async () => {
-  await withDatabase(() => {
-    sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: 'a', queuedMessage: null });
-    sessionDraftsDb.saveDraft(USER_ID, 'session-b', { text: 'b', queuedMessage: null });
+  withDatabase(async () => {
+    await sessionDraftsDb.saveDraft(USER_ID, 'session-a', { text: 'a', queuedMessage: null });
+    await sessionDraftsDb.saveDraft(USER_ID, 'session-b', { text: 'b', queuedMessage: null });
 
-    sessionDraftsDb.deleteDraft(USER_ID, 'session-a');
+    await sessionDraftsDb.deleteDraft(USER_ID, 'session-a');
 
     assert.deepEqual(
-      sessionDraftsDb.getDrafts(USER_ID).map((draft) => draft.scope),
+      (await sessionDraftsDb.getDrafts(USER_ID)).map((draft) => draft.scope),
       ['session-b'],
     );
   });

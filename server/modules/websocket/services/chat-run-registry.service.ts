@@ -143,7 +143,7 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
  * `setSessionId(...)` or emits its `session_created` event — whichever
  * happens first wins; later calls with the same id are no-ops.
  */
-function recordProviderSessionId(run: ChatRun, providerSessionId: string): void {
+async function recordProviderSessionId(run: ChatRun, providerSessionId: string): Promise<void> {
   if (!providerSessionId || run.providerSessionId === providerSessionId) {
     return;
   }
@@ -151,7 +151,7 @@ function recordProviderSessionId(run: ChatRun, providerSessionId: string): void 
   run.providerSessionId = providerSessionId;
 
   try {
-    sessionsDb.assignProviderSessionId(run.appSessionId, providerSessionId);
+    await sessionsDb.assignProviderSessionId(run.appSessionId, providerSessionId);
     void broadcastSessionUpserted(run.appSessionId).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[ChatRunRegistry] Failed to broadcast canonical session mapping', {
@@ -223,8 +223,8 @@ export const chatRunRegistry = {
       userId: input.userId,
       provider: input.provider,
       providerSessionId: input.providerSessionId,
-      onProviderSessionId: (providerSessionId) => {
-        recordProviderSessionId(run, providerSessionId);
+      onProviderSessionId: async (providerSessionId) => {
+        await recordProviderSessionId(run, providerSessionId);
       },
       decorateOutboundEvent: (message) => decorateAndRecordEvent(run, message),
     });

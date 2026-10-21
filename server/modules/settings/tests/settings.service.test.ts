@@ -7,46 +7,46 @@ type Dependencies = Parameters<typeof createSettingsService>[0];
 
 function dependencies(overrides: Partial<Dependencies> = {}): Dependencies {
   return {
-    apiKeys: { list: () => [], create: () => ({}), remove: () => false, toggle: () => false },
-    credentials: { list: () => [], create: () => ({}), remove: () => false, toggle: () => false },
+    apiKeys: { list: async () => [], create: async () => ({}), remove: async () => false, toggle: async () => false },
+    credentials: { list: async () => [], create: async () => ({}), remove: async () => false, toggle: async () => false },
     notifications: {
-      getPreferences: () => undefined,
-      updatePreferences: () => ({}),
+      getPreferences: async () => undefined,
+      updatePreferences: async () => ({}),
       createEnabledEvent: () => ({}),
-      notifyUser: () => undefined,
+      notifyUser: async () => undefined,
     },
-    pushSubscriptions: { save: () => undefined, remove: () => undefined },
+    pushSubscriptions: { save: async () => undefined, remove: async () => undefined },
     getVapidPublicKey: () => null,
     ...overrides,
   };
 }
 
-test('listApiKeys redacts secret values through the service boundary', () => {
+test('listApiKeys redacts secret values through the service boundary', async () => {
   const service = createSettingsService(dependencies({
     apiKeys: {
-      list: () => [{ id: 1, api_key: '1234567890-secret' }],
-      create: () => ({}), remove: () => false, toggle: () => false,
+      list: async () => [{ id: 1, api_key: '1234567890-secret' }],
+      create: async () => ({}), remove: async () => false, toggle: async () => false,
     },
   }));
-  assert.equal(service.listApiKeys(1).apiKeys[0]?.api_key, '1234567890...');
+  assert.equal((await service.listApiKeys(1)).apiKeys[0]?.api_key, '1234567890...');
 });
 
-test('subscribeToPush persists the subscription and enables Web Push', () => {
+test('subscribeToPush persists the subscription and enables Web Push', async () => {
   const operations: string[] = [];
   const service = createSettingsService(dependencies({
     pushSubscriptions: {
-      save: (_id, endpoint) => operations.push(`save:${endpoint}`),
-      remove: () => undefined,
+      save: async (_id, endpoint) => operations.push(`save:${endpoint}`),
+      remove: async () => undefined,
     },
     notifications: {
-      getPreferences: () => ({ channels: { webPush: false } }),
-      updatePreferences: () => { operations.push('preferences'); return {}; },
+      getPreferences: async () => ({ channels: { webPush: false } }),
+      updatePreferences: async () => { operations.push('preferences'); return {}; },
       createEnabledEvent: () => ({ code: 'push.enabled' }),
-      notifyUser: () => { operations.push('notify'); },
+      notifyUser: async () => { operations.push('notify'); },
     },
   }));
 
-  service.subscribeToPush(1, {
+  await service.subscribeToPush(1, {
     endpoint: 'https://push.example.test',
     keys: { p256dh: 'key', auth: 'auth' },
   });

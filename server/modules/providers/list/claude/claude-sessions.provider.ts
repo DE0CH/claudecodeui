@@ -705,7 +705,7 @@ async function getSessionMessages(
   try {
     // The DB row is keyed by the app-facing session id, while the JSONL rows
     // on disk carry the provider-native id — both ids are needed here.
-    const jsonLPath = sessionsDb.getSessionById(sessionId)?.jsonl_path;
+    const jsonLPath = (await sessionsDb.getSessionById(sessionId))?.jsonl_path;
 
     if (!jsonLPath) {
       return { messages: [], total: 0, hasMore: false };
@@ -1665,7 +1665,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     sessionId: string,
     anchorId: string,
   ): Promise<{ found: boolean; resumeThroughId: string | null }> {
-    const session = sessionsDb.getSessionById(sessionId);
+    const session = await sessionsDb.getSessionById(sessionId);
     const jsonlPath = session?.jsonl_path;
     const providerSessionId = session?.provider_session_id;
     if (!jsonlPath || !providerSessionId) {
@@ -1718,7 +1718,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     runId: string,
     agentId: string,
   ): Promise<WorkflowAgentActivity | null> {
-    const session = sessionsDb.getSessionById(sessionId);
+    const session = await sessionsDb.getSessionById(sessionId);
     const jsonlPath = session?.jsonl_path;
     const providerSessionId = session?.provider_session_id;
     if (!jsonlPath || !providerSessionId) {

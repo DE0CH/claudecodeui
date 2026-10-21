@@ -13,14 +13,14 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   const tempDirectory = await mkdtemp(path.join(tmpdir(), 'projects-db-'));
   const databasePath = path.join(tempDirectory, 'auth.db');
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = databasePath;
   await initializeDatabase();
 
   try {
     await runTest();
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -31,8 +31,8 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 }
 
 test('projectsDb.createProjectPath returns created for fresh paths', async () => {
-  await withIsolatedDatabase(() => {
-    const created = projectsDb.createProjectPath('/workspace/new-project');
+  withIsolatedDatabase(async () => {
+    const created = await projectsDb.createProjectPath('/workspace/new-project');
 
     assert.equal(created.outcome, 'created');
     assert.ok(created.project);
@@ -42,14 +42,14 @@ test('projectsDb.createProjectPath returns created for fresh paths', async () =>
 });
 
 test('projectsDb.createProjectPath returns reactivated_archived for archived duplicates', async () => {
-  await withIsolatedDatabase(() => {
-    const initial = projectsDb.createProjectPath('/workspace/archived-project', 'Archived Project');
+  withIsolatedDatabase(async () => {
+    const initial = await projectsDb.createProjectPath('/workspace/archived-project', 'Archived Project');
     assert.equal(initial.outcome, 'created');
     assert.ok(initial.project);
 
-    projectsDb.updateProjectIsArchived('/workspace/archived-project', true);
+    await projectsDb.updateProjectIsArchived('/workspace/archived-project', true);
 
-    const reused = projectsDb.createProjectPath('/workspace/archived-project', 'Renamed Project');
+    const reused = await projectsDb.createProjectPath('/workspace/archived-project', 'Renamed Project');
     assert.equal(reused.outcome, 'reactivated_archived');
     assert.ok(reused.project);
     assert.equal(reused.project?.project_id, initial.project?.project_id);
@@ -58,12 +58,12 @@ test('projectsDb.createProjectPath returns reactivated_archived for archived dup
 });
 
 test('projectsDb.createProjectPath returns active_conflict for active duplicates', async () => {
-  await withIsolatedDatabase(() => {
-    const initial = projectsDb.createProjectPath('/workspace/active-project');
+  withIsolatedDatabase(async () => {
+    const initial = await projectsDb.createProjectPath('/workspace/active-project');
     assert.equal(initial.outcome, 'created');
     assert.ok(initial.project);
 
-    const conflict = projectsDb.createProjectPath('/workspace/active-project');
+    const conflict = await projectsDb.createProjectPath('/workspace/active-project');
     assert.equal(conflict.outcome, 'active_conflict');
     assert.ok(conflict.project);
     assert.equal(conflict.project?.project_id, initial.project?.project_id);

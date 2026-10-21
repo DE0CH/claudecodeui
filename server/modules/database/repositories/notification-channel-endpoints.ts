@@ -1,4 +1,4 @@
-import { getConnection } from '@/modules/database/connection.js';
+import { all, get, run, transaction } from '@/modules/database/connection.js';
 
 type NotificationChannelEndpointRow = {
   id: number;
@@ -49,16 +49,14 @@ function parseMetadata(metadataJson: string | null): Record<string, unknown> {
 }
 
 export const notificationChannelEndpointsDb = {
-  upsertEndpoint(input: UpsertNotificationChannelEndpointInput): NotificationChannelEndpointRow {
+  async upsertEndpoint(input: UpsertNotificationChannelEndpointInput): Promise<NotificationChannelEndpointRow> {
     const channel = normalizeRequiredText(input.channel);
     const endpointId = normalizeRequiredText(input.endpointId);
     if (!channel) throw new Error('channel is required');
     if (!endpointId) throw new Error('endpointId is required');
 
     const enabled = input.enabled === false ? 0 : 1;
-    const db = getConnection();
-    db.prepare(
-      `INSERT INTO notification_channel_endpoints (
+    (await run(`INSERT INTO notification_channel_endpoints (
          user_id,
          channel,
          endpoint_id,
@@ -74,78 +72,55 @@ export const notificationChannelEndpointsDb = {
          metadata_json = excluded.metadata_json,
          enabled = excluded.enabled,
          last_seen_at = CURRENT_TIMESTAMP,
-         updated_at = CURRENT_TIMESTAMP`
-    ).run(
-      input.userId,
+         updated_at = CURRENT_TIMESTAMP`, [input.userId,
       channel,
       endpointId,
       normalizeNullableText(input.label),
       serializeMetadata(input.metadata),
-      enabled
-    );
+      enabled]));
 
-    return notificationChannelEndpointsDb.getEndpoint(input.userId, channel, endpointId)!;
+    return (await notificationChannelEndpointsDb.getEndpoint(input.userId, channel, endpointId))!;
   },
 
-  getEndpoint(userId: number, channel: string, endpointId: string): NotificationChannelEndpointRow | null {
-    const db = getConnection();
-    const row = db.prepare(
-      `SELECT id, user_id, channel, endpoint_id, label, metadata_json, enabled, last_seen_at, created_at, updated_at
+  async getEndpoint(userId: number, channel: string, endpointId: string): Promise<NotificationChannelEndpointRow | null> {
+    const row = (await get(`SELECT id, user_id, channel, endpoint_id, label, metadata_json, enabled, last_seen_at, created_at, updated_at
        FROM notification_channel_endpoints
-       WHERE user_id = ? AND channel = ? AND endpoint_id = ?`
-    ).get(
-      userId,
+       WHERE user_id = ? AND channel = ? AND endpoint_id = ?`, [userId,
       normalizeRequiredText(channel),
-      normalizeRequiredText(endpointId)
-    ) as NotificationChannelEndpointRow | undefined;
+      normalizeRequiredText(endpointId)])) as NotificationChannelEndpointRow | undefined;
     return row || null;
   },
 
-  getEndpoints(userId: number, channel: string): NotificationChannelEndpointRow[] {
-    const db = getConnection();
-    return db.prepare(
-      `SELECT id, user_id, channel, endpoint_id, label, metadata_json, enabled, last_seen_at, created_at, updated_at
+  async getEndpoints(userId: number, channel: string): Promise<NotificationChannelEndpointRow[]> {
+    return (await all(`SELECT id, user_id, channel, endpoint_id, label, metadata_json, enabled, last_seen_at, created_at, updated_at
        FROM notification_channel_endpoints
        WHERE user_id = ? AND channel = ?
-       ORDER BY last_seen_at DESC`
-    ).all(userId, normalizeRequiredText(channel)) as NotificationChannelEndpointRow[];
+       ORDER BY last_seen_at DESC`, [userId, normalizeRequiredText(channel)])) as NotificationChannelEndpointRow[];
   },
 
-  getEnabledEndpoints(userId: number, channel: string): NotificationChannelEndpointRow[] {
-    const db = getConnection();
-    return db.prepare(
-      `SELECT id, user_id, channel, endpoint_id, label, metadata_json, enabled, last_seen_at, created_at, updated_at
+  async getEnabledEndpoints(userId: number, channel: string): Promise<NotificationChannelEndpointRow[]> {
+    return (await all(`SELECT id, user_id, channel, endpoint_id, label, metadata_json, enabled, last_seen_at, created_at, updated_at
        FROM notification_channel_endpoints
        WHERE user_id = ? AND channel = ? AND enabled = 1
-       ORDER BY last_seen_at DESC`
-    ).all(userId, normalizeRequiredText(channel)) as NotificationChannelEndpointRow[];
+       ORDER BY last_seen_at DESC`, [userId, normalizeRequiredText(channel)])) as NotificationChannelEndpointRow[];
   },
 
-  setEndpointEnabled(userId: number, channel: string, endpointId: string, enabled: boolean): boolean {
-    const db = getConnection();
-    const result = db.prepare(
-      `UPDATE notification_channel_endpoints
+  async setEndpointEnabled(userId: number, channel: string, endpointId: string, enabled: boolean): Promise<boolean> {
+    const result = (await run(`UPDATE notification_channel_endpoints
        SET enabled = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE user_id = ? AND channel = ? AND endpoint_id = ?`
-    ).run(enabled ? 1 : 0, userId, normalizeRequiredText(channel), normalizeRequiredText(endpointId));
+       WHERE user_id = ? AND channel = ? AND endpoint_id = ?`, [enabled ? 1 : 0, userId, normalizeRequiredText(channel), normalizeRequiredText(endpointId)]));
     return result.changes > 0;
   },
 
-  touchEndpoint(userId: number, channel: string, endpointId: string): boolean {
-    const db = getConnection();
-    const result = db.prepare(
-      `UPDATE notification_channel_endpoints
+  async touchEndpoint(userId: number, channel: string, endpointId: string): Promise<boolean> {
+    const result = (await run(`UPDATE notification_channel_endpoints
        SET last_seen_at = CURRENT_TIMESTAMP
-       WHERE user_id = ? AND channel = ? AND endpoint_id = ?`
-    ).run(userId, normalizeRequiredText(channel), normalizeRequiredText(endpointId));
+       WHERE user_id = ? AND channel = ? AND endpoint_id = ?`, [userId, normalizeRequiredText(channel), normalizeRequiredText(endpointId)]));
     return result.changes > 0;
   },
 
-  removeEndpoint(userId: number, channel: string, endpointId: string): boolean {
-    const db = getConnection();
-    const result = db.prepare(
-      'DELETE FROM notification_channel_endpoints WHERE user_id = ? AND channel = ? AND endpoint_id = ?'
-    ).run(userId, normalizeRequiredText(channel), normalizeRequiredText(endpointId));
+  async removeEndpoint(userId: number, channel: string, endpointId: string): Promise<boolean> {
+    const result = (await run('DELETE FROM notification_channel_endpoints WHERE user_id = ? AND channel = ? AND endpoint_id = ?', [userId, normalizeRequiredText(channel), normalizeRequiredText(endpointId)]));
     return result.changes > 0;
   },
 

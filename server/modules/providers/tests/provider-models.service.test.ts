@@ -122,7 +122,7 @@ const createSettingsStore = () => {
   };
 };
 
-const createTestService = (options: {
+const createTestService = async (options: {
   catalog?: ReturnType<typeof createCatalogStore>;
   sessions?: ReturnType<typeof createSessionStore>;
   settings?: ReturnType<typeof createSettingsStore>;
@@ -350,7 +350,7 @@ test('custom effort levels must be levels the provider supports', async () => {
   const { service } = createTestService();
 
   await assert.rejects(
-    () => service.createCustomModel('codex', {
+    async () => service.createCustomModel('codex', {
       model: 'Unknown level',
       id: 'unknown-level',
       effort: { values: ['low', 'turbo'] },
@@ -361,7 +361,7 @@ test('custom effort levels must be levels the provider supports', async () => {
   );
 
   await assert.rejects(
-    () => service.createCustomModel('cursor', {
+    async () => service.createCustomModel('cursor', {
       model: 'Cursor effort',
       id: 'cursor-effort',
       effort: { values: ['low'] },
@@ -404,14 +404,14 @@ test('duplicate model ids are rejected within one provider', async () => {
   await service.createCustomModel('cursor', { model: 'First', id: 'custom-id' });
 
   await assert.rejects(
-    () => service.createCustomModel('cursor', { model: 'Second', id: 'custom-id' }),
+    async () => service.createCustomModel('cursor', { model: 'Second', id: 'custom-id' }),
     (error) => error instanceof AppError
       && error.code === 'MODEL_ID_ALREADY_EXISTS'
       && error.statusCode === 409,
   );
 
   await assert.rejects(
-    () => service.createCustomModel('cursor', {
+    async () => service.createCustomModel('cursor', {
       model: 'Duplicate built-in',
       id: 'cursor-default',
     }),
@@ -429,7 +429,7 @@ test('predefined models have no database record or mutation target', async () =>
   assert.deepEqual(catalog.rows.get('opencode'), undefined);
 
   await assert.rejects(
-    () => service.updateCustomModel('opencode', 999, { model: 'Changed', id: 'changed' }),
+    async () => service.updateCustomModel('opencode', 999, { model: 'Changed', id: 'changed' }),
     (error) => error instanceof AppError && error.code === 'MODEL_NOT_FOUND',
   );
 });
@@ -450,11 +450,11 @@ test('resolveSessionModel asks the provider adapter for the requested session', 
   assert.equal(resolved.model, 'opencode-session-123');
 });
 
-test('setSessionModel records the model on the session row', () => {
+test('setSessionModel records the model on the session row', async () => {
   const sessions = createSessionStore({ 'session-1': null });
   const { service } = createTestService({ sessions });
 
-  const stored = service.setSessionModel('claude', 'session-1', 'opus');
+  const stored = await service.setSessionModel('claude', 'session-1', 'opus');
 
   assert.deepEqual(stored, {
     provider: 'claude',
@@ -466,19 +466,19 @@ test('setSessionModel records the model on the session row', () => {
   assert.equal(sessions.sessions.get('session-1')?.model, 'opus');
 });
 
-test('setSessionModel ignores sessions that have no row yet', () => {
+test('setSessionModel ignores sessions that have no row yet', async () => {
   const sessions = createSessionStore();
   const { service } = createTestService({ sessions });
 
-  assert.equal(service.setSessionModel('claude', 'missing-session', 'opus'), null);
+  assert.equal(await service.setSessionModel('claude', 'missing-session', 'opus'), null);
   assert.equal(sessions.sessions.size, 0);
 });
 
-test('setSessionEffort records an explicit effort on the session row', () => {
+test('setSessionEffort records an explicit effort on the session row', async () => {
   const sessions = createSessionStore({ 'session-1': 'gpt-5.6-sol' });
   const { service } = createTestService({ sessions });
 
-  const stored = service.setSessionEffort('codex', 'session-1', 'ultra');
+  const stored = await service.setSessionEffort('codex', 'session-1', 'ultra');
 
   assert.deepEqual(stored, {
     provider: 'codex',
@@ -489,11 +489,11 @@ test('setSessionEffort records an explicit effort on the session row', () => {
   assert.equal(sessions.sessions.get('session-1')?.effort, 'ultra');
 });
 
-test('setSessionEffort ignores sessions that have no row yet', () => {
+test('setSessionEffort ignores sessions that have no row yet', async () => {
   const sessions = createSessionStore();
   const { service } = createTestService({ sessions });
 
-  assert.equal(service.setSessionEffort('codex', 'missing-session', 'high'), null);
+  assert.equal(await service.setSessionEffort('codex', 'missing-session', 'high'), null);
   assert.equal(sessions.sessions.size, 0);
 });
 

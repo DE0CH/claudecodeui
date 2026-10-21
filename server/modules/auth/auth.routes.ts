@@ -15,9 +15,9 @@ export function createAuthRouter(
 ): express.Router {
   const router = express.Router();
 
-  router.get('/status', (_req, res, next) => {
+  router.get('/status', async (_req, res, next) => {
     try {
-      res.json(service.getStatus());
+      res.json(await service.getStatus());
     } catch (error) {
       next(error);
     }

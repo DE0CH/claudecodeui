@@ -29,7 +29,7 @@ async function withForkableClaude(
   await writeFile(sourcePath, '{}\n', 'utf8');
   await writeFile(forkedPath, '{}\n', 'utf8');
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = path.join(directory, 'auth.db');
   await initializeDatabase();
 
@@ -51,7 +51,7 @@ async function withForkableClaude(
     await runTest({ calls, directory });
   } finally {
     Object.defineProperty(claude, 'fork', { value: realFork, configurable: true, writable: true });
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -61,9 +61,9 @@ async function withForkableClaude(
   }
 }
 
-function seedSource(directory: string): void {
+async function seedSource(directory: string): Promise<void> {
   const now = new Date().toISOString();
-  sessionsDb.createSession(
+  await sessionsDb.createSession(
     SOURCE_ID,
     'claude',
     directory,
@@ -72,12 +72,12 @@ function seedSource(directory: string): void {
     now,
     path.join(directory, 'native-source.jsonl'),
   );
-  sessionsDb.assignProviderSessionId(SOURCE_ID, 'native-source');
+  await sessionsDb.assignProviderSessionId(SOURCE_ID, 'native-source');
 }
 
 test('a fork becomes an independent session that points back at its source', async () => {
   await withForkableClaude(async ({ calls, directory }) => {
-    seedSource(directory);
+    await seedSource(directory);
 
     const result = await sessionsService.forkSessionById(SOURCE_ID, { upToAnchorId: 'uuid-3' });
 
@@ -85,7 +85,7 @@ test('a fork becomes an independent session that points back at its source', asy
     assert.equal(calls[0].providerSessionId, 'native-source');
     assert.equal(calls[0].upToAnchorId, 'uuid-3');
 
-    const forked = sessionsDb.getSessionById(result.sessionId);
+    const forked = await sessionsDb.getSessionById(result.sessionId);
     assert.ok(forked);
     // Written before the watcher can see the new file, so it is never indexed
     // a second time under its provider-native id.
@@ -95,7 +95,7 @@ test('a fork becomes an independent session that points back at its source', asy
     assert.equal(forked?.custom_name, 'Original session (fork)');
 
     // The source is untouched: this is "try two approaches", not a move.
-    const source = sessionsDb.getSessionById(SOURCE_ID);
+    const source = await sessionsDb.getSessionById(SOURCE_ID);
     assert.equal(source?.provider_session_id, 'native-source');
     assert.equal(source?.custom_name, 'Original session');
   });
@@ -103,13 +103,13 @@ test('a fork becomes an independent session that points back at its source', asy
 
 test('a fork inherits the model and effort of the conversation it branched from', async () => {
   await withForkableClaude(async ({ directory }) => {
-    seedSource(directory);
-    sessionsDb.setSessionModel(SOURCE_ID, 'claude-opus-5');
-    sessionsDb.setSessionEffort(SOURCE_ID, 'xhigh');
+    await seedSource(directory);
+    await sessionsDb.setSessionModel(SOURCE_ID, 'claude-opus-5');
+    await sessionsDb.setSessionEffort(SOURCE_ID, 'xhigh');
 
     const result = await sessionsService.forkSessionById(SOURCE_ID);
 
-    const forked = sessionsDb.getSessionById(result.sessionId);
+    const forked = await sessionsDb.getSessionById(result.sessionId);
     assert.equal(forked?.model, 'claude-opus-5');
     assert.equal(forked?.effort, 'xhigh');
   });
@@ -117,10 +117,10 @@ test('a fork inherits the model and effort of the conversation it branched from'
 
 test('forking replaces a row the watcher already made for the new transcript', async () => {
   await withForkableClaude(async ({ directory }) => {
-    seedSource(directory);
+    await seedSource(directory);
     // The watcher wins the race and indexes the fork under its native id.
     const now = new Date().toISOString();
-    sessionsDb.createSession(
+    await sessionsDb.createSession(
       'native-fork',
       'claude',
       directory,
@@ -132,18 +132,18 @@ test('forking replaces a row the watcher already made for the new transcript', a
 
     const result = await sessionsService.forkSessionById(SOURCE_ID);
 
-    assert.equal(sessionsDb.getSessionById('native-fork'), null);
-    assert.equal(sessionsDb.getSessionById(result.sessionId)?.provider_session_id, 'native-fork');
+    assert.equal(await sessionsDb.getSessionById('native-fork'), null);
+    assert.equal((await sessionsDb.getSessionById(result.sessionId))?.provider_session_id, 'native-fork');
   });
 });
 
 test('a session with no transcript yet cannot be forked', async () => {
   await withForkableClaude(async ({ directory }) => {
     // An app-created session that has never run: no provider id, no transcript.
-    sessionsDb.createAppSession('never-ran', 'claude', directory, 'Never ran');
+    await sessionsDb.createAppSession('never-ran', 'claude', directory, 'Never ran');
 
     await assert.rejects(
-      () => sessionsService.forkSessionById('never-ran'),
+      async () => sessionsService.forkSessionById('never-ran'),
       (error: Error & { code?: string }) => error.code === 'FORK_SOURCE_NOT_READY',
     );
   });
@@ -152,10 +152,10 @@ test('a session with no transcript yet cannot be forked', async () => {
 test('a provider without the capability is refused rather than silently ignored', async () => {
   await withForkableClaude(
     async ({ directory }) => {
-      seedSource(directory);
+      await seedSource(directory);
 
       await assert.rejects(
-        () => sessionsService.forkSessionById(SOURCE_ID),
+        async () => sessionsService.forkSessionById(SOURCE_ID),
         (error: Error & { code?: string }) => error.code === 'FORK_NOT_SUPPORTED',
       );
     },
@@ -166,7 +166,7 @@ test('a provider without the capability is refused rather than silently ignored'
 test('forking a session that does not exist is a 404', async () => {
   await withForkableClaude(async () => {
     await assert.rejects(
-      () => sessionsService.forkSessionById('no-such-session'),
+      async () => sessionsService.forkSessionById('no-such-session'),
       (error: Error & { code?: string }) => error.code === 'SESSION_NOT_FOUND',
     );
   });

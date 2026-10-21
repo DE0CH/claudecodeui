@@ -58,7 +58,7 @@ async function sendClaimedQueuedMessage(
 ): Promise<void> {
   const message = readQueuedMessage(candidate.queuedMessage);
   if (!message) {
-    sessionDraftsDb.deleteEmptyDraft(candidate.userId, candidate.sessionId);
+    await sessionDraftsDb.deleteEmptyDraft(candidate.userId, candidate.sessionId);
     return;
   }
 
@@ -75,10 +75,10 @@ async function sendClaimedQueuedMessage(
   // The registry check and run reservation are separate operations. If a run
   // wins that tiny race, put the turn back so the next poll tries again.
   if (!result.started && result.error === 'A run was already in progress for this session.') {
-    sessionDraftsDb.restoreQueuedMessage(candidate);
+    await sessionDraftsDb.restoreQueuedMessage(candidate);
     return;
   }
-  sessionDraftsDb.deleteEmptyDraft(candidate.userId, candidate.sessionId);
+  await sessionDraftsDb.deleteEmptyDraft(candidate.userId, candidate.sessionId);
 }
 
 /**
@@ -96,14 +96,14 @@ function isSessionBusy(sessionId: string, runtime: ProviderRuntimeGateway): bool
 
 /** Sends every persisted queued turn whose session is currently idle. */
 export async function dispatchQueuedMessages(runtime: ProviderRuntimeGateway): Promise<number> {
-  const candidates = sessionDraftsDb.listQueuedMessages();
+  const candidates = await sessionDraftsDb.listQueuedMessages();
   let claimed = 0;
 
   await Promise.all(candidates.map(async (candidate) => {
     if (isSessionBusy(candidate.sessionId, runtime)) {
       return;
     }
-    if (!sessionDraftsDb.claimQueuedMessage(candidate)) {
+    if (!(await sessionDraftsDb.claimQueuedMessage(candidate))) {
       return;
     }
     claimed += 1;
@@ -137,11 +137,11 @@ async function sendClaimedMessage(
     // Silently dropping a message the user scheduled is worse than telling
     // them it did not go.
     if (!result.started || result.error) {
-      scheduledMessagesDb.markFailed(row.id, result.error ?? 'The session was unavailable when this was due.');
+      await scheduledMessagesDb.markFailed(row.id, result.error ?? 'The session was unavailable when this was due.');
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    scheduledMessagesDb.markFailed(row.id, message);
+    await scheduledMessagesDb.markFailed(row.id, message);
   }
 }
 
@@ -156,7 +156,7 @@ export async function dispatchDueScheduledMessages(
 ): Promise<number> {
   // Claimed before any of them runs, so a long turn cannot let the next poll
   // pick the same message up again.
-  const due = scheduledMessagesDb.claimDue(now);
+  const due = await scheduledMessagesDb.claimDue(now);
   if (due.length === 0) {
     return 0;
   }
@@ -190,7 +190,7 @@ export function initializeScheduledMessageDispatcher(runtime: ProviderRuntimeGat
     }
     dispatchInFlight = true;
     void dispatchDueScheduledMessages(runtime)
-      .then(() => dispatchQueuedMessages(runtime))
+      .then(async () => dispatchQueuedMessages(runtime))
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error('[ScheduledMessages] Dispatch pass failed', { error: message });

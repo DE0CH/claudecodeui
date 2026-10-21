@@ -298,7 +298,7 @@ export class ClaudeProviderModels implements IProviderModels {
     }
 
     try {
-      const jsonlPath = sessionsDb.getSessionById(sessionId)?.jsonl_path;
+      const jsonlPath = (await sessionsDb.getSessionById(sessionId))?.jsonl_path;
       const activeModel = jsonlPath
         ? await readClaudeSessionModelFromJsonl(sessionId, jsonlPath)
         : null;

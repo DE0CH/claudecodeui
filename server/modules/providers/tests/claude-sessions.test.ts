@@ -13,14 +13,14 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   const previousDatabasePath = process.env.DATABASE_PATH;
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'claude-provider-db-'));
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await initializeDatabase();
 
   try {
     await runTest();
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -190,7 +190,7 @@ test('Claude history attaches a subagent transcript stored under the session dir
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       const history = await new ClaudeSessionsProvider().fetchHistory(SESSION_ID, {
         providerSessionId: SESSION_ID,
@@ -225,7 +225,7 @@ test('Claude history folds an agent task notification into the call that spawned
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       const history = await new ClaudeSessionsProvider().fetchHistory(SESSION_ID, {
         providerSessionId: SESSION_ID,
@@ -286,7 +286,7 @@ for (const operation of ['remove', 'enqueue'] as const) {
 
       await withIsolatedDatabase(async () => {
         const now = new Date().toISOString();
-        sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+        await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
         const history = await new ClaudeSessionsProvider().fetchHistory(SESSION_ID, {
           providerSessionId: SESSION_ID,
@@ -334,7 +334,7 @@ test('Claude history keeps rows that have no uuid when a queue-operation notific
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       const history = await new ClaudeSessionsProvider().fetchHistory(SESSION_ID, {
         providerSessionId: SESSION_ID,
@@ -382,7 +382,7 @@ test('Claude history drops every notification row of a task that reported more t
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       const history = await new ClaudeSessionsProvider().fetchHistory(SESSION_ID, {
         providerSessionId: SESSION_ID,
@@ -422,7 +422,7 @@ test('Claude history keeps a background agent running until its outcome is repor
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       // The run that launched the agent is still up, so it can still report.
       const liveRunStartedAt = Date.parse('2026-08-21T09:59:00.000Z');
@@ -456,7 +456,7 @@ test('Claude history reports a background agent stopped once its session process
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       // A background agent runs inside the session's CLI process. With that
       // process gone — the run was stopped, or crashed — an agent that never
@@ -486,7 +486,7 @@ test('Claude history reports a background agent stopped when a later run of the 
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       // Each turn of a session is its own CLI process. The agent was launched
       // at 10:00:01 by a process that has since exited; the run up now started
@@ -523,7 +523,7 @@ test('Claude history asks after the session process by both the app and the prov
       // id started the run — the app id from the chat gateway, the provider
       // id from the agent API — so a probe that knows only one of them must
       // still find the run.
-      sessionsDb.createSession(appSessionId, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(appSessionId, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       for (const liveId of [appSessionId, SESSION_ID]) {
         const history = await new ClaudeSessionsProvider({
@@ -562,7 +562,7 @@ for (const reported of ['completed', 'failed'] as const) {
 
       await withIsolatedDatabase(async () => {
         const now = new Date().toISOString();
-        sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+        await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
         // The notification is the only record of the outcome, and it is
         // enough: the agent's own transcript names its timeline, not whether
@@ -601,7 +601,7 @@ test('Claude history reports a forked background agent stopped: no transcript, n
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       const history = await new ClaudeSessionsProvider({ getLiveRunStartTime: () => null }).fetchHistory(SESSION_ID, {
         providerSessionId: SESSION_ID,
@@ -810,7 +810,7 @@ for (const notification of ['user', 'remove', 'enqueue'] as const) {
 
       await withIsolatedDatabase(async () => {
         const now = new Date().toISOString();
-        sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
+        await sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
 
         // The run is over, so no process is up — and that must not matter:
         // the notification is the outcome.
@@ -854,7 +854,7 @@ test('Claude history reads a workflow\'s agents and their progress from its jour
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
+      await sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
 
       // The run that launched the workflow is still up, so it is still going.
       const liveRunStartedAt = Date.parse('2026-08-21T10:30:00.000Z');
@@ -894,7 +894,7 @@ test('Claude history does not keep a journal agent running once the workflow its
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
+      await sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
 
       const history = await new ClaudeSessionsProvider({ getLiveRunStartTime: () => null }).fetchHistory(WORKFLOW_SESSION_ID, {
         providerSessionId: WORKFLOW_SESSION_ID,
@@ -926,7 +926,7 @@ test('Claude history reports a workflow stopped, with no agents, when its run an
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
+      await sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
 
       const history = await new ClaudeSessionsProvider({ getLiveRunStartTime: () => null }).fetchHistory(WORKFLOW_SESSION_ID, {
         providerSessionId: WORKFLOW_SESSION_ID,
@@ -1000,7 +1000,7 @@ test('Claude history folds a backgrounded Bash command\'s notification onto its 
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(sessionId, 'claude', tempRoot, 'Bash session', now, now, transcriptPath);
+      await sessionsDb.createSession(sessionId, 'claude', tempRoot, 'Bash session', now, now, transcriptPath);
 
       const history = await new ClaudeSessionsProvider({ getLiveRunStartTime: () => null }).fetchHistory(sessionId, {
         providerSessionId: sessionId,
@@ -1053,7 +1053,7 @@ test('a long workflow agent timeline keeps its newest steps within the transport
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
+      await sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
 
       const live = await new ClaudeSessionsProvider({ getLiveRunStartTime: () => Date.parse('2026-08-21T10:30:00.000Z') })
         .readWorkflowAgentActivity(WORKFLOW_SESSION_ID, WORKFLOW_RUN_ID, agentId);
@@ -1084,7 +1084,7 @@ test('a workflow agent the journal has not settled is running only while the run
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
+      await sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', tempRoot, 'Workflow session', now, now, parentPath);
 
       // The run that spawned the agent is still up: it started before the
       // agent's first row was written.
@@ -1383,7 +1383,7 @@ test('Claude history still settles a synchronous agent that stops mid tool call'
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       const history = await new ClaudeSessionsProvider().fetchHistory(SESSION_ID, {
         providerSessionId: SESSION_ID,
@@ -1427,7 +1427,7 @@ test('Claude history trims a subagent timeline down to a preview', { concurrency
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
+      await sessionsDb.createSession(SESSION_ID, 'claude', tempRoot, 'Subagent session', now, now, parentPath);
 
       const history = await new ClaudeSessionsProvider().fetchHistory(SESSION_ID, {
         providerSessionId: SESSION_ID,
@@ -1500,7 +1500,7 @@ test('an edited prompt replaces the one it superseded instead of stacking on it'
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(EDIT_SESSION_ID, 'claude', tempRoot, 'Edited session', now, now, transcriptPath);
+      await sessionsDb.createSession(EDIT_SESSION_ID, 'claude', tempRoot, 'Edited session', now, now, transcriptPath);
 
       const history = await new ClaudeSessionsProvider().fetchHistory(EDIT_SESSION_ID, {
         providerSessionId: EDIT_SESSION_ID,
@@ -1585,7 +1585,7 @@ async function readConcurrentlyForkedHistory(rows: object[]): Promise<unknown[]>
     let texts: unknown[] = [];
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(
+      await sessionsDb.createSession(
         CONCURRENT_SESSION_ID, 'claude', tempRoot, 'Concurrently forked session', now, now, transcriptPath,
       );
 
@@ -1688,7 +1688,7 @@ test('parallel tool calls are not mistaken for an edit', { concurrency: false },
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(sessionId, 'claude', tempRoot, 'Parallel tools', now, now, transcriptPath);
+      await sessionsDb.createSession(sessionId, 'claude', tempRoot, 'Parallel tools', now, now, transcriptPath);
 
       const history = await new ClaudeSessionsProvider().fetchHistory(sessionId, {
         providerSessionId: sessionId,
@@ -1715,7 +1715,7 @@ test('resolving an edit anchor returns the assistant turn before it', { concurre
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(EDIT_SESSION_ID, 'claude', tempRoot, 'Edited session', now, now, transcriptPath);
+      await sessionsDb.createSession(EDIT_SESSION_ID, 'claude', tempRoot, 'Edited session', now, now, transcriptPath);
       const provider = new ClaudeSessionsProvider();
 
       // Resuming is inclusive of the row it names, so replacing `u2b` must
@@ -1750,7 +1750,7 @@ test('user turns carry the transcript uuid so they can be edited', { concurrency
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(EDIT_SESSION_ID, 'claude', tempRoot, 'Edited session', now, now, transcriptPath);
+      await sessionsDb.createSession(EDIT_SESSION_ID, 'claude', tempRoot, 'Edited session', now, now, transcriptPath);
 
       const history = await new ClaudeSessionsProvider().fetchHistory(EDIT_SESSION_ID, {
         providerSessionId: EDIT_SESSION_ID,
@@ -1807,7 +1807,7 @@ test('resolving an edit anchor skips rows that are not conversation turns', { co
 
     await withIsolatedDatabase(async () => {
       const now = new Date().toISOString();
-      sessionsDb.createSession(sessionId, 'claude', tempRoot, 'Anchor skip', now, now, transcriptPath);
+      await sessionsDb.createSession(sessionId, 'claude', tempRoot, 'Anchor skip', now, now, transcriptPath);
 
       assert.deepEqual(
         await new ClaudeSessionsProvider().resolveEditAnchor(sessionId, 'su2'),
@@ -1926,7 +1926,7 @@ test('synchronizeFile uses ai-title from JSONL when no DB custom_name exists', {
       );
 
       assert.ok(result, 'synchronizeFile should return a session id');
-      const session = sessionsDb.getSessionById(result!);
+      const session = await sessionsDb.getSessionById(result!);
       assert.equal(session?.custom_name, 'AI generated title');
     });
   } finally {
@@ -1965,7 +1965,7 @@ test('synchronizeFile uses custom-title from JSONL when no DB custom_name and no
       );
 
       assert.ok(result);
-      const session = sessionsDb.getSessionById(result!);
+      const session = await sessionsDb.getSessionById(result!);
       assert.equal(session?.custom_name, 'Renamed via cli');
     });
   } finally {
@@ -2007,7 +2007,7 @@ test('synchronizeFile falls back to history.jsonl display when JSONL has no titl
       );
 
       assert.ok(result);
-      const session = sessionsDb.getSessionById(result!);
+      const session = await sessionsDb.getSessionById(result!);
       assert.equal(session?.custom_name, 'fallback display name');
     });
   } finally {
@@ -2045,7 +2045,7 @@ test('synchronizeFile falls back to Untitled Claude Session when all sources are
       );
 
       assert.ok(result);
-      const session = sessionsDb.getSessionById(result!);
+      const session = await sessionsDb.getSessionById(result!);
       assert.equal(session?.custom_name, 'Untitled Claude Session');
     });
   } finally {
@@ -2081,7 +2081,7 @@ test('synchronizeFile preserves existing DB custom_name regardless of JSONL and 
 
     await withIsolatedDatabase(async () => {
       // Pre-seed the DB with a custom_name set via CloudCLI sidebar rename.
-      sessionsDb.createSession(
+      await sessionsDb.createSession(
         'test-session-1',
         'claude',
         workspacePath,
@@ -2094,7 +2094,7 @@ test('synchronizeFile preserves existing DB custom_name regardless of JSONL and 
       );
 
       assert.ok(result);
-      const session = sessionsDb.getSessionById(result!);
+      const session = await sessionsDb.getSessionById(result!);
       // DB custom_name must win over JSONL ai-title AND history.jsonl display.
       assert.equal(session?.custom_name, 'Sidebar custom name');
     });
@@ -2123,7 +2123,7 @@ test('synchronizeFile does NOT treat "Untitled Claude Session" in DB as a real c
 
     await withIsolatedDatabase(async () => {
       // Seed with the default fallback name — should be ignored.
-      sessionsDb.createSession(
+      await sessionsDb.createSession(
         'test-session-1',
         'claude',
         workspacePath,
@@ -2136,7 +2136,7 @@ test('synchronizeFile does NOT treat "Untitled Claude Session" in DB as a real c
       );
 
       assert.ok(result);
-      const session = sessionsDb.getSessionById(result!);
+      const session = await sessionsDb.getSessionById(result!);
       assert.equal(session?.custom_name, 'Real AI title from JSONL');
     });
   } finally {

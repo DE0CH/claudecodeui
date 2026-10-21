@@ -37,7 +37,7 @@ const pruneOrphanedSessions = async (): Promise<number> => {
   const knownDirectoryExists = new Map<string, boolean>();
   let pruned = 0;
 
-  for (const { session_id: sessionId, jsonl_path: jsonlPath } of sessionsDb.getSessionsWithTranscriptPath()) {
+  for (const { session_id: sessionId, jsonl_path: jsonlPath } of await sessionsDb.getSessionsWithTranscriptPath()) {
     if (await pathExists(jsonlPath)) {
       continue;
     }
@@ -53,7 +53,7 @@ const pruneOrphanedSessions = async (): Promise<number> => {
       continue;
     }
 
-    if (sessionsDb.deleteSessionById(sessionId)) {
+    if (await sessionsDb.deleteSessionById(sessionId)) {
       pruned += 1;
     }
   }
@@ -77,7 +77,7 @@ let inFlightSynchronization: Promise<SessionSynchronizeResult> | null = null;
  * Runs all provider synchronizers and updates scan_state.last_scanned_at.
  */
 async function runSessionSynchronization(): Promise<SessionSynchronizeResult> {
-  const lastScanAt = scanStateDb.getLastScannedAt();
+  const lastScanAt = await scanStateDb.getLastScannedAt();
   const scanBoundary = new Date();
   const processedByProvider: Record<LLMProvider, number> = {
     claude: 0,
@@ -109,7 +109,7 @@ async function runSessionSynchronization(): Promise<SessionSynchronizeResult> {
   const prunedOrphans = failures.length === 0 ? await pruneOrphanedSessions() : 0;
 
   if (failures.length === 0) {
-    scanStateDb.updateLastScannedAt(scanBoundary);
+    await scanStateDb.updateLastScannedAt(scanBoundary);
   } else {
     console.warn(
       `[Sessions] Skipping scan_state cursor advance because ${failures.length} provider sync(s) failed.`,

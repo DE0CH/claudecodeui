@@ -32,8 +32,8 @@ test('createProject throws when path validation fails', async () => {
         {
           validatePath: async () => ({ valid: false, error: 'blocked path' }),
           ensureWorkspaceDirectory: async () => undefined,
-          persistProjectPath: () => ({ outcome: 'created', project: projectRow }),
-          getProjectByPath: () => projectRow,
+          persistProjectPath: async () => ({ outcome: 'created', project: projectRow }),
+          getProjectByPath: async () => projectRow,
         },
       ),
     (error: unknown) => {
@@ -54,8 +54,8 @@ test('createProject throws conflict when active project path already exists', as
         {
           validatePath: async () => ({ valid: true, resolvedPath: '/workspace/my-project' }),
           ensureWorkspaceDirectory: async () => undefined,
-          persistProjectPath: () => ({ outcome: 'active_conflict', project: projectRow }),
-          getProjectByPath: () => projectRow,
+          persistProjectPath: async () => ({ outcome: 'active_conflict', project: projectRow }),
+          getProjectByPath: async () => projectRow,
         },
       ),
     (error: unknown) => {
@@ -76,7 +76,7 @@ test('createProject falls back to directory name when custom name is not provide
     {
       validatePath: async () => ({ valid: true, resolvedPath: '/workspace/my-project' }),
       ensureWorkspaceDirectory: async () => undefined,
-      persistProjectPath: (_projectPath, customName) => {
+      persistProjectPath: async (_projectPath, customName) => {
         capturedCustomName = customName;
         return {
           outcome: 'created',
@@ -86,7 +86,7 @@ test('createProject falls back to directory name when custom name is not provide
           },
         };
       },
-      getProjectByPath: () => projectRow,
+      getProjectByPath: async () => projectRow,
     },
   );
 
@@ -101,14 +101,14 @@ test('createProject returns archived reuse outcome when archived row is reused',
     {
       validatePath: async () => ({ valid: true, resolvedPath: '/workspace/my-project' }),
       ensureWorkspaceDirectory: async () => undefined,
-      persistProjectPath: () => ({
+      persistProjectPath: async () => ({
         outcome: 'reactivated_archived',
         project: {
           ...projectRow,
           isArchived: 1,
         },
       }),
-      getProjectByPath: () => projectRow,
+      getProjectByPath: async () => projectRow,
     },
   );
 

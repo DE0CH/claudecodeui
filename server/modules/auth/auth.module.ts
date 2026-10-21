@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 
-import { getConnection, userDb } from '@/modules/database/index.js';
+import { transaction, userDb } from '@/modules/database/index.js';
 
 import { authenticateToken, generateToken } from './auth.middleware.js';
 import { createAuthRouter } from './auth.routes.js';
@@ -15,20 +15,15 @@ type BcryptAdapter = {
 // composition root narrows its CommonJS runtime surface before injecting it.
 const require = createRequire(import.meta.url);
 const bcrypt = require('bcrypt') as BcryptAdapter;
-const databaseConnection = getConnection();
 
 const authService = createAuthService({
   users: {
-    hasUsers: () => userDb.hasUsers(),
-    createUser: (username, passwordHash) => userDb.createUser(username, passwordHash),
-    getUserByUsername: (username) => userDb.getUserByUsername(username),
-    updateLastLogin: (userId) => userDb.updateLastLogin(userId),
+    hasUsers: async () => await userDb.hasUsers(),
+    createUser: async (username, passwordHash) => await userDb.createUser(username, passwordHash),
+    getUserByUsername: async (username) => await userDb.getUserByUsername(username),
+    updateLastLogin: async (userId) => await userDb.updateLastLogin(userId),
   },
-  transaction: {
-    begin: () => databaseConnection.prepare('BEGIN').run(),
-    commit: () => databaseConnection.prepare('COMMIT').run(),
-    rollback: () => databaseConnection.prepare('ROLLBACK').run(),
-  },
+  withTransaction: async (fn) => await transaction(fn),
   hashPassword: (password) => bcrypt.hash(password, 12),
   comparePassword: (password, passwordHash) => bcrypt.compare(password, passwordHash),
   generateToken,

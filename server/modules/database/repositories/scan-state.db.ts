@@ -1,16 +1,13 @@
-import { getConnection } from '@/modules/database/connection.js';
+import { all, get, run, transaction } from '@/modules/database/connection.js';
 
 type ScanStateRow = {
   last_scanned_at: string;
 };
 
 export const scanStateDb = {
-    getLastScannedAt() {
-        const db = getConnection();
+    async getLastScannedAt() {
 
-        const row = db
-            .prepare(`SELECT last_scanned_at FROM scan_state WHERE id = 1`)
-            .get() as ScanStateRow;
+        const row = (await get(`SELECT last_scanned_at FROM scan_state WHERE id = 1`)) as ScanStateRow;
 
         if (!row) {
             return null; // Before any scan, the row is undefined.
@@ -28,15 +25,14 @@ export const scanStateDb = {
         return lastScannedDate;
     },
 
-    updateLastScannedAt(scannedAt: Date = new Date()) {
-        const db = getConnection();
+    async updateLastScannedAt(scannedAt: Date = new Date()) {
         const sqliteTimestamp = scannedAt.toISOString().slice(0, 19).replace('T', ' ');
 
-        db.prepare(`
+        (await run(`
             INSERT INTO scan_state (id, last_scanned_at)
             VALUES (1, ?)
             ON CONFLICT (id)
             DO UPDATE SET last_scanned_at = excluded.last_scanned_at
-        `).run(sqliteTimestamp);
+        `, [sqliteTimestamp]));
     }
 };

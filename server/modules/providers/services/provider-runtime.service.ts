@@ -14,7 +14,7 @@ import type {
 type ProviderRuntimeServiceDependencies = {
   listProviders(): IProvider[];
   resolveProvider(provider: string): IProvider;
-  resolveProviderSessionId(sessionId: string | null | undefined): string | null;
+  resolveProviderSessionId(sessionId: string | null | undefined): Promise<string | null>;
   resolveResumeModel(
     provider: LLMProvider,
     sessionId: string | undefined,
@@ -26,10 +26,10 @@ type ProviderRuntimeServiceDependencies = {
 const defaultDependencies: ProviderRuntimeServiceDependencies = {
   listProviders: () => providerRegistry.listProviders(),
   resolveProvider: (provider) => providerRegistry.resolveProvider(provider),
-  resolveProviderSessionId: (sessionId) => sessionsService.resolveProviderSessionId(sessionId),
-  resolveResumeModel: (provider, sessionId, requestedModel) =>
+  resolveProviderSessionId: async (sessionId) => await sessionsService.resolveProviderSessionId(sessionId),
+  resolveResumeModel: async (provider, sessionId, requestedModel) =>
     providerModelsService.resolveResumeModel(provider, sessionId, requestedModel),
-  getProviderModels: (provider) => providerModelsService.getProviderModels(provider),
+  getProviderModels: async (provider) => providerModelsService.getProviderModels(provider),
 };
 
 /**

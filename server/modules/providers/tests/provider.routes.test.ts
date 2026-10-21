@@ -21,7 +21,7 @@ async function withProviderServer(
   const previousDatabasePath = process.env.DATABASE_PATH;
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'provider-routes-'));
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await writeFile(process.env.DATABASE_PATH, '');
   await initializeDatabase();
@@ -47,7 +47,7 @@ async function withProviderServer(
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     });
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -75,7 +75,7 @@ test('session creation route names a CloudCLI session from the initial message',
     assert.equal(response.status, 201);
     assert.equal(payload.data.sessionName, 'abcd efg hij klm');
     assert.equal(
-      sessionsDb.getSessionById(payload.data.sessionId)?.custom_name,
+      (await sessionsDb.getSessionById(payload.data.sessionId))?.custom_name,
       'abcd efg hij klm',
     );
   });
@@ -83,7 +83,7 @@ test('session creation route names a CloudCLI session from the initial message',
 
 test('conversation search streams title matches before transcript results', async () => {
   await withProviderServer(async (baseUrl, workspacePath) => {
-    sessionsDb.createAppSession(
+    await sessionsDb.createAppSession(
       'title-only-session',
       'codex',
       workspacePath,
@@ -99,7 +99,7 @@ test('conversation search streams title matches before transcript results', asyn
         message: 'Release planning also appears in this conversation.',
       },
     })}\n`);
-    sessionsDb.createSession(
+    await sessionsDb.createSession(
       'transcript-session',
       'codex',
       workspacePath,
@@ -142,9 +142,9 @@ test('conversation search streams title matches before transcript results', asyn
   });
 });
 
-test('reasoning effort is persisted and returned with the active session model', async () => {
+test('reasoning effort is persisted and returned with the active session model', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, async () => {
   await withProviderServer(async (baseUrl, workspacePath) => {
-    sessionsDb.createAppSession('effort-session', 'codex', workspacePath);
+    await sessionsDb.createAppSession('effort-session', 'codex', workspacePath);
 
     const updateResponse = await fetch(
       `${baseUrl}/api/providers/codex/sessions/effort-session/active-effort`,
@@ -160,7 +160,7 @@ test('reasoning effort is persisted and returned with the active session model',
 
     assert.equal(updateResponse.status, 200);
     assert.equal(updatePayload.data.effort, 'ultra');
-    assert.equal(sessionsDb.getSessionById('effort-session')?.effort, 'ultra');
+    assert.equal((await sessionsDb.getSessionById('effort-session'))?.effort, 'ultra');
 
     const readResponse = await fetch(
       `${baseUrl}/api/providers/codex/sessions/effort-session/active-model`,
@@ -175,7 +175,7 @@ test('reasoning effort is persisted and returned with the active session model',
   });
 });
 
-test('model routes expose immutable defaults and full custom model CRUD', async () => {
+test('model routes expose immutable defaults and full custom model CRUD', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, async () => {
   await withProviderServer(async (baseUrl) => {
     const initialResponse = await fetch(`${baseUrl}/api/providers/codex/models`);
     const initialPayload = await initialResponse.json() as {
@@ -246,7 +246,7 @@ test('model routes expose immutable defaults and full custom model CRUD', async 
   });
 });
 
-test('the custom-only route restricts a provider catalog to its custom models', async () => {
+test('the custom-only route restricts a provider catalog to its custom models', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, async () => {
   await withProviderServer(async (baseUrl) => {
     type Catalog = {
       OPTIONS: Array<{ value: string; isCustom: boolean }>;
@@ -315,7 +315,7 @@ test('the custom-only route restricts a provider catalog to its custom models', 
   });
 });
 
-test('custom model routes accept, validate, and return reasoning-effort levels', async () => {
+test('custom model routes accept, validate, and return reasoning-effort levels', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, async () => {
   await withProviderServer(async (baseUrl) => {
     const postModel = async (provider: string, body: unknown) => {
       const response = await fetch(`${baseUrl}/api/providers/${provider}/models`, {
@@ -492,7 +492,7 @@ test('the workflow agent route reads an agent\'s timeline and status from its ru
   await withProviderServer(async (baseUrl, workspacePath) => {
     const sessionPath = await writeWorkflowRun(workspacePath);
     const now = new Date().toISOString();
-    sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', workspacePath, 'Workflow session', now, now, sessionPath);
+    await sessionsDb.createSession(WORKFLOW_SESSION_ID, 'claude', workspacePath, 'Workflow session', now, now, sessionPath);
 
     const agentUrl = (runId: string, agentId: string) =>
       `${baseUrl}/api/providers/sessions/${WORKFLOW_SESSION_ID}/workflows/${runId}/agents/${agentId}`;

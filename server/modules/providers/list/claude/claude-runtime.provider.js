@@ -960,7 +960,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
   const { sessionId, sessionSummary } = options;
   // Callers pass the stable app session id; the SDK only understands the
   // provider-native id recorded on the session row.
-  const providerSessionId = context.resolveProviderSessionId(sessionId);
+  const providerSessionId = await context.resolveProviderSessionId(sessionId);
   // Provider-native id as the SDK reports it (starts as the resume id, or is
   // captured from the stream for brand-new sessions).
   let capturedSessionId = providerSessionId;
@@ -969,8 +969,8 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
   // the provider-native id once captured (legacy/direct API callers).
   const sessionKey = () => sessionId || capturedSessionId || null;
 
-  const emitNotification = (event) => {
-    notifyUserIfEnabled({
+  const emitNotification = async (event) => {
+    await notifyUserIfEnabled({
       userId: ws?.userId || null,
       writer: ws,
       event
@@ -1076,7 +1076,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         hooks: [async (input) => {
           const message = typeof input?.message === 'string' ? input.message : 'Claude requires your attention.';
           // Notifications are app-facing, so they carry the app session id.
-          emitNotification(createNotificationEvent({
+          await emitNotification(createNotificationEvent({
             provider: 'claude',
             sessionId: sessionId || capturedSessionId || null,
             kind: 'action_required',
@@ -1122,7 +1122,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
 
       const requestId = createRequestId();
       ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
-      emitNotification(createNotificationEvent({
+      await emitNotification(createNotificationEvent({
         provider: 'claude',
         sessionId: sessionId || capturedSessionId || null,
         kind: 'action_required',
@@ -1323,7 +1323,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         if (!turnCompleteSent && !abortPending) {
           turnCompleteSent = true;
           ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: 0 }));
-          notifyRunStopped({
+          await notifyRunStopped({
             userId: ws?.userId || null,
             provider: 'claude',
             sessionId: sessionId || capturedSessionId || null,
@@ -1334,7 +1334,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
           // A result after the turn already reported complete means the work we
           // held the process open for has finished and pushed a follow-up turn
           // — the last of it, when nothing else is still running.
-          notifyBackgroundWorkCompleted({
+          await notifyBackgroundWorkCompleted({
             userId: ws?.userId || null,
             provider: 'claude',
             sessionId: sessionId || capturedSessionId || null,
@@ -1395,7 +1395,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       if (!wasAborted) {
         ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: 0 }));
       }
-      notifyRunStopped({
+      await notifyRunStopped({
         userId: ws?.userId || null,
         provider: 'claude',
         sessionId: sessionId || capturedSessionId || null,
@@ -1440,7 +1440,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     if (!turnCompleteSent) {
       ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: 1 }));
     }
-    notifyRunFailed({
+    await notifyRunFailed({
       userId: ws?.userId || null,
       provider: 'claude',
       sessionId: sessionId || capturedSessionId || null,

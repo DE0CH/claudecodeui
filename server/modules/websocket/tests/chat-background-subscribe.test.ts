@@ -37,17 +37,17 @@ function createFakeSocket() {
 async function withIsolatedDatabase(runTest: () => Promise<void>): Promise<void> {
   const previousDatabasePath = process.env.DATABASE_PATH;
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'chat-background-subscribe-'));
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await initializeDatabase();
   try {
-    sessionsDb.createAppSession(SESSION_ID, 'claude', tempDirectory);
+    await sessionsDb.createAppSession(SESSION_ID, 'claude', tempDirectory);
     await runTest();
   } finally {
     connectedClients.clear();
     chatRunRegistry.clearAll();
     chatRunRegistry.setRetentionGuard(() => false);
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -58,7 +58,7 @@ async function withIsolatedDatabase(runTest: () => Promise<void>): Promise<void>
 }
 
 /** Starts a run for the session and ends its turn, leaving the run completed but registered. */
-function startAndCompleteRun(connection: ReturnType<typeof createFakeSocket>) {
+async function startAndCompleteRun(connection: ReturnType<typeof createFakeSocket>) {
   const run = chatRunRegistry.startRun({
     appSessionId: SESSION_ID,
     provider: 'claude',
@@ -67,7 +67,7 @@ function startAndCompleteRun(connection: ReturnType<typeof createFakeSocket>) {
     userId: 1,
   });
   assert.ok(run);
-  run.writer.send({ kind: 'complete', provider: 'claude', sessionId: 'native-1', exitCode: 0 });
+  await run.writer.send({ kind: 'complete', provider: 'claude', sessionId: 'native-1', exitCode: 0 });
   assert.equal(chatRunRegistry.isProcessing(SESSION_ID), false);
   return run;
 }
@@ -76,7 +76,7 @@ const settle = () => new Promise((resolve) => { setTimeout(resolve, 30); });
 
 test('a tab that subscribes during background work receives the run\'s later events', async () => {
   await withIsolatedDatabase(async () => {
-    const run = startAndCompleteRun(createFakeSocket());
+    const run = await startAndCompleteRun(createFakeSocket());
 
     const newTab = createFakeSocket();
     handleChatConnection(
@@ -91,7 +91,7 @@ test('a tab that subscribes during background work receives the run\'s later eve
     assert.equal(newTab.frames[0]?.kind, 'chat_subscribed');
     assert.equal(newTab.frames[0]?.isProcessing, false);
 
-    run.writer.send({ kind: 'task_status', provider: 'claude', sessionId: 'native-1', event: 'notification', taskId: 't1', status: 'completed' } as never);
+    await run.writer.send({ kind: 'task_status', provider: 'claude', sessionId: 'native-1', event: 'notification', taskId: 't1', status: 'completed' } as never);
     assert.ok(
       newTab.frames.some((frame) => frame.kind === 'task_status'),
       'the task event must reach the tab that subscribed after the turn ended',
@@ -101,7 +101,7 @@ test('a tab that subscribes during background work receives the run\'s later eve
 
 test('a tab that subscribes to an idle session is not attached to its old run', async () => {
   await withIsolatedDatabase(async () => {
-    const run = startAndCompleteRun(createFakeSocket());
+    const run = await startAndCompleteRun(createFakeSocket());
 
     const newTab = createFakeSocket();
     handleChatConnection(
@@ -112,7 +112,7 @@ test('a tab that subscribes to an idle session is not attached to its old run', 
     newTab.emit('message', JSON.stringify({ type: 'chat.subscribe', sessions: [{ sessionId: SESSION_ID, lastSeq: 0 }] }));
     await settle();
 
-    run.writer.send({ kind: 'task_status', provider: 'claude', sessionId: 'native-1', event: 'notification', taskId: 't1', status: 'completed' } as never);
+    await run.writer.send({ kind: 'task_status', provider: 'claude', sessionId: 'native-1', event: 'notification', taskId: 't1', status: 'completed' } as never);
     assert.ok(!newTab.frames.some((frame) => frame.kind === 'task_status'));
   });
 });
@@ -123,7 +123,7 @@ test('a completed run stays registered while its session still has background wo
     await withIsolatedDatabase(async () => {
       let working = true;
       chatRunRegistry.setRetentionGuard((sessionId) => sessionId === SESSION_ID && working);
-      startAndCompleteRun(createFakeSocket());
+      await startAndCompleteRun(createFakeSocket());
 
       mock.timers.tick(FIVE_MINUTES);
       assert.ok(chatRunRegistry.getRun(SESSION_ID), 'the run must outlive the retention window while work is outstanding');
@@ -146,13 +146,13 @@ test('a retained run\'s eviction timer cannot evict the session\'s next run earl
     await withIsolatedDatabase(async () => {
       let working = true;
       chatRunRegistry.setRetentionGuard((sessionId) => sessionId === SESSION_ID && working);
-      const first = startAndCompleteRun(createFakeSocket());
+      const first = await startAndCompleteRun(createFakeSocket());
       mock.timers.tick(FIVE_MINUTES);
       assert.equal(chatRunRegistry.getRun(SESSION_ID), first);
 
       working = false;
       mock.timers.tick(FIVE_MINUTES - 2 * 60 * 1000);
-      const second = startAndCompleteRun(createFakeSocket());
+      const second = await startAndCompleteRun(createFakeSocket());
       assert.equal(chatRunRegistry.getRun(SESSION_ID), second);
 
       // Run one's re-armed timer fires now; run two's has two minutes left.

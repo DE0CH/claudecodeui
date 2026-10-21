@@ -4,7 +4,7 @@
  * Stores per-user notification channel/event preferences as JSON.
  */
 
-import { getConnection } from '@/modules/database/connection.js';
+import { all, get, run, transaction } from '@/modules/database/connection.js';
 
 type NotificationPreferences = {
   channels: {
@@ -63,19 +63,12 @@ function normalizeNotificationPreferences(value: unknown): NotificationPreferenc
 
 export const notificationPreferencesDb = {
   /** Returns the normalized preferences for a user, creating defaults on first read. */
-  getNotificationPreferences(userId: number): NotificationPreferences {
-    const db = getConnection();
-    const row = db
-      .prepare(
-        'SELECT preferences_json FROM user_notification_preferences WHERE user_id = ?'
-      )
-      .get(userId) as { preferences_json: string } | undefined;
+  async getNotificationPreferences(userId: number): Promise<NotificationPreferences> {
+    const row = (await get('SELECT preferences_json FROM user_notification_preferences WHERE user_id = ?', [userId])) as { preferences_json: string } | undefined;
 
     if (!row) {
       const defaults = normalizeNotificationPreferences(DEFAULT_NOTIFICATION_PREFERENCES);
-      db.prepare(
-        'INSERT INTO user_notification_preferences (user_id, preferences_json, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)'
-      ).run(userId, JSON.stringify(defaults));
+      (await run('INSERT INTO user_notification_preferences (user_id, preferences_json, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)', [userId, JSON.stringify(defaults)]));
       return defaults;
     }
 
@@ -89,29 +82,26 @@ export const notificationPreferencesDb = {
   },
 
   /** Upserts normalized preferences for a user and returns the stored value. */
-  updateNotificationPreferences(
+  async updateNotificationPreferences(
     userId: number,
     preferences: unknown
-  ): NotificationPreferences {
+  ): Promise<NotificationPreferences> {
     const normalized = normalizeNotificationPreferences(preferences);
-    const db = getConnection();
 
-    db.prepare(
-      `INSERT INTO user_notification_preferences (user_id, preferences_json, updated_at)
+    (await run(`INSERT INTO user_notification_preferences (user_id, preferences_json, updated_at)
        VALUES (?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(user_id) DO UPDATE SET
          preferences_json = excluded.preferences_json,
-         updated_at = CURRENT_TIMESTAMP`
-    ).run(userId, JSON.stringify(normalized));
+         updated_at = CURRENT_TIMESTAMP`, [userId, JSON.stringify(normalized)]));
 
     return normalized;
   },
 
   // Legacy aliases used by existing services/routes
-  getPreferences(userId: number): NotificationPreferences {
+  async getPreferences(userId: number): Promise<NotificationPreferences> {
     return notificationPreferencesDb.getNotificationPreferences(userId);
   },
-  updatePreferences(userId: number, preferences: unknown): NotificationPreferences {
+  async updatePreferences(userId: number, preferences: unknown): Promise<NotificationPreferences> {
     return notificationPreferencesDb.updateNotificationPreferences(userId, preferences);
   },
 };

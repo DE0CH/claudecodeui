@@ -50,13 +50,13 @@ export const scheduledMessagesService = {
    * the user changes time zone — or schedules from a phone and is on a laptop
    * when it fires.
    */
-  schedule(input: {
+  async schedule(input: {
     userId: number;
     sessionId: string;
     content: string;
     options?: unknown;
     scheduledFor: string;
-  }): ScheduledMessage {
+  }): Promise<ScheduledMessage> {
     const content = input.content.trim();
     if (!content) {
       throw new AppError('A scheduled message needs some text.', {
@@ -85,14 +85,14 @@ export const scheduledMessagesService = {
       });
     }
 
-    if (!sessionsDb.getSessionById(input.sessionId)) {
+    if (!await sessionsDb.getSessionById(input.sessionId)) {
       throw new AppError(`Session "${input.sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
         statusCode: 404,
       });
     }
 
-    return toScheduledMessage(scheduledMessagesDb.create({
+    return toScheduledMessage(await scheduledMessagesDb.create({
       userId: input.userId,
       sessionId: input.sessionId,
       content,
@@ -101,17 +101,17 @@ export const scheduledMessagesService = {
     }));
   },
 
-  listForSession(userId: number, sessionId: string): ScheduledMessage[] {
-    return scheduledMessagesDb.listForSession(userId, sessionId).map(toScheduledMessage);
+  async listForSession(userId: number, sessionId: string): Promise<ScheduledMessage[]> {
+    return (await scheduledMessagesDb.listForSession(userId, sessionId)).map(toScheduledMessage);
   },
 
-  listPending(userId: number): ScheduledMessage[] {
-    return scheduledMessagesDb.listPendingForUser(userId).map(toScheduledMessage);
+  async listPending(userId: number): Promise<ScheduledMessage[]> {
+    return (await scheduledMessagesDb.listPendingForUser(userId)).map(toScheduledMessage);
   },
 
   /** Cancels a pending message, or dismisses a failed one. */
-  cancel(userId: number, id: string): void {
-    if (!scheduledMessagesDb.cancel(userId, id)) {
+  async cancel(userId: number, id: string): Promise<void> {
+    if (!await scheduledMessagesDb.cancel(userId, id)) {
       throw new AppError('That message has already been sent or cancelled.', {
         code: 'SCHEDULED_MESSAGE_NOT_PENDING',
         statusCode: 409,

@@ -96,7 +96,7 @@ test('providerMcpService handles claude MCP scopes/transports with file-backed p
  * This test covers Codex MCP support for user/project scopes, stdio/http formats,
  * and validation for unsupported scope/transport combinations.
  */
-test('providerMcpService handles codex MCP TOML config and capability validation', { concurrency: false }, async () => {
+test('providerMcpService handles codex MCP TOML config and capability validation', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, { concurrency: false }, async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'llm-mcp-codex-'));
   const workspacePath = path.join(tempRoot, 'workspace');
   await fs.mkdir(workspacePath, { recursive: true });
@@ -173,7 +173,7 @@ test('providerMcpService handles codex MCP TOML config and capability validation
  * This test covers OpenCode MCP support for user/project config files, JSONC-compatible
  * reads, and validation for unsupported scope/transport combinations.
  */
-test('providerMcpService handles opencode MCP config and capability validation', { concurrency: false }, async () => {
+test('providerMcpService handles opencode MCP config and capability validation', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, { concurrency: false }, async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'llm-mcp-opencode-'));
   const workspacePath = path.join(tempRoot, 'workspace');
   await fs.mkdir(workspacePath, { recursive: true });
@@ -259,7 +259,7 @@ test('providerMcpService handles opencode MCP config and capability validation',
 /**
  * This test covers Cursor MCP JSON format and user/project scope persistence.
  */
-test('providerMcpService handles cursor MCP JSON config formats', { concurrency: false }, async () => {
+test('providerMcpService handles cursor MCP JSON config formats', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, { concurrency: false }, async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'llm-mcp-gc-'));
   const workspacePath = path.join(tempRoot, 'workspace');
   await fs.mkdir(workspacePath, { recursive: true });
@@ -298,7 +298,7 @@ test('providerMcpService handles cursor MCP JSON config formats', { concurrency:
  * This test covers the global MCP adder requirement: only http/stdio are allowed and
  * one payload is written to all providers.
  */
-test('providerMcpService global adder writes to all providers and rejects unsupported transports', { concurrency: false }, async () => {
+test('providerMcpService global adder writes to all providers and rejects unsupported transports', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, { concurrency: false }, async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'llm-mcp-global-'));
   const workspacePath = path.join(tempRoot, 'workspace');
   await fs.mkdir(workspacePath, { recursive: true });

@@ -708,7 +708,7 @@ router.post(
     const provider = parseProvider(req.params.provider);
     const sessionId = parseSessionId(req.params.sessionId);
     const model = parseSessionModelPayload(req.body);
-    const stored = providerModelsService.setSessionModel(provider, sessionId, model);
+    const stored = await providerModelsService.setSessionModel(provider, sessionId, model);
     // A session row only exists once the gateway has allocated one. Report the
     // selection back either way so the client can hold it until the first send.
     res.json(createApiSuccessResponse(
@@ -724,7 +724,7 @@ router.post(
     const provider = parseProvider(req.params.provider);
     const sessionId = parseSessionId(req.params.sessionId);
     const effort = parseSessionEffortPayload(req.body);
-    const stored = providerModelsService.setSessionEffort(provider, sessionId, effort);
+    const stored = await providerModelsService.setSessionEffort(provider, sessionId, effort);
     // Mirror active-model behavior for a composer that picked an effort just
     // before the session gateway created its row.
     res.json(createApiSuccessResponse(
@@ -870,7 +870,7 @@ router.post(
     const provider = parseProvider(body.provider);
     const projectPath = typeof body.projectPath === 'string' ? body.projectPath : '';
     const initialMessage = typeof body.initialMessage === 'string' ? body.initialMessage : '';
-    const result = sessionsService.createAppSession(provider, projectPath, initialMessage);
+    const result = await sessionsService.createAppSession(provider, projectPath, initialMessage);
     res.status(201).json(createApiSuccessResponse(result));
   }),
 );
@@ -888,7 +888,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const limit = parseBoundedIntegerQuery(req.query.limit, 'limit', 40, 1, 100);
     const offset = parseBoundedIntegerQuery(req.query.offset, 'offset', 0, 0);
-    const page = sessionsService.listRecentSessions(limit, offset);
+    const page = await sessionsService.listRecentSessions(limit, offset);
     res.json(createApiSuccessResponse(page));
   }),
 );
@@ -896,7 +896,7 @@ router.get(
 router.get(
   '/sessions/archived',
   asyncHandler(async (_req: Request, res: Response) => {
-    const sessions = sessionsService.listArchivedSessions();
+    const sessions = await sessionsService.listArchivedSessions();
     res.json(createApiSuccessResponse({ sessions }));
   }),
 );
@@ -905,7 +905,7 @@ router.get(
   '/sessions/:sessionId/provider-id',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
-    const providerSessionId = sessionsService.getProviderSessionId(sessionId);
+    const providerSessionId = await sessionsService.getProviderSessionId(sessionId);
     res.json(createApiSuccessResponse({ sessionId: providerSessionId }));
   }),
 );
@@ -925,7 +925,7 @@ router.get(
   '/sessions/:sessionId',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
-    const result = sessionsService.getSessionDetailsById(sessionId);
+    const result = await sessionsService.getSessionDetailsById(sessionId);
     res.json(createApiSuccessResponse(result));
   }),
 );
@@ -948,7 +948,7 @@ router.post(
   '/sessions/:sessionId/restore',
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
-    const result = sessionsService.restoreSessionById(sessionId);
+    const result = await sessionsService.restoreSessionById(sessionId);
     res.json(createApiSuccessResponse(result));
   }),
 );
@@ -967,7 +967,7 @@ router.put(
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = parseSessionId(req.params.sessionId);
     const summary = parseSessionRenameSummary(req.body);
-    const result = sessionsService.renameSessionById(sessionId, summary);
+    const result = await sessionsService.renameSessionById(sessionId, summary);
     res.json(createApiSuccessResponse(result));
   }),
 );

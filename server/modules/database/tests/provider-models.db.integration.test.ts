@@ -20,7 +20,7 @@ test('provider model repository stores custom rows only and maintains session re
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'provider-model-db-'));
   const databasePath = path.join(tempDirectory, 'auth.db');
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = databasePath;
   await writeFile(databasePath, '');
   await initializeDatabase();
@@ -40,16 +40,16 @@ test('provider model repository stores custom rows only and maintains session re
       'effort_values',
       'effort_default',
     ]);
-    assert.deepEqual(providerModelsDb.listCustomProviderModels('codex'), []);
+    assert.deepEqual(await providerModelsDb.listCustomProviderModels('codex'), []);
 
-    const custom = providerModelsDb.createCustomProviderModel('codex', {
+    const custom = await providerModelsDb.createCustomProviderModel('codex', {
       model: 'Private Gateway Model',
       id: 'gateway/model-v1',
     });
     assert.equal(custom.modelId, 'gateway/model-v1');
     assert.equal(custom.effort, null);
     assert.equal(
-      providerModelsDb.findCustomProviderModelByModelId('codex', 'gateway/model-v1')?.recordId,
+      (await providerModelsDb.findCustomProviderModelByModelId('codex', 'gateway/model-v1'))?.recordId,
       custom.recordId,
     );
 
@@ -63,28 +63,28 @@ test('provider model repository stores custom rows only and maintains session re
       VALUES ('session-1', 'codex', '/tmp/project-1', 'gateway/model-v1', 'high')
     `).run();
 
-    const updated = providerModelsDb.updateCustomProviderModel('codex', custom.recordId, {
+    const updated = await providerModelsDb.updateCustomProviderModel('codex', custom.recordId, {
       model: 'Private Gateway Model 2',
       id: 'gateway/model-v2',
     });
     assert.equal(updated?.modelId, 'gateway/model-v2');
-    assert.equal(sessionsDb.getSessionById('session-1')?.model, 'gateway/model-v2');
+    assert.equal((await sessionsDb.getSessionById('session-1'))?.model, 'gateway/model-v2');
     // A rename keeps the same underlying model, so its effort stays applicable.
-    assert.equal(sessionsDb.getSessionById('session-1')?.effort, 'high');
+    assert.equal((await sessionsDb.getSessionById('session-1'))?.effort, 'high');
 
-    const removed = providerModelsDb.deleteCustomProviderModel(
+    const removed = await providerModelsDb.deleteCustomProviderModel(
       'codex',
       custom.recordId,
       'gpt-default',
     );
     assert.equal(removed?.modelId, 'gateway/model-v2');
-    assert.equal(sessionsDb.getSessionById('session-1')?.model, 'gpt-default');
+    assert.equal((await sessionsDb.getSessionById('session-1'))?.model, 'gpt-default');
     // The effort belonged to the deleted model and must not survive onto the
     // fallback, which has its own default.
-    assert.equal(sessionsDb.getSessionById('session-1')?.effort, null);
-    assert.equal(providerModelsDb.getCustomProviderModel('codex', custom.recordId), null);
+    assert.equal((await sessionsDb.getSessionById('session-1'))?.effort, null);
+    assert.equal(await providerModelsDb.getCustomProviderModel('codex', custom.recordId), null);
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -99,7 +99,7 @@ test('migrations create the provider model index on an install that lacks it', a
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'provider-model-index-'));
   const databasePath = path.join(tempDirectory, 'auth.db');
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = databasePath;
   await writeFile(databasePath, '');
   await initializeDatabase();
@@ -119,7 +119,7 @@ test('migrations create the provider model index on an install that lacks it', a
       .map((column) => column.name);
     assert.deepEqual(indexedColumns, ['provider', 'sort_order', 'id']);
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -134,38 +134,38 @@ test('provider model repository persists declared effort levels', async () => {
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'provider-model-effort-'));
   const databasePath = path.join(tempDirectory, 'auth.db');
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = databasePath;
   await writeFile(databasePath, '');
   await initializeDatabase();
 
   try {
-    const custom = providerModelsDb.createCustomProviderModel('claude', {
+    const custom = await providerModelsDb.createCustomProviderModel('claude', {
       model: 'My Custom Model',
       id: 'my-custom-model',
       effort: { values: ['low', 'high'], default: 'high' },
     });
     assert.deepEqual(custom.effort, { values: ['low', 'high'], default: 'high' });
     assert.deepEqual(
-      providerModelsDb.listCustomProviderModels('claude')[0]?.effort,
+      (await providerModelsDb.listCustomProviderModels('claude'))[0]?.effort,
       { values: ['low', 'high'], default: 'high' },
     );
 
     // Omitting effort on update keeps the stored levels.
-    const renamed = providerModelsDb.updateCustomProviderModel('claude', custom.recordId, {
+    const renamed = await providerModelsDb.updateCustomProviderModel('claude', custom.recordId, {
       model: 'Renamed',
       id: 'my-custom-model',
     });
     assert.deepEqual(renamed?.effort, { values: ['low', 'high'], default: 'high' });
 
-    const narrowed = providerModelsDb.updateCustomProviderModel('claude', custom.recordId, {
+    const narrowed = await providerModelsDb.updateCustomProviderModel('claude', custom.recordId, {
       model: 'Renamed',
       id: 'my-custom-model',
       effort: { values: ['medium'] },
     });
     assert.deepEqual(narrowed?.effort, { values: ['medium'] });
 
-    const cleared = providerModelsDb.updateCustomProviderModel('claude', custom.recordId, {
+    const cleared = await providerModelsDb.updateCustomProviderModel('claude', custom.recordId, {
       model: 'Renamed',
       id: 'my-custom-model',
       effort: null,
@@ -176,7 +176,7 @@ test('provider model repository persists declared effort levels', async () => {
       .get(custom.recordId);
     assert.deepEqual(row, { effort_values: null, effort_default: null });
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -209,7 +209,7 @@ test('migrations add effort columns to an existing provider model table and keep
   `);
   legacyDb.close();
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = databasePath;
   await initializeDatabase();
 
@@ -219,15 +219,15 @@ test('migrations add effort columns to an existing provider model table and keep
     }>).map((column) => column.name);
     assert.deepEqual(columnNames.slice(-2), ['effort_values', 'effort_default']);
 
-    const [legacy] = providerModelsDb.listCustomProviderModels('codex');
+    const [legacy] = await providerModelsDb.listCustomProviderModels('codex');
     assert.equal(legacy?.modelId, 'legacy-model');
     assert.equal(legacy?.effort, null);
 
     // Running the migrations again is a no-op.
     runMigrations(getConnection());
-    assert.equal(providerModelsDb.listCustomProviderModels('codex')[0]?.effort, null);
+    assert.equal((await providerModelsDb.listCustomProviderModels('codex'))[0]?.effort, null);
   } finally {
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {

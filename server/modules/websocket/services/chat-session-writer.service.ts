@@ -17,7 +17,7 @@ type ChatSessionWriterOptions = {
    * (either via `setSessionId` or a `session_created` event). The registry
    * persists the app-id-to-provider-id mapping from this callback.
    */
-  onProviderSessionId: (providerSessionId: string) => void;
+  onProviderSessionId: (providerSessionId: string) => Promise<void>;
   /**
    * Remaps/sequences/buffers one outbound live event. Implemented by the chat
    * run registry; the writer never forwards a provider event untouched.
@@ -83,7 +83,7 @@ export class ChatSessionWriter {
     this.providerSessionId = options.providerSessionId;
   }
 
-  send(data: unknown): void {
+  async send(data: unknown): Promise<void> {
     const record = readObjectRecord(data);
     if (!record || typeof record.kind !== 'string') {
       // Provider runtimes only emit kind-based normalized messages. Anything
@@ -101,7 +101,7 @@ export class ChatSessionWriter {
           ? message.newSessionId
           : message.sessionId;
       if (announcedId) {
-        this.captureProviderSessionId(announcedId);
+        await this.captureProviderSessionId(announcedId);
       }
       // Swallowed on purpose: the frontend already has the stable app session
       // id, so there is no client-side handoff to perform anymore.
@@ -140,21 +140,21 @@ export class ChatSessionWriter {
     this.connections.add(newConnection);
   }
 
-  setSessionId(sessionId: string): void {
-    this.captureProviderSessionId(sessionId);
+  async setSessionId(sessionId: string): Promise<void> {
+    await this.captureProviderSessionId(sessionId);
   }
 
   getSessionId(): string | null {
     return this.providerSessionId;
   }
 
-  private captureProviderSessionId(providerSessionId: string): void {
+  private async captureProviderSessionId(providerSessionId: string): Promise<void> {
     if (!providerSessionId || this.providerSessionId === providerSessionId) {
       return;
     }
 
     this.providerSessionId = providerSessionId;
-    this.options.onProviderSessionId(providerSessionId);
+    await this.options.onProviderSessionId(providerSessionId);
   }
 
   private forward(message: NormalizedMessage): void {

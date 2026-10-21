@@ -28,7 +28,7 @@ function getUserClients(userId: unknown, create = false): Map<string, WebSocket>
   return clients || null;
 }
 
-export function registerDesktopNotificationClient({
+export async function registerDesktopNotificationClient({
   userId,
   deviceId,
   label = null,
@@ -49,7 +49,7 @@ export function registerDesktopNotificationClient({
     return false;
   }
 
-  const endpoint = notificationChannelEndpointsDb.upsertEndpoint({
+  const endpoint = await notificationChannelEndpointsDb.upsertEndpoint({
     userId: normalizedUserId,
     channel: DESKTOP_CHANNEL,
     endpointId,
@@ -83,7 +83,7 @@ export function unregisterDesktopNotificationClient(ws: WebSocket): void {
   clientBySocket.delete(ws);
 }
 
-export function sendDesktopNotification(userId: unknown, payload: unknown): { attempted: number; sent: number } {
+export async function sendDesktopNotification(userId: unknown, payload: unknown): Promise<{ attempted: number; sent: number }> {
   const normalizedUserId = normalizeUserId(userId);
   if (!normalizedUserId) return { attempted: 0, sent: 0 };
 
@@ -91,8 +91,8 @@ export function sendDesktopNotification(userId: unknown, payload: unknown): { at
   if (!clients?.size) return { attempted: 0, sent: 0 };
 
   const enabledEndpointIds = new Set(
-    notificationChannelEndpointsDb
-      .getEnabledEndpoints(normalizedUserId, DESKTOP_CHANNEL)
+    (await notificationChannelEndpointsDb
+      .getEnabledEndpoints(normalizedUserId, DESKTOP_CHANNEL))
       .map((endpoint) => endpoint.endpoint_id)
   );
 
@@ -113,7 +113,7 @@ export function sendDesktopNotification(userId: unknown, payload: unknown): { at
     }
     try {
       ws.send(message);
-      notificationChannelEndpointsDb.touchEndpoint(normalizedUserId, DESKTOP_CHANNEL, endpointId);
+      await notificationChannelEndpointsDb.touchEndpoint(normalizedUserId, DESKTOP_CHANNEL, endpointId);
       sent += 1;
     } catch {
       unregisterDesktopNotificationClient(ws);

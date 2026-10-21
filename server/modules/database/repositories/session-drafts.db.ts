@@ -1,4 +1,4 @@
-import { getConnection } from '@/modules/database/connection.js';
+import { all, get, run, transaction } from '@/modules/database/connection.js';
 
 /**
  * One chat scope's unsent state: the text still in the composer, plus the
@@ -63,30 +63,21 @@ export const sessionDraftsDb = {
    * having them all up front means switching sessions restores a draft written
    * on another device without a round trip.
    */
-  getDrafts(userId: number): SessionDraftRecord[] {
-    const db = getConnection();
-    const rows = db
-      .prepare(
-        `SELECT draft_scope, draft_text, queued_message, updated_at
+  async getDrafts(userId: number): Promise<SessionDraftRecord[]> {
+    const rows = (await all(`SELECT draft_scope, draft_text, queued_message, updated_at
          FROM session_drafts
          WHERE user_id = ?
-         ORDER BY datetime(updated_at) DESC`
-      )
-      .all(userId) as DraftRow[];
+         ORDER BY datetime(updated_at) DESC`, [userId])) as DraftRow[];
 
     return rows.map(toRecord);
   },
 
   /** Lists persisted queued turns whose scopes are real chat sessions. */
-  listQueuedMessages(): QueuedSessionMessageRecord[] {
-    const rows = getConnection()
-      .prepare(
-        `SELECT drafts.user_id, drafts.draft_scope, drafts.queued_message
+  async listQueuedMessages(): Promise<QueuedSessionMessageRecord[]> {
+    const rows = (await all(`SELECT drafts.user_id, drafts.draft_scope, drafts.queued_message
          FROM session_drafts AS drafts
          INNER JOIN sessions ON sessions.session_id = drafts.draft_scope
-         WHERE drafts.queued_message IS NOT NULL`
-      )
-      .all() as QueuedMessageRow[];
+         WHERE drafts.queued_message IS NOT NULL`)) as QueuedMessageRow[];
 
     return rows.map((row) => ({
       userId: row.user_id,
@@ -97,36 +88,24 @@ export const sessionDraftsDb = {
   },
 
   /** Atomically removes a queued turn only if it has not been edited since listing. */
-  claimQueuedMessage(candidate: QueuedSessionMessageRecord): boolean {
-    const result = getConnection()
-      .prepare(
-        `UPDATE session_drafts
+  async claimQueuedMessage(candidate: QueuedSessionMessageRecord): Promise<boolean> {
+    const result = (await run(`UPDATE session_drafts
          SET queued_message = NULL, updated_at = CURRENT_TIMESTAMP
-         WHERE user_id = ? AND draft_scope = ? AND queued_message = ?`
-      )
-      .run(candidate.userId, candidate.sessionId, candidate.claimToken);
+         WHERE user_id = ? AND draft_scope = ? AND queued_message = ?`, [candidate.userId, candidate.sessionId, candidate.claimToken]));
     return result.changes > 0;
   },
 
   /** Restores a claim lost to the narrow race where another run starts first. */
-  restoreQueuedMessage(candidate: QueuedSessionMessageRecord): void {
-    getConnection()
-      .prepare(
-        `UPDATE session_drafts
+  async restoreQueuedMessage(candidate: QueuedSessionMessageRecord): Promise<void> {
+    (await run(`UPDATE session_drafts
          SET queued_message = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE user_id = ? AND draft_scope = ? AND queued_message IS NULL`
-      )
-      .run(candidate.claimToken, candidate.userId, candidate.sessionId);
+         WHERE user_id = ? AND draft_scope = ? AND queued_message IS NULL`, [candidate.claimToken, candidate.userId, candidate.sessionId]));
   },
 
   /** Removes the placeholder row left after its last queued turn is claimed. */
-  deleteEmptyDraft(userId: number, scope: string): void {
-    getConnection()
-      .prepare(
-        `DELETE FROM session_drafts
-         WHERE user_id = ? AND draft_scope = ? AND draft_text = '' AND queued_message IS NULL`
-      )
-      .run(userId, scope);
+  async deleteEmptyDraft(userId: number, scope: string): Promise<void> {
+    (await run(`DELETE FROM session_drafts
+         WHERE user_id = ? AND draft_scope = ? AND draft_text = '' AND queued_message IS NULL`, [userId, scope]));
   },
 
   /**
@@ -135,37 +114,29 @@ export const sessionDraftsDb = {
    * Deleting on empty is what stops the table growing a permanent row for every
    * session the user ever opened and typed a character into.
    */
-  saveDraft(
+  async saveDraft(
     userId: number,
     scope: string,
     draft: { text: string; queuedMessage: unknown | null }
-  ): void {
-    const db = getConnection();
+  ): Promise<void> {
 
     if (!draft.text && draft.queuedMessage === null) {
-      db.prepare('DELETE FROM session_drafts WHERE user_id = ? AND draft_scope = ?')
-        .run(userId, scope);
+      (await run('DELETE FROM session_drafts WHERE user_id = ? AND draft_scope = ?', [userId, scope]));
       return;
     }
 
-    db.prepare(
-      `INSERT INTO session_drafts (user_id, draft_scope, draft_text, queued_message, updated_at)
+    (await run(`INSERT INTO session_drafts (user_id, draft_scope, draft_text, queued_message, updated_at)
        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(user_id, draft_scope) DO UPDATE SET
          draft_text = excluded.draft_text,
          queued_message = excluded.queued_message,
-         updated_at = CURRENT_TIMESTAMP`
-    ).run(
-      userId,
+         updated_at = CURRENT_TIMESTAMP`, [userId,
       scope,
       draft.text,
-      draft.queuedMessage === null ? null : JSON.stringify(draft.queuedMessage)
-    );
+      draft.queuedMessage === null ? null : JSON.stringify(draft.queuedMessage)]));
   },
 
-  deleteDraft(userId: number, scope: string): void {
-    const db = getConnection();
-    db.prepare('DELETE FROM session_drafts WHERE user_id = ? AND draft_scope = ?')
-      .run(userId, scope);
+  async deleteDraft(userId: number, scope: string): Promise<void> {
+    (await run('DELETE FROM session_drafts WHERE user_id = ? AND draft_scope = ?', [userId, scope]));
   },
 };

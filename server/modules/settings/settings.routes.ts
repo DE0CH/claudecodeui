@@ -22,29 +22,29 @@ export function createSettingsRouter(
       try { res.json(await operation(req)); } catch (error) { next(error); }
     };
 
-  router.get('/api-keys', respond((req) => service.listApiKeys(userId(req))));
-  router.post('/api-keys', respond((req) => service.createApiKey(userId(req), req.body?.keyName)));
-  router.delete('/api-keys/:keyId', respond((req) => service.deleteApiKey(userId(req), Number(req.params.keyId))));
-  router.patch('/api-keys/:keyId/toggle', respond((req) => service.toggleApiKey(
+  router.get('/api-keys', respond(async (req) => await service.listApiKeys(userId(req))));
+  router.post('/api-keys', respond(async (req) => await service.createApiKey(userId(req), req.body?.keyName)));
+  router.delete('/api-keys/:keyId', respond(async (req) => await service.deleteApiKey(userId(req), Number(req.params.keyId))));
+  router.patch('/api-keys/:keyId/toggle', respond(async (req) => await service.toggleApiKey(
     userId(req), Number(req.params.keyId), req.body?.isActive,
   )));
-  router.get('/credentials', respond((req) => service.listCredentials(
+  router.get('/credentials', respond(async (req) => await service.listCredentials(
     userId(req), queryString(req.query.type),
   )));
-  router.post('/credentials', respond((req) => service.createCredential(userId(req), req.body ?? {})));
-  router.delete('/credentials/:credentialId', respond((req) => service.deleteCredential(
+  router.post('/credentials', respond(async (req) => await service.createCredential(userId(req), req.body ?? {})));
+  router.delete('/credentials/:credentialId', respond(async (req) => await service.deleteCredential(
     userId(req), Number(req.params.credentialId),
   )));
-  router.patch('/credentials/:credentialId/toggle', respond((req) => service.toggleCredential(
+  router.patch('/credentials/:credentialId/toggle', respond(async (req) => await service.toggleCredential(
     userId(req), Number(req.params.credentialId), req.body?.isActive,
   )));
-  router.get('/notification-preferences', respond((req) => service.getNotificationPreferences(userId(req))));
-  router.put('/notification-preferences', respond((req) => service.updateNotificationPreferences(
+  router.get('/notification-preferences', respond(async (req) => await service.getNotificationPreferences(userId(req))));
+  router.put('/notification-preferences', respond(async (req) => await service.updateNotificationPreferences(
     userId(req), req.body ?? {},
   )));
   router.get('/push/vapid-public-key', respond(() => service.getVapidPublicKey()));
-  router.post('/push/subscribe', respond((req) => service.subscribeToPush(userId(req), req.body ?? {})));
-  router.post('/push/unsubscribe', respond((req) => service.unsubscribeFromPush(
+  router.post('/push/subscribe', respond(async (req) => await service.subscribeToPush(userId(req), req.body ?? {})));
+  router.post('/push/unsubscribe', respond(async (req) => await service.unsubscribeFromPush(
     userId(req), req.body?.endpoint,
   )));
   return router;

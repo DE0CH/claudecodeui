@@ -30,12 +30,12 @@ function uniqueProjectIds(projectIds: string[]): string[] {
  *
  * The operation is idempotent: already-starred projects are ignored, unknown ids are skipped.
  */
-export function applyLegacyStarredProjectIds(projectIds: string[]): ApplyLegacyStarredProjectIdsResult {
+export async function applyLegacyStarredProjectIds(projectIds: string[]): Promise<ApplyLegacyStarredProjectIdsResult> {
   const normalizedProjectIds = uniqueProjectIds(projectIds);
   let updated = 0;
 
   for (const projectId of normalizedProjectIds) {
-    const project = projectsDb.getProjectById(projectId);
+    const project = await projectsDb.getProjectById(projectId);
     if (!project) {
       continue;
     }
@@ -44,7 +44,7 @@ export function applyLegacyStarredProjectIds(projectIds: string[]): ApplyLegacyS
       continue;
     }
 
-    projectsDb.updateProjectIsStarredById(projectId, true);
+    await projectsDb.updateProjectIsStarredById(projectId, true);
     updated += 1;
   }
 
@@ -54,7 +54,7 @@ export function applyLegacyStarredProjectIds(projectIds: string[]): ApplyLegacyS
 /**
  * Flips `projects.isStarred` for one project and returns the new state.
  */
-export function toggleProjectStar(projectId: string): ToggleProjectStarResult {
+export async function toggleProjectStar(projectId: string): Promise<ToggleProjectStarResult> {
   const normalizedProjectId = normalizeProjectId(projectId);
   if (!normalizedProjectId) {
     throw new AppError('projectId is required', {
@@ -63,7 +63,7 @@ export function toggleProjectStar(projectId: string): ToggleProjectStarResult {
     });
   }
 
-  const project = projectsDb.getProjectById(normalizedProjectId);
+  const project = await projectsDb.getProjectById(normalizedProjectId);
   if (!project) {
     throw new AppError('Project not found', {
       code: 'PROJECT_NOT_FOUND',
@@ -72,7 +72,7 @@ export function toggleProjectStar(projectId: string): ToggleProjectStarResult {
   }
 
   const nextStarredState = !project.isStarred;
-  projectsDb.updateProjectIsStarredById(normalizedProjectId, nextStarredState);
+  await projectsDb.updateProjectIsStarredById(normalizedProjectId, nextStarredState);
 
   return { isStarred: nextStarredState };
 }

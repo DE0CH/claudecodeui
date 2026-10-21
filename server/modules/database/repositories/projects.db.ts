@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
-import { getConnection } from '@/modules/database/connection.js';
+import { all, get, run, transaction } from '@/modules/database/connection.js';
 import type { CreateProjectPathResult, ProjectRepositoryRow } from '@/shared/types.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
 
@@ -16,19 +16,18 @@ function normalizeProjectDisplayName(projectPath: string, customProjectName: str
 }
 
 export const projectsDb = {
-    createProjectPath(projectPath: string, customProjectName: string | null = null): CreateProjectPathResult {
-        const db = getConnection();
+    async createProjectPath(projectPath: string, customProjectName: string | null = null): Promise<CreateProjectPathResult> {
         const normalizedProjectPath = normalizeProjectPath(projectPath);
         const normalizedProjectName = normalizeProjectDisplayName(normalizedProjectPath, customProjectName);
         const attemptedId = randomUUID();
-        const row = db.prepare(`
+        const row = (await get(`
         INSERT INTO projects (project_id, project_path, custom_project_name, isArchived)
             VALUES (?, ?, ?, 0)
             ON CONFLICT(project_path) DO UPDATE SET
             isArchived = 0
             WHERE projects.isArchived = 1
             RETURNING project_id, project_path, custom_project_name, isStarred, isArchived
-        `).get(attemptedId, normalizedProjectPath, normalizedProjectName) as ProjectRepositoryRow | undefined;
+        `, [attemptedId, normalizedProjectPath, normalizedProjectName])) as ProjectRepositoryRow | undefined;
 
         if (row) {
             return {
@@ -37,32 +36,30 @@ export const projectsDb = {
             };
         }
 
-        const existingProject = projectsDb.getProjectPath(normalizedProjectPath);
+        const existingProject = await projectsDb.getProjectPath(normalizedProjectPath);
         return {
             outcome: 'active_conflict',
             project: existingProject,
         };
     },
 
-    getProjectPath(projectPath: string): ProjectRepositoryRow | null {
-        const db = getConnection();
+    async getProjectPath(projectPath: string): Promise<ProjectRepositoryRow | null> {
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        const row = db.prepare(`
+        const row = (await get(`
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived
             FROM projects
             WHERE project_path = ?
-        `).get(normalizedProjectPath) as ProjectRepositoryRow | undefined;
+        `, [normalizedProjectPath])) as ProjectRepositoryRow | undefined;
 
         return row ?? null;
     },
 
-    getProjectById(projectId: string): ProjectRepositoryRow | null {
-        const db = getConnection();
-        const row = db.prepare(`
+    async getProjectById(projectId: string): Promise<ProjectRepositoryRow | null> {
+        const row = (await get(`
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived
             FROM projects
             WHERE project_id = ?
-        `).get(projectId) as ProjectRepositoryRow | undefined;
+        `, [projectId])) as ProjectRepositoryRow | undefined;
 
         return row ?? null;
     },
@@ -75,122 +72,110 @@ export const projectsDb = {
      * path through this helper before touching the filesystem. Returns `null` when the
      * project row does not exist so callers can respond with a 404.
      */
-    getProjectPathById(projectId: string): string | null {
-        const db = getConnection();
-        const row = db.prepare(`
+    async getProjectPathById(projectId: string): Promise<string | null> {
+        const row = (await get(`
             SELECT project_path
             FROM projects
             WHERE project_id = ?
-        `).get(projectId) as Pick<ProjectRepositoryRow, 'project_path'> | undefined;
+        `, [projectId])) as Pick<ProjectRepositoryRow, 'project_path'> | undefined;
 
         return row?.project_path ?? null;
     },
 
-    getProjectPaths(): ProjectRepositoryRow[] {
-        const db = getConnection();
-        return db.prepare(`
+    async getProjectPaths(): Promise<ProjectRepositoryRow[]> {
+        return (await all(`
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived
             FROM projects
             WHERE isArchived = 0
-        `).all() as ProjectRepositoryRow[];
+        `)) as ProjectRepositoryRow[];
     },
 
     /**
      * Archived rows are queried separately so archive-focused UIs can present
      * hidden workspaces without reintroducing them into the active sidebar list.
      */
-    getArchivedProjectPaths(): ProjectRepositoryRow[] {
-        const db = getConnection();
-        return db.prepare(`
+    async getArchivedProjectPaths(): Promise<ProjectRepositoryRow[]> {
+        return (await all(`
             SELECT project_id, project_path, custom_project_name, isStarred, isArchived
             FROM projects
             WHERE isArchived = 1
-        `).all() as ProjectRepositoryRow[];
+        `)) as ProjectRepositoryRow[];
     },
 
-    getCustomProjectName(projectPath: string): string | null {
-        const db = getConnection();
+    async getCustomProjectName(projectPath: string): Promise<string | null> {
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        const row = db.prepare(`
+        const row = (await get(`
             SELECT custom_project_name
             FROM projects
             WHERE project_path = ?
-        `).get(normalizedProjectPath) as Pick<ProjectRepositoryRow, 'custom_project_name'> | undefined;
+        `, [normalizedProjectPath])) as Pick<ProjectRepositoryRow, 'custom_project_name'> | undefined;
 
         return row?.custom_project_name ?? null;
     },
 
-    updateCustomProjectName(projectPath: string, customProjectName: string | null): void {
-        const db = getConnection();
+    async updateCustomProjectName(projectPath: string, customProjectName: string | null): Promise<void> {
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        db.prepare(`
+        (await run(`
             INSERT INTO projects (project_id, project_path, custom_project_name)
             VALUES (?, ?, ?)
             ON CONFLICT(project_path) DO UPDATE SET custom_project_name = excluded.custom_project_name
-        `).run(randomUUID(), normalizedProjectPath, customProjectName);
+        `, [randomUUID(), normalizedProjectPath, customProjectName]));
     },
 
-    updateCustomProjectNameById(projectId: string, customProjectName: string | null): void {
-        const db = getConnection();
-        db.prepare(`
+    async updateCustomProjectNameById(projectId: string, customProjectName: string | null): Promise<void> {
+        (await run(`
             UPDATE projects
             SET custom_project_name = ?
             WHERE project_id = ?
-        `).run(customProjectName, projectId);
+        `, [customProjectName, projectId]));
     },
 
-    updateProjectIsStarred(projectPath: string, isStarred: boolean): void {
-        const db = getConnection();
+    async updateProjectIsStarred(projectPath: string, isStarred: boolean): Promise<void> {
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        db.prepare(`
+        (await run(`
             UPDATE projects
             SET isStarred = ?
             WHERE project_path = ?
-        `).run(isStarred ? 1 : 0, normalizedProjectPath);
+        `, [isStarred ? 1 : 0, normalizedProjectPath]));
     },
 
-    updateProjectIsStarredById(projectId: string, isStarred: boolean): void {
-        const db = getConnection();
-        db.prepare(`
+    async updateProjectIsStarredById(projectId: string, isStarred: boolean): Promise<void> {
+        (await run(`
             UPDATE projects
             SET isStarred = ?
             WHERE project_id = ?
-        `).run(isStarred ? 1 : 0, projectId);
+        `, [isStarred ? 1 : 0, projectId]));
     },
 
-    updateProjectIsArchived(projectPath: string, isArchived: boolean): void {
-        const db = getConnection();
+    async updateProjectIsArchived(projectPath: string, isArchived: boolean): Promise<void> {
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        db.prepare(`
+        (await run(`
             UPDATE projects
             SET isArchived = ?
             WHERE project_path = ?
-        `).run(isArchived ? 1 : 0, normalizedProjectPath);
+        `, [isArchived ? 1 : 0, normalizedProjectPath]));
     },
 
-    updateProjectIsArchivedById(projectId: string, isArchived: boolean): void {
-        const db = getConnection();
-        db.prepare(`
+    async updateProjectIsArchivedById(projectId: string, isArchived: boolean): Promise<void> {
+        (await run(`
             UPDATE projects
             SET isArchived = ?
             WHERE project_id = ?
-        `).run(isArchived ? 1 : 0, projectId);
+        `, [isArchived ? 1 : 0, projectId]));
     },
 
-    deleteProjectPath(projectPath: string): void {
-        const db = getConnection();
+    async deleteProjectPath(projectPath: string): Promise<void> {
         const normalizedProjectPath = normalizeProjectPath(projectPath);
-        db.prepare(`
+        (await run(`
             DELETE FROM projects
             WHERE project_path = ?
-        `).run(normalizedProjectPath);
+        `, [normalizedProjectPath]));
     },
 
-    deleteProjectById(projectId: string): void {
-        const db = getConnection();
-        db.prepare(`
+    async deleteProjectById(projectId: string): Promise<void> {
+        (await run(`
             DELETE FROM projects
             WHERE project_id = ?
-        `).run(projectId);
+        `, [projectId]));
     },
 };

@@ -275,7 +275,7 @@ Custom commands can be created in:
     };
   },
 
-  "/models": (args, context) => executeModelsCommand(args, context, providerModelsService),
+  "/models": async (args, context) => executeModelsCommand(args, context, providerModelsService),
 
   "/cost": async (args, context) => {
     const tokenUsage = context?.tokenUsage || {};

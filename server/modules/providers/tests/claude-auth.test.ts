@@ -25,7 +25,7 @@ const checkCredentials = (auth: ClaudeProviderAuth): Promise<CheckCredentialsRes
 // getStatus() is the public API the route serves, but it first shells out to
 // `claude --version`. Stubbing checkInstalled() lets the test cover the mapping
 // from checkCredentials() to the wire shape without the CLI.
-const getStatusWithCliInstalled = (auth: ClaudeProviderAuth): Promise<ProviderAuthStatus> => {
+const getStatusWithCliInstalled = async (auth: ClaudeProviderAuth): Promise<ProviderAuthStatus> => {
   (auth as unknown as { checkInstalled: () => boolean }).checkInstalled = () => true;
   return auth.getStatus();
 };

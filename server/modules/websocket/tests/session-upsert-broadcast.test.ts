@@ -24,7 +24,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   const previousDatabasePath = process.env.DATABASE_PATH;
   const tempDirectory = await mkdtemp(path.join(tmpdir(), 'session-upsert-broadcast-'));
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await initializeDatabase();
 
@@ -32,7 +32,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
     await runTest();
   } finally {
     connectedClients.clear();
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {
@@ -44,8 +44,8 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
 
 test('an upsert always carries the provider session id', async () => {
   await withIsolatedDatabase(async () => {
-    sessionsDb.createAppSession('app-1', 'opencode', '/workspace/demo');
-    sessionsDb.assignProviderSessionId('app-1', 'native-1');
+    await sessionsDb.createAppSession('app-1', 'opencode', '/workspace/demo');
+    await sessionsDb.assignProviderSessionId('app-1', 'native-1');
 
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
@@ -61,8 +61,8 @@ test('an upsert always carries the provider session id', async () => {
 
 test('the watcher path resolves a provider-native id to the same canonical event', async () => {
   await withIsolatedDatabase(async () => {
-    sessionsDb.createAppSession('app-2', 'opencode', '/workspace/demo');
-    sessionsDb.assignProviderSessionId('app-2', 'native-2');
+    await sessionsDb.createAppSession('app-2', 'opencode', '/workspace/demo');
+    await sessionsDb.assignProviderSessionId('app-2', 'native-2');
 
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
@@ -78,7 +78,7 @@ test('the watcher path resolves a provider-native id to the same canonical event
 
 test('a session with no provider id yet reports null rather than omitting the field', async () => {
   await withIsolatedDatabase(async () => {
-    sessionsDb.createAppSession('app-3', 'claude', '/workspace/demo');
+    await sessionsDb.createAppSession('app-3', 'claude', '/workspace/demo');
 
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
@@ -105,8 +105,8 @@ test('an unresolvable id broadcasts nothing', async () => {
 
 test('a batch delivers every resolvable session and skips the rest', async () => {
   await withIsolatedDatabase(async () => {
-    sessionsDb.createAppSession('app-4', 'claude', '/workspace/demo');
-    sessionsDb.createAppSession('app-5', 'claude', '/workspace/demo');
+    await sessionsDb.createAppSession('app-4', 'claude', '/workspace/demo');
+    await sessionsDb.createAppSession('app-5', 'claude', '/workspace/demo');
 
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
@@ -122,7 +122,7 @@ test('a batch delivers every resolvable session and skips the rest', async () =>
 
 test('a closed socket is skipped', async () => {
   await withIsolatedDatabase(async () => {
-    sessionsDb.createAppSession('app-6', 'claude', '/workspace/demo');
+    await sessionsDb.createAppSession('app-6', 'claude', '/workspace/demo');
 
     const open = new FakeConnection();
     const closing = new FakeConnection();

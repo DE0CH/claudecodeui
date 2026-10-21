@@ -25,14 +25,14 @@ async function buildSessionUpsertedEvent(
   // the id written in the transcript. For a row where the two ids are equal
   // — legacy rows, and any session indexed from disk before its mapping
   // existed — both lookups land on the same row anyway.
-  const row = sessionsDb.getSessionByProviderSessionId(sessionIdOrProviderSessionId)
-    ?? sessionsDb.getSessionById(sessionIdOrProviderSessionId);
+  const row = await sessionsDb.getSessionByProviderSessionId(sessionIdOrProviderSessionId)
+    ?? await sessionsDb.getSessionById(sessionIdOrProviderSessionId);
   if (!row || row.isArchived) {
     return null;
   }
 
   const projectPath = row.project_path;
-  const project = projectPath ? projectsDb.getProjectPath(projectPath) : null;
+  const project = projectPath ? await projectsDb.getProjectPath(projectPath) : null;
   const displayName = project?.custom_project_name?.trim()
     ? project.custom_project_name
     : await generateDisplayName(path.basename(projectPath ?? '') || (projectPath ?? ''), projectPath);

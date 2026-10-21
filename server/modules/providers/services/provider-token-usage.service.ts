@@ -9,7 +9,7 @@ import { sessionsDb } from '@/modules/database/index.js';
 import type { AnyRecord } from '@/shared/types.js';
 import { AppError, getOpenCodeDatabasePath } from '@/shared/utils.js';
 
-type SessionRow = NonNullable<ReturnType<typeof sessionsDb.getSessionById>>;
+type SessionRow = NonNullable<Awaited<ReturnType<typeof sessionsDb.getSessionById>>>;
 
 type FileTail = {
   content: string;
@@ -18,7 +18,7 @@ type FileTail = {
 };
 
 type ProviderTokenUsageServiceDependencies = {
-  getSessionById: (sessionId: string) => SessionRow | null | undefined;
+  getSessionById: (sessionId: string) => Promise<SessionRow | null | undefined>;
   getHomeDirectory: () => string;
   getOpenCodeDatabasePath: () => string;
   fileExists: (filePath: string) => boolean;
@@ -27,7 +27,7 @@ type ProviderTokenUsageServiceDependencies = {
   readTextFileTail: (filePath: string, maxBytes: number) => Promise<FileTail>;
   getClaudeContextWindow: () => string | undefined;
   getReportedClaudeContextWindow: (providerSessionId: string) => number | undefined;
-  isProviderSessionSuperseded: (providerSessionId: string, provider: string) => boolean;
+  isProviderSessionSuperseded: (providerSessionId: string, provider: string) => Promise<boolean>;
 };
 
 type TokenUsageResult = {
@@ -63,7 +63,7 @@ type OpenCodeTokenRow = {
 const TOKEN_USAGE_TAIL_BYTES = 4 * 1024 * 1024;
 
 const defaultDependencies: ProviderTokenUsageServiceDependencies = {
-  getSessionById: (sessionId) => sessionsDb.getSessionById(sessionId),
+  getSessionById: async (sessionId) => await sessionsDb.getSessionById(sessionId),
   getHomeDirectory: () => os.homedir(),
   getOpenCodeDatabasePath,
   fileExists: (filePath) => fsSync.existsSync(filePath),
@@ -94,8 +94,8 @@ const defaultDependencies: ProviderTokenUsageServiceDependencies = {
   },
   getClaudeContextWindow: () => process.env.CONTEXT_WINDOW,
   getReportedClaudeContextWindow: (providerSessionId) => getReportedClaudeContextWindow(providerSessionId),
-  isProviderSessionSuperseded: (providerSessionId, provider) =>
-    sessionsDb.isProviderSessionSuperseded(providerSessionId, provider),
+  isProviderSessionSuperseded: async (providerSessionId, provider) =>
+    await sessionsDb.isProviderSessionSuperseded(providerSessionId, provider),
 };
 
 /**
@@ -408,7 +408,7 @@ export function createProviderTokenUsageService(
      * session id, then returns the latest usage snapshot for that provider.
      */
     async getSessionTokenUsage(sessionId: string): Promise<TokenUsageResult> {
-      const session = dependencies.getSessionById(sessionId);
+      const session = await dependencies.getSessionById(sessionId);
       if (!session) {
         throw new AppError(`Session "${sessionId}" was not found.`, {
           code: 'SESSION_NOT_FOUND',
@@ -424,7 +424,7 @@ export function createProviderTokenUsageService(
       // conversation's usage against an empty one.
       if (
         !session.provider_session_id
-        && dependencies.isProviderSessionSuperseded(sessionId, session.provider)
+        && await dependencies.isProviderSessionSuperseded(sessionId, session.provider)
       ) {
         return {
           used: 0,

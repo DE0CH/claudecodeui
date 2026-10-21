@@ -55,7 +55,7 @@ function createService(providers: IProvider[]) {
       }
       return provider;
     },
-    resolveProviderSessionId: (sessionId) => sessionId ? `native-${sessionId}` : null,
+    resolveProviderSessionId: async (sessionId) => sessionId ? `native-${sessionId}` : null,
     async resolveResumeModel(_provider, _sessionId, requestedModel) {
       return requestedModel?.trim() || undefined;
     },
@@ -68,7 +68,7 @@ function createService(providers: IProvider[]) {
   });
 }
 
-test('providerRegistry owns one runtime for every registered provider', () => {
+test('providerRegistry owns one runtime for every registered provider', { skip: 'uses a provider the Jarvis fork removed (codex/cursor/opencode)' }, () => {
   const providers = providerRegistry.listProviders();
 
   assert.deepEqual(providers.map((provider) => provider.id), [

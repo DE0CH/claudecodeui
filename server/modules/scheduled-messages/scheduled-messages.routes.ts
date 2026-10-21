@@ -36,8 +36,8 @@ router.get(
     const userId = readUserId(req);
     res.json(createApiSuccessResponse(
       sessionId
-        ? scheduledMessagesService.listForSession(userId, sessionId)
-        : scheduledMessagesService.listPending(userId),
+        ? await scheduledMessagesService.listForSession(userId, sessionId)
+        : await scheduledMessagesService.listPending(userId),
     ));
   }),
 );
@@ -46,7 +46,7 @@ router.post(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const result = scheduledMessagesService.schedule({
+    const result = await scheduledMessagesService.schedule({
       userId: readUserId(req),
       sessionId: readString(body.sessionId, 'sessionId'),
       content: readString(body.content, 'content'),
@@ -60,7 +60,7 @@ router.post(
 router.delete(
   '/:id',
   asyncHandler(async (req: Request, res: Response) => {
-    scheduledMessagesService.cancel(readUserId(req), readString(req.params.id, 'id'));
+    await scheduledMessagesService.cancel(readUserId(req), readString(req.params.id, 'id'));
     res.json(createApiSuccessResponse({ cancelled: true }));
   }),
 );

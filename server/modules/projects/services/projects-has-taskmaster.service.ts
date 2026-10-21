@@ -50,7 +50,7 @@ type GetProjectTaskMasterByIdResult = {
 };
 
 type GetProjectTaskMasterDependencies = {
-  resolveProjectPathById: (projectId: string) => string | null;
+  resolveProjectPathById: (projectId: string) => Promise<string | null>;
   detectTaskMasterFolder: (projectPath: string) => Promise<TaskMasterDetectionResult>;
 };
 
@@ -203,7 +203,7 @@ function normalizeTaskMasterInfo(taskMasterResult: TaskMasterDetectionResult | n
 }
 
 const defaultDependencies: GetProjectTaskMasterDependencies = {
-  resolveProjectPathById: (projectId: string): string | null => projectsDb.getProjectPathById(projectId),
+  resolveProjectPathById: async (projectId: string): Promise<string | null> => await projectsDb.getProjectPathById(projectId),
   detectTaskMasterFolder,
 };
 
@@ -211,7 +211,7 @@ export async function getProjectTaskMasterById(
   projectId: string,
   dependencies: GetProjectTaskMasterDependencies = defaultDependencies,
 ): Promise<GetProjectTaskMasterByIdResult | null> {
-  const projectPath = dependencies.resolveProjectPathById(projectId);
+  const projectPath = await dependencies.resolveProjectPathById(projectId);
   if (!projectPath) {
     return null;
   }

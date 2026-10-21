@@ -41,7 +41,7 @@ async function withGateway(
   const previousDatabasePath = process.env.DATABASE_PATH;
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'chat-stop-task-'));
 
-  closeConnection();
+  await closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await initializeDatabase();
 
@@ -49,7 +49,7 @@ async function withGateway(
   const socket = createFakeSocket();
 
   try {
-    sessionsDb.createAppSession(SESSION_ID, 'claude', tempDirectory);
+    await sessionsDb.createAppSession(SESSION_ID, 'claude', tempDirectory);
 
     handleChatConnection(
       socket as never,
@@ -68,7 +68,7 @@ async function withGateway(
   } finally {
     connectedClients.clear();
     chatRunRegistry.clearAll();
-    closeConnection();
+    await closeConnection();
     if (previousDatabasePath === undefined) {
       delete process.env.DATABASE_PATH;
     } else {

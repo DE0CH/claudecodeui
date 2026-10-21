@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { getConnection } from '@/modules/database/connection.js';
+import { all, get, run, transaction } from '@/modules/database/connection.js';
 
 export type ScheduledMessageStatus = 'pending' | 'sent' | 'failed' | 'cancelled';
 
@@ -21,50 +21,37 @@ const COLUMNS =
   'id, user_id, session_id, content, options, scheduled_for, status, failure_reason, created_at, updated_at';
 
 export const scheduledMessagesDb = {
-  create(input: {
+  async create(input: {
     userId: number;
     sessionId: string;
     content: string;
     options: unknown;
     scheduledFor: Date;
-  }): ScheduledMessageRow {
-    const db = getConnection();
+  }): Promise<ScheduledMessageRow> {
     const id = randomUUID();
 
-    db.prepare(
-      `INSERT INTO scheduled_messages (id, user_id, session_id, content, options, scheduled_for, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending')`
-    ).run(
-      id,
+    (await run(`INSERT INTO scheduled_messages (id, user_id, session_id, content, options, scheduled_for, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending')`, [id,
       input.userId,
       input.sessionId,
       input.content,
       JSON.stringify(input.options ?? {}),
-      input.scheduledFor.toISOString(),
-    );
+      input.scheduledFor.toISOString(),]));
 
-    return db.prepare(`SELECT ${COLUMNS} FROM scheduled_messages WHERE id = ?`).get(id) as ScheduledMessageRow;
+    return (await get(`SELECT ${COLUMNS} FROM scheduled_messages WHERE id = ?`, [id])) as ScheduledMessageRow;
   },
 
   /** Everything still to come or recently resolved, newest schedule first. */
-  listForSession(userId: number, sessionId: string): ScheduledMessageRow[] {
-    return getConnection()
-      .prepare(
-        `SELECT ${COLUMNS} FROM scheduled_messages
+  async listForSession(userId: number, sessionId: string): Promise<ScheduledMessageRow[]> {
+    return (await all(`SELECT ${COLUMNS} FROM scheduled_messages
          WHERE user_id = ? AND session_id = ?
-         ORDER BY scheduled_for ASC`
-      )
-      .all(userId, sessionId) as ScheduledMessageRow[];
+         ORDER BY scheduled_for ASC`, [userId, sessionId])) as ScheduledMessageRow[];
   },
 
-  listPendingForUser(userId: number): ScheduledMessageRow[] {
-    return getConnection()
-      .prepare(
-        `SELECT ${COLUMNS} FROM scheduled_messages
+  async listPendingForUser(userId: number): Promise<ScheduledMessageRow[]> {
+    return (await all(`SELECT ${COLUMNS} FROM scheduled_messages
          WHERE user_id = ? AND status = 'pending'
-         ORDER BY scheduled_for ASC`
-      )
-      .all(userId) as ScheduledMessageRow[];
+         ORDER BY scheduled_for ASC`, [userId])) as ScheduledMessageRow[];
   },
 
   /**
@@ -76,51 +63,36 @@ export const scheduledMessagesDb = {
    * message up instead of skipping it. Doing it in one transaction is what
    * stops two overlapping polls from sending the same message twice.
    */
-  claimDue(now: Date): ScheduledMessageRow[] {
-    const db = getConnection();
+  async claimDue(now: Date): Promise<ScheduledMessageRow[]> {
     const nowIso = now.toISOString();
 
-    return db.transaction(() => {
-      const due = db
-        .prepare(
-          `SELECT ${COLUMNS} FROM scheduled_messages
+    return await transaction(async () => {
+      const due = (await all(`SELECT ${COLUMNS} FROM scheduled_messages
            WHERE status = 'pending' AND scheduled_for <= ?
-           ORDER BY scheduled_for ASC`
-        )
-        .all(nowIso) as ScheduledMessageRow[];
+           ORDER BY scheduled_for ASC`, [nowIso])) as ScheduledMessageRow[];
 
       for (const row of due) {
-        db.prepare(
-          `UPDATE scheduled_messages SET status = 'sent', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-        ).run(row.id);
+        (await run(`UPDATE scheduled_messages SET status = 'sent', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [row.id]));
       }
 
       return due;
-    })();
+    });
   },
 
-  markFailed(id: string, reason: string): void {
-    getConnection()
-      .prepare(
-        `UPDATE scheduled_messages
+  async markFailed(id: string, reason: string): Promise<void> {
+    (await run(`UPDATE scheduled_messages
          SET status = 'failed', failure_reason = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`
-      )
-      .run(reason.slice(0, 500), id);
+         WHERE id = ?`, [reason.slice(0, 500), id]));
   },
 
   /**
    * Cancels a pending message, or dismisses a failed one so its banner goes
    * away. Returns false when it had already fired successfully.
    */
-  cancel(userId: number, id: string): boolean {
-    const result = getConnection()
-      .prepare(
-        `UPDATE scheduled_messages
+  async cancel(userId: number, id: string): Promise<boolean> {
+    const result = (await run(`UPDATE scheduled_messages
          SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND user_id = ? AND status IN ('pending', 'failed')`
-      )
-      .run(id, userId);
+         WHERE id = ? AND user_id = ? AND status IN ('pending', 'failed')`, [id, userId]));
 
     return result.changes > 0;
   },

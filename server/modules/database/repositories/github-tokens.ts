@@ -5,7 +5,7 @@
  * Tokens are stored in `user_credentials` with `credential_type = 'github_token'`.
  */
 
-import { getConnection } from '@/modules/database/connection.js';
+import { all, get, run, transaction } from '@/modules/database/connection.js';
 import { credentialsDb } from '@/modules/database/repositories/credentials.js';
 import type {
   CredentialPublicRow,
@@ -31,12 +31,12 @@ type GithubTokenLookup = CredentialRow & {
 
 export const githubTokensDb = {
   /** Creates a GitHub token credential entry. */
-  createGithubToken(
+  async createGithubToken(
     userId: number,
     tokenName: string,
     githubToken: string,
     description: string | null = null
-  ): CreateCredentialResult {
+  ): Promise<CreateCredentialResult> {
     return credentialsDb.createCredential(
       userId,
       tokenName,
@@ -47,12 +47,12 @@ export const githubTokensDb = {
   },
 
   /** Returns all GitHub tokens (safe shape: no credential value). */
-  getGithubTokens(userId: number): CredentialPublicRow[] {
+  async getGithubTokens(userId: number): Promise<CredentialPublicRow[]> {
     return credentialsDb.getCredentials(userId, GITHUB_TOKEN_TYPE);
   },
 
   /** Returns the most recent active GitHub token value for a user. */
-  getActiveGithubToken(userId: number): string | null {
+  async getActiveGithubToken(userId: number): Promise<string | null> {
     return credentialsDb.getActiveCredential(userId, GITHUB_TOKEN_TYPE);
   },
 
@@ -60,15 +60,10 @@ export const githubTokensDb = {
    * Returns a specific active GitHub token row by id/user, including
    * a `github_token` compatibility field.
    */
-  getGithubTokenById(userId: number, tokenId: number): GithubTokenLookup | null {
-    const db = getConnection();
-    const row = db
-      .prepare(
-        `SELECT *
+  async getGithubTokenById(userId: number, tokenId: number): Promise<GithubTokenLookup | null> {
+    const row = (await get(`SELECT *
          FROM user_credentials
-         WHERE id = ? AND user_id = ? AND credential_type = ? AND is_active = 1`
-      )
-      .get(tokenId, userId, GITHUB_TOKEN_TYPE) as CredentialRow | undefined;
+         WHERE id = ? AND user_id = ? AND credential_type = ? AND is_active = 1`, [tokenId, userId, GITHUB_TOKEN_TYPE])) as CredentialRow | undefined;
 
     if (!row) return null;
 
@@ -79,21 +74,21 @@ export const githubTokensDb = {
   },
 
   /** Updates active state for a GitHub token. */
-  updateGithubToken(
+  async updateGithubToken(
     userId: number,
     tokenId: number,
     isActive: boolean
-  ): boolean {
+  ): Promise<boolean> {
     return credentialsDb.toggleCredential(userId, tokenId, isActive);
   },
 
   /** Deletes a GitHub token. */
-  deleteGithubToken(userId: number, tokenId: number): boolean {
+  async deleteGithubToken(userId: number, tokenId: number): Promise<boolean> {
     return credentialsDb.deleteCredential(userId, tokenId);
   },
 
   // Legacy alias used by existing routes
-  toggleGithubToken(userId: number, tokenId: number, isActive: boolean): boolean {
+  async toggleGithubToken(userId: number, tokenId: number, isActive: boolean): Promise<boolean> {
     return githubTokensDb.updateGithubToken(userId, tokenId, isActive);
   },
 };

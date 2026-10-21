@@ -7,32 +7,32 @@ type NotificationPreferences = Record<string, unknown> & {
 
 type SettingsDependencies = {
   apiKeys: {
-    list(userId: number): ApiKeyRow[];
-    create(userId: number, keyName: string): unknown;
-    remove(userId: number, keyId: number): boolean;
-    toggle(userId: number, keyId: number, isActive: boolean): boolean;
+    list(userId: number): Promise<ApiKeyRow[]>;
+    create(userId: number, keyName: string): Promise<unknown>;
+    remove(userId: number, keyId: number): Promise<boolean>;
+    toggle(userId: number, keyId: number, isActive: boolean): Promise<boolean>;
   };
   credentials: {
-    list(userId: number, credentialType: string | null): unknown[];
+    list(userId: number, credentialType: string | null): Promise<unknown[]>;
     create(
       userId: number,
       name: string,
       type: string,
       value: string,
       description: string | null,
-    ): unknown;
-    remove(userId: number, credentialId: number): boolean;
-    toggle(userId: number, credentialId: number, isActive: boolean): boolean;
+    ): Promise<unknown>;
+    remove(userId: number, credentialId: number): Promise<boolean>;
+    toggle(userId: number, credentialId: number, isActive: boolean): Promise<boolean>;
   };
   notifications: {
-    getPreferences(userId: number): NotificationPreferences | undefined;
-    updatePreferences(userId: number, preferences: NotificationPreferences): unknown;
+    getPreferences(userId: number): Promise<NotificationPreferences | undefined>;
+    updatePreferences(userId: number, preferences: NotificationPreferences): Promise<unknown>;
     createEnabledEvent(): unknown;
-    notifyUser(userId: number, event: unknown): void | Promise<void>;
+    notifyUser(userId: number, event: unknown): Promise<void | Promise<void>>;
   };
   pushSubscriptions: {
-    save(userId: number, endpoint: string, p256dh: string, auth: string): void;
-    remove(endpoint: string): void;
+    save(userId: number, endpoint: string, p256dh: string, auth: string): Promise<void>;
+    remove(endpoint: string): Promise<void>;
   };
   getVapidPublicKey(): string | null;
 };
@@ -54,22 +54,22 @@ function assertFound(found: boolean, resourceName: string, code: string): void {
 /** Creates settings workflows with repositories and notification effects injected. */
 export function createSettingsService(dependencies: SettingsDependencies) {
   return {
-    listApiKeys(userId: number) {
-      const apiKeys = dependencies.apiKeys.list(userId).map((key) => ({
+    async listApiKeys(userId: number) {
+      const apiKeys = (await dependencies.apiKeys.list(userId)).map((key) => ({
         ...key,
         api_key: `${key.api_key.substring(0, 10)}...`,
       }));
       return { apiKeys };
     },
-    createApiKey(userId: number, keyNameInput: unknown) {
+    async createApiKey(userId: number, keyNameInput: unknown) {
       const keyName = requiredString(keyNameInput, 'Key name', 'API_KEY_NAME_REQUIRED');
-      return { success: true, apiKey: dependencies.apiKeys.create(userId, keyName) };
+      return { success: true, apiKey: await dependencies.apiKeys.create(userId, keyName) };
     },
-    deleteApiKey(userId: number, keyId: number) {
-      assertFound(dependencies.apiKeys.remove(userId, keyId), 'API key', 'API_KEY_NOT_FOUND');
+    async deleteApiKey(userId: number, keyId: number) {
+      assertFound(await dependencies.apiKeys.remove(userId, keyId), 'API key', 'API_KEY_NOT_FOUND');
       return { success: true };
     },
-    toggleApiKey(userId: number, keyId: number, isActive: unknown) {
+    async toggleApiKey(userId: number, keyId: number, isActive: unknown) {
       if (typeof isActive !== 'boolean') {
         throw new AppError('isActive must be a boolean', {
           code: 'INVALID_ACTIVE_STATE',
@@ -77,16 +77,16 @@ export function createSettingsService(dependencies: SettingsDependencies) {
         });
       }
       assertFound(
-        dependencies.apiKeys.toggle(userId, keyId, isActive),
+        await dependencies.apiKeys.toggle(userId, keyId, isActive),
         'API key',
         'API_KEY_NOT_FOUND',
       );
       return { success: true };
     },
-    listCredentials(userId: number, credentialType: string | null) {
-      return { credentials: dependencies.credentials.list(userId, credentialType) };
+    async listCredentials(userId: number, credentialType: string | null) {
+      return { credentials: await dependencies.credentials.list(userId, credentialType) };
     },
-    createCredential(userId: number, input: Record<string, unknown>) {
+    async createCredential(userId: number, input: Record<string, unknown>) {
       const credentialName = requiredString(
         input.credentialName,
         'Credential name',
@@ -107,7 +107,7 @@ export function createSettingsService(dependencies: SettingsDependencies) {
         : null;
       return {
         success: true,
-        credential: dependencies.credentials.create(
+        credential: await dependencies.credentials.create(
           userId,
           credentialName,
           credentialType,
@@ -116,15 +116,15 @@ export function createSettingsService(dependencies: SettingsDependencies) {
         ),
       };
     },
-    deleteCredential(userId: number, credentialId: number) {
+    async deleteCredential(userId: number, credentialId: number) {
       assertFound(
-        dependencies.credentials.remove(userId, credentialId),
+        await dependencies.credentials.remove(userId, credentialId),
         'Credential',
         'CREDENTIAL_NOT_FOUND',
       );
       return { success: true };
     },
-    toggleCredential(userId: number, credentialId: number, isActive: unknown) {
+    async toggleCredential(userId: number, credentialId: number, isActive: unknown) {
       if (typeof isActive !== 'boolean') {
         throw new AppError('isActive must be a boolean', {
           code: 'INVALID_ACTIVE_STATE',
@@ -132,36 +132,36 @@ export function createSettingsService(dependencies: SettingsDependencies) {
         });
       }
       assertFound(
-        dependencies.credentials.toggle(userId, credentialId, isActive),
+        await dependencies.credentials.toggle(userId, credentialId, isActive),
         'Credential',
         'CREDENTIAL_NOT_FOUND',
       );
       return { success: true };
     },
-    getNotificationPreferences(userId: number) {
-      return { success: true, preferences: dependencies.notifications.getPreferences(userId) };
+    async getNotificationPreferences(userId: number) {
+      return { success: true, preferences: await dependencies.notifications.getPreferences(userId) };
     },
-    updateNotificationPreferences(userId: number, preferences: NotificationPreferences) {
+    async updateNotificationPreferences(userId: number, preferences: NotificationPreferences) {
       return {
         success: true,
-        preferences: dependencies.notifications.updatePreferences(userId, preferences),
+        preferences: await dependencies.notifications.updatePreferences(userId, preferences),
       };
     },
     getVapidPublicKey() {
       return { publicKey: dependencies.getVapidPublicKey() };
     },
-    subscribeToPush(userId: number, input: Record<string, unknown>) {
+    async subscribeToPush(userId: number, input: Record<string, unknown>) {
       const endpoint = requiredString(input.endpoint, 'Endpoint', 'PUSH_SUBSCRIPTION_REQUIRED');
       const keys = typeof input.keys === 'object' && input.keys !== null
         ? input.keys as Record<string, unknown>
         : {};
       const p256dh = requiredString(keys.p256dh, 'p256dh', 'PUSH_SUBSCRIPTION_REQUIRED');
       const auth = requiredString(keys.auth, 'auth', 'PUSH_SUBSCRIPTION_REQUIRED');
-      dependencies.pushSubscriptions.save(userId, endpoint, p256dh, auth);
+      await dependencies.pushSubscriptions.save(userId, endpoint, p256dh, auth);
 
-      const currentPreferences = dependencies.notifications.getPreferences(userId);
+      const currentPreferences = await dependencies.notifications.getPreferences(userId);
       if (!currentPreferences?.channels?.webPush) {
-        dependencies.notifications.updatePreferences(userId, {
+        await dependencies.notifications.updatePreferences(userId, {
           ...currentPreferences,
           channels: { ...currentPreferences?.channels, webPush: true },
         });
@@ -170,12 +170,12 @@ export function createSettingsService(dependencies: SettingsDependencies) {
       void dependencies.notifications.notifyUser(userId, event);
       return { success: true };
     },
-    unsubscribeFromPush(userId: number, endpointInput: unknown) {
+    async unsubscribeFromPush(userId: number, endpointInput: unknown) {
       const endpoint = requiredString(endpointInput, 'Endpoint', 'PUSH_ENDPOINT_REQUIRED');
-      dependencies.pushSubscriptions.remove(endpoint);
-      const currentPreferences = dependencies.notifications.getPreferences(userId);
+      await dependencies.pushSubscriptions.remove(endpoint);
+      const currentPreferences = await dependencies.notifications.getPreferences(userId);
       if (currentPreferences?.channels?.webPush) {
-        dependencies.notifications.updatePreferences(userId, {
+        await dependencies.notifications.updatePreferences(userId, {
           ...currentPreferences,
           channels: { ...currentPreferences.channels, webPush: false },
         });

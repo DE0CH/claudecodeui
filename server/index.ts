@@ -19,27 +19,18 @@ import { chatRunRegistry, createWebSocketServer } from '@/modules/websocket/inde
 
 import { getConnectableHost } from '../shared/networkHosts.js';
 
-import { createGitModule } from './modules/git/index.js';
 import {
     authenticateToken,
     authenticateWebSocket,
     authRoutes,
     validateApiKey,
 } from './modules/auth/index.js';
-import { taskmasterRoutes } from './modules/taskmaster/index.js';
 import { commandsRoutes } from './modules/commands/index.js';
 import { settingsRoutes } from './modules/settings/index.js';
 import { createSystemModule } from './modules/system/index.js';
-import { createAgentModule } from './modules/agent/index.js';
 import projectModuleRoutes from './modules/projects/projects.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
 import { userRoutes } from './modules/user/index.js';
-import {
-    getPluginPort,
-    pluginsRoutes,
-    startEnabledPluginServers,
-    stopAllPlugins,
-} from './modules/plugins/index.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import { voiceRoutes } from './modules/voice/index.js';
 import {
@@ -47,12 +38,7 @@ import {
     initializeScheduledMessageDispatcher,
     scheduledMessagesRoutes,
 } from './modules/scheduled-messages/index.js';
-import browserUseRoutes from './modules/browser-use/browser-use.routes.js';
 import { assetsRoutes } from './modules/assets/index.js';
-import { fileTreeRoutes } from './modules/file-tree/index.js';
-import { worktreesRoutes } from './modules/worktrees/index.js';
-import browserUseMcpRoutes from './modules/browser-use/browser-use-mcp.routes.js';
-import { browserUseService } from './modules/browser-use/browser-use.service.js';
 import { initializeDatabase, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './modules/notifications/index.js';
 
@@ -84,19 +70,6 @@ console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
 const app = express();
 const server = http.createServer(app);
 const queryClaude = providerRuntimeService.getRunner('claude');
-const queryCursor = providerRuntimeService.getRunner('cursor');
-const queryCodex = providerRuntimeService.getRunner('codex');
-const queryOpenCode = providerRuntimeService.getRunner('opencode');
-const gitRoutes = createGitModule({
-    queryClaude,
-    queryCursor,
-});
-const agentRoutes = createAgentModule({
-    queryClaude,
-    queryCursor,
-    queryCodex,
-    queryOpenCode,
-});
 
 // Single WebSocket server that handles chat, shell, and plugin proxy paths.
 // A completed run stays subscribable while its session's background work
@@ -111,17 +84,6 @@ createWebSocketServer(server, {
     chat: {
         runtime: providerRuntimeService,
     },
-    shell: {
-        resolveProviderSessionId: (sessionId, provider) => {
-            const dbSession = sessionsDb.getSessionById(sessionId);
-            if (dbSession) {
-                return dbSession.provider_session_id ?? null;
-            }
-
-            return null;
-        },
-    },
-    getPluginPort,
 });
 
 app.use(cors({ exposedHeaders: ['X-Refreshed-Token', 'X-Auth-Error'] }));
@@ -155,7 +117,6 @@ app.use('/api', validateApiKey);
 app.use('/api/auth', authRoutes);
 
 // File Tree API Routes (protected)
-app.use('/api/file-tree', authenticateToken, fileTreeRoutes);
 
 // Projects API Routes (protected)
 app.use('/api/projects', authenticateToken, projectModuleRoutes);
@@ -164,13 +125,10 @@ app.use('/api/projects', authenticateToken, projectModuleRoutes);
 app.use('/api/assets', authenticateToken, assetsRoutes);
 
 // Git API Routes (protected)
-app.use('/api/git', authenticateToken, gitRoutes);
 
 // Git worktree management (protected)
-app.use('/api/worktrees', authenticateToken, worktreesRoutes);
 
 // TaskMaster API Routes (protected)
-app.use('/api/taskmaster', authenticateToken, taskmasterRoutes);
 
 // Commands API Routes (protected)
 app.use('/api/commands', authenticateToken, commandsRoutes);
@@ -186,20 +144,16 @@ app.use('/api/notifications', authenticateToken, notificationRoutes);
 app.use('/api/user', authenticateToken, userRoutes);
 
 // Plugins API Routes (protected)
-app.use('/api/plugins', authenticateToken, pluginsRoutes);
 
 // Browser MCP bridge API (local token protected)
-app.use('/api/browser-use-mcp', browserUseMcpRoutes);
 
 // Browser API Routes (protected)
-app.use('/api/browser-use', authenticateToken, browserUseRoutes);
 
 // Unified provider MCP routes (protected)
 app.use('/api/providers', authenticateToken, providerRoutes);
 app.use('/api/scheduled-messages', authenticateToken, scheduledMessagesRoutes);
 
 // Agent API Routes (uses API key authentication)
-app.use('/api/agent', agentRoutes);
 
 app.use('/api/voice', authenticateToken, voiceRoutes);
 
@@ -373,26 +327,12 @@ async function startServer() {
             // then keeps polling.
             initializeScheduledMessageDispatcher(providerRuntimeService);
 
-            // Start server-side plugin processes for enabled plugins
-            startEnabledPluginServers().catch(err => {
-                console.error('[Plugins] Error during startup:', err.message);
-            });
         });
 
         await closeSessionsWatcher();
         closeScheduledMessageDispatcher();
         // Clean up plugin processes on shutdown
         const shutdownRuntimeServices = async () => {
-            try {
-                await browserUseService.stopAllSessions();
-            } catch (err) {
-                console.error('[Browser] Error stopping sessions during shutdown:', getErrorMessage(err));
-            }
-            try {
-                await stopAllPlugins();
-            } catch (err) {
-                console.error('[Plugins] Error stopping plugins during shutdown:', getErrorMessage(err));
-            }
             try {
                 await removeLocalServerMarker();
             } catch (err) {

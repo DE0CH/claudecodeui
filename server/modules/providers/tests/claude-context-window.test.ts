@@ -31,12 +31,12 @@ async function runScripted(
   const writer = { send: (message: NormalizedMessage) => { sent.push(message); }, userId: null };
   const sessions = new ClaudeSessionsProvider({ getLiveRunStartTime: () => null });
   const context: ProviderRuntimeContext = {
-    resolveProviderSessionId: () => resumeProviderSessionId,
+    resolveProviderSessionId: async () => resumeProviderSessionId,
     resolveResumeModel: async () => undefined,
     getProviderModels: async () => CLAUDE_PREDEFINED_MODELS as never,
     normalizeMessage: (raw, sessionId) => sessions.normalizeMessage(raw, sessionId),
     isProviderInstalled: async () => true,
-    createQuery: ({ prompt }) => {
+    createQuery: async ({ prompt }) => {
       // Drain the held prompt like the CLI would read its stdin.
       void (async () => { for await (const _message of prompt) { /* read */ } })();
       const iterator = (async function* () { yield* stream; })();
@@ -195,7 +195,7 @@ test('the history-derived usage keeps the window the run reported', async () => 
           provider_session_id: nativeId,
           jsonl_path: transcriptPath,
         }) as never,
-        isProviderSessionSuperseded: () => false,
+        isProviderSessionSuperseded: async () => false,
       });
 
       const reloaded = await service.getSessionTokenUsage('app-history');
@@ -210,7 +210,7 @@ test('the history-derived usage keeps the window the run reported', async () => 
           provider_session_id: 'native-never-ran',
           jsonl_path: transcriptPath,
         }) as never,
-        isProviderSessionSuperseded: () => false,
+        isProviderSessionSuperseded: async () => false,
       });
       assert.equal((await otherService.getSessionTokenUsage('app-other')).total, 160_000);
     } finally {
