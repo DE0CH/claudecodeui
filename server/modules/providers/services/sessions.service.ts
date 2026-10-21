@@ -3,6 +3,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { JARVIS_WORKSPACE_PATH, jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
+import { onConversationDeleted, onConversationForked } from '@/modules/jarvis/jarvis-conversations.js';
 import { broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { listBusyClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
@@ -295,7 +297,8 @@ export const sessionsService = {
     projectPath: string,
     initialMessage: string,
   ): Promise<CreateAppSessionResult> {
-    const normalizedProjectPath = projectPath.trim();
+    // Jarvis mode has one project: every conversation runs in its sandbox's /workspace.
+    const normalizedProjectPath = jarvisEnabled() ? JARVIS_WORKSPACE_PATH : projectPath.trim();
     if (!normalizedProjectPath) {
       throw new AppError('projectPath is required.', {
         code: 'PROJECT_PATH_REQUIRED',
@@ -378,6 +381,7 @@ export const sessionsService = {
       effort: source.effort,
     });
 
+    await onConversationForked(sessionId, forkSessionId);
     await broadcastSessionUpserted(forkSessionId);
 
     return {
@@ -724,6 +728,7 @@ export const sessionsService = {
         statusCode: 404,
       });
     }
+    await onConversationDeleted(sessionId);
 
     return {
       sessionId,

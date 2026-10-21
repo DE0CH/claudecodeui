@@ -38,7 +38,8 @@ import type {
  * modules use this shared flag to keep environment-dependent behavior aligned.
  * Environment variables must be loaded before this module is evaluated.
  */
-export const IS_PLATFORM = process.env.VITE_IS_PLATFORM === 'true';
+// Jarvis mode (JARVIS_WEB_URL) is always platform mode: the router in front has signed the user in.
+export const IS_PLATFORM = process.env.VITE_IS_PLATFORM === 'true' || !!process.env.JARVIS_WEB_URL;
 
 // ---------------------------
 //----------------- NORMALIZED MESSAGE HELPER INPUT TYPES ------------

@@ -41,6 +41,10 @@ import {
 import { assetsRoutes } from './modules/assets/index.js';
 import { initializeDatabase, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './modules/notifications/index.js';
+import { bootstrapJarvis } from './modules/jarvis/jarvis-bootstrap.js';
+import { jarvisEnabled } from './modules/jarvis/jarvis-config.js';
+import { createJarvisFilesRouter } from './modules/jarvis/jarvis-files.routes.js';
+import { jarvisApiGuard } from './modules/jarvis/jarvis-guard.js';
 
 const __dirname = getModuleDirectory(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
@@ -112,6 +116,13 @@ app.get('/health', (req, res) => {
 
 // Optional API key validation (if configured)
 app.use('/api', validateApiKey);
+
+// Jarvis mode: only the router's requests for this process's user, and only the routes staff use
+app.use('/api', jarvisApiGuard);
+if (jarvisEnabled()) {
+    // a conversation's /workspace files, read-only (jarvis-files.routes.ts)
+    app.use('/api/jarvis', authenticateToken, createJarvisFilesRouter());
+}
 
 // Authentication routes (public)
 app.use('/api/auth', authRoutes);
@@ -287,6 +298,11 @@ async function startServer() {
     try {
         // Initialize authentication database
         await initializeDatabase();
+
+        // Jarvis mode: the process's one user and its one project, /workspace
+        if (jarvisEnabled()) {
+            await bootstrapJarvis();
+        }
 
         // Configure Web Push (VAPID keys)
         await configureWebPush();

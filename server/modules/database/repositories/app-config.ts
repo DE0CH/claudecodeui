@@ -8,7 +8,8 @@
 
 import crypto from 'crypto';
 
-import { all, get, run, transaction } from '@/modules/database/connection.js';
+import { all, ensureSchema, exec, get, run, transaction } from '@/modules/database/connection.js';
+import { APP_CONFIG_TABLE_SCHEMA_SQL } from '@/modules/database/schema.js';
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -37,6 +38,9 @@ export const appConfigDb = {
    * server restarts while being created automatically on first boot.
    */
   async getOrCreateJwtSecret(): Promise<string> {
+    // Read at import time by the auth middleware, before initializeDatabase() has run on a fresh schema.
+    await ensureSchema();
+    await exec(APP_CONFIG_TABLE_SCHEMA_SQL);
     let secret = await appConfigDb.get('jwt_secret');
     if (!secret) {
       secret = crypto.randomBytes(64).toString('hex');

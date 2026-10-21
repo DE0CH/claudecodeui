@@ -11,6 +11,8 @@ import type { Socket } from 'node:net';
 
 import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 
+import { SandboxServiceError } from '@/modules/jarvis/jarvis-errors.js';
+
 const PROC_STDIN = 0;
 const PROC_STDOUT = 1;
 const PROC_STDERR = 2;
@@ -33,20 +35,23 @@ export interface JarvisSandbox {
   reset: boolean;
 }
 
-export function jarvisEnabled(): boolean {
-  return !!process.env.JARVIS_WEB_URL;
-}
+export { jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
 
 async function internal(path: string, body: Record<string, unknown>): Promise<any> {
   const base = process.env.JARVIS_WEB_URL;
   const token = process.env.JARVIS_CC_TOKEN;
   if (!base || !token) throw new Error('JARVIS_WEB_URL and JARVIS_CC_TOKEN must be set');
-  const r = await fetch(`${base.replace(/\/$/, '')}${path}`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20 * 60_000),
-  });
+  let r: Response;
+  try {
+    r = await fetch(`${base.replace(/\/$/, '')}${path}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20 * 60_000),
+    });
+  } catch (error) {
+    throw new SandboxServiceError(0, `sandbox service unreachable: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const text = await r.text();
   let data: any = null;
   try {
@@ -54,7 +59,7 @@ async function internal(path: string, body: Record<string, unknown>): Promise<an
   } catch {
     data = null;
   }
-  if (!r.ok) throw new Error(data?.error || `sandbox service answered ${r.status}`);
+  if (!r.ok) throw new SandboxServiceError(r.status, data?.error || `sandbox service answered ${r.status}`);
   return data;
 }
 

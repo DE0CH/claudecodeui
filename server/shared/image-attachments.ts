@@ -19,6 +19,11 @@ import path from 'node:path';
 
 /** Global storage folder for uploaded chat image attachments. */
 export function getGlobalImageAssetsDir(): string {
+  // Jarvis mode (DE0CH/jarvis3): HOME is pod-local and only ~/.claude is the user's durable JuiceFS folder, so
+  // uploads live there and survive pod restarts.
+  if (process.env.JARVIS_WEB_URL) {
+    return path.join(os.homedir(), '.claude', 'cloudcli-assets');
+  }
   return path.join(os.homedir(), '.cloudcli', 'assets');
 }
 

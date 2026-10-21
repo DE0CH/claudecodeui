@@ -19,6 +19,8 @@ import path from 'path';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
+import { stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
+import { readableSandboxError } from '@/modules/jarvis/jarvis-errors.js';
 import { acquireSandbox, jarvisEnabled, SANDBOX_RESET_NOTE, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
 
 import {
@@ -1055,7 +1057,10 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // Jarvis 3 (docs/CLAUDE-CODE.md in DE0CH/jarvis3): Claude Code runs in the conversation's sandbox, with its
     // /workspace; the instance's instructions and MCP tools are the sandbox's managed settings, not this host's.
     let promptCommand = command;
+    let promptFiles = options.files;
     if (jarvisEnabled()) {
+      // uploaded files are on this pod's side: put them in the conversation's /workspace for the sandbox
+      promptFiles = await stageAttachmentsInWorkspace(sessionId, options.files);
       const sandbox = await acquireSandbox(sessionId);
       if (sandbox.reset) promptCommand = `${SANDBOX_RESET_NOTE}\n\n${command}`;
       sdkOptions.cwd = '/workspace';
@@ -1068,7 +1073,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // Every turn uses streaming input so stdin stays open past the turn's
     // `result`. The message list is reusable, but each query attempt needs its
     // own stream because an async generator cannot be replayed once consumed.
-    const promptMessages = await buildPromptMessages(promptCommand, options.images, options.files, options.cwd);
+    const promptMessages = await buildPromptMessages(promptCommand, options.images, promptFiles, options.cwd);
 
     sdkOptions.hooks = {
       Notification: [{
@@ -1429,9 +1434,12 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
 
     // Check if Claude CLI is installed for a clearer error message
     const installed = await context.isProviderInstalled();
-    const errorContent = !installed
-      ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'
-      : error.message;
+    // Jarvis mode: the sandbox's failures in words staff can act on (the full error is logged above)
+    const errorContent = jarvisEnabled()
+      ? readableSandboxError(error)
+      : !installed
+        ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'
+        : error.message;
 
     // Send error to WebSocket, then the terminal complete. A run that already
     // reported completion and then failed during its post-turn hold still

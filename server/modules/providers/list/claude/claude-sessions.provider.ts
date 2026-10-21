@@ -3,6 +3,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 
+import { jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
+import { readableClaudeApiError } from '@/modules/jarvis/jarvis-errors.js';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type {
   AnyRecord,
@@ -1243,6 +1245,16 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     for (const message of messages) {
       if (message.role === 'user' && message.kind === 'text' && typeof message.content === 'string') {
         message.content = unwrapPastedContent(message.content);
+      }
+    }
+    // Jarvis mode: a model call that egress or the provider refused (budget used up, rate limit, outage) reads as a
+    // sentence, not as "API Error: 402 {json}".
+    if (jarvisEnabled()) {
+      for (const message of messages) {
+        if (message.role === 'assistant' && message.kind === 'text' && typeof message.content === 'string') {
+          const readable = readableClaudeApiError(message.content);
+          if (readable) message.content = readable;
+        }
       }
     }
     // A synthesized id is useless as an anchor — it changes on every read — so

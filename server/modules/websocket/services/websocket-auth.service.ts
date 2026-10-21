@@ -1,5 +1,7 @@
 import type { VerifyClientCallbackSync } from 'ws';
 
+import { jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
+import { jarvisCallerMatches } from '@/modules/jarvis/jarvis-guard.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 
 type WebSocketAuthDependencies = {
@@ -27,6 +29,12 @@ export async function verifyWebSocketClient(
   }
 
   console.log('WebSocket connection attempt to:', `${loggedUrl.pathname}${loggedUrl.search}`);
+
+  // Jarvis mode: the router is the only client and names the verified user in X-Jarvis-User.
+  if (jarvisEnabled() && !jarvisCallerMatches(request.headers)) {
+    console.log('[WARN] Jarvis mode: WebSocket without this process\'s user refused');
+    return false;
+  }
 
   // Platform mode: use the first DB user and skip token checks.
   if (dependencies.isPlatform) {

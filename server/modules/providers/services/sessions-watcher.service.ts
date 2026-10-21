@@ -7,27 +7,22 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
 import { broadcastSessionUpsertedBatch } from '@/modules/websocket/index.js';
 import type { LLMProvider } from '@/shared/types.js';
+import { JARVIS_PROJECT_DIR_NAME, jarvisEnabled, jarvisWatchIntervalMs } from '@/modules/jarvis/jarvis-config.js';
 
 type WatcherEventType = 'add' | 'change';
 
-const PROVIDER_WATCH_PATHS: Array<{ provider: LLMProvider; rootPath: string }> = [
-  {
-    provider: 'claude',
-    rootPath: path.join(os.homedir(), '.claude', 'projects'),
-  },
-  {
-    provider: 'cursor',
-    rootPath: path.join(os.homedir(), '.cursor', 'projects'),
-  },
-  {
-    provider: 'codex',
-    rootPath: path.join(os.homedir(), '.codex', 'sessions'),
-  },
-  {
-    provider: 'opencode',
-    rootPath: path.join(os.homedir(), '.local', 'share', 'opencode'),
-  },
-];
+/**
+ * The transcript folders to watch. Upstream watched every provider's folder; this fork keeps only Claude. In Jarvis
+ * mode only the one project's folder (`~/.claude/projects/-workspace`, on the user's JuiceFS folder) is watched, at
+ * JARVIS_WATCH_INTERVAL_MS: the sandbox writes there from another host, so only polling sees its writes.
+ */
+function providerWatchPaths(): Array<{ provider: LLMProvider; rootPath: string; interval: number }> {
+  const claudeProjects = path.join(os.homedir(), '.claude', 'projects');
+  if (jarvisEnabled()) {
+    return [{ provider: 'claude', rootPath: path.join(claudeProjects, JARVIS_PROJECT_DIR_NAME), interval: jarvisWatchIntervalMs() }];
+  }
+  return [{ provider: 'claude', rootPath: claudeProjects, interval: 6_000 }];
+}
 
 const WATCHER_IGNORED_PATTERNS = [
   '**/node_modules/**',
@@ -204,7 +199,7 @@ export async function initializeSessionsWatcher(): Promise<void> {
     failures: initialSync.failures,
   });
 
-  for (const { provider, rootPath } of PROVIDER_WATCH_PATHS) {
+  for (const { provider, rootPath, interval } of providerWatchPaths()) {
     try {
       await fsPromises.mkdir(rootPath, { recursive: true });
 
@@ -215,8 +210,8 @@ export async function initializeSessionsWatcher(): Promise<void> {
         followSymlinks: false,
         depth: 6,
         usePolling: true,
-        interval: 6_000,
-        binaryInterval: 6_000,
+        interval,
+        binaryInterval: interval,
       });
 
       watcher

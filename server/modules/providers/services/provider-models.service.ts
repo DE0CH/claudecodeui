@@ -12,6 +12,7 @@ import type {
   ProviderSessionModel,
 } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
+import { jarvisEnabled, jarvisModel } from '@/modules/jarvis/jarvis-config.js';
 
 /** Session-row access the service needs, narrowed so tests can stub it. */
 type ProviderModelsSessionStore = {
@@ -39,7 +40,14 @@ type ProviderModelsServiceDependencies = {
   catalog?: ProviderModelsCatalogStore;
   sessions?: ProviderModelsSessionStore;
   settings?: ProviderModelsSettingsStore;
+  /**
+   * The instance's one model (Jarvis mode), or null for upstream's catalogs. When set, every provider lists only it,
+   * every session runs it, and model/effort choices are not recorded (the sandbox's ANTHROPIC_MODEL decides).
+   */
+  fixedModel?: () => { value: string; label: string } | null;
 };
+
+const jarvisFixedModel = (): { value: string; label: string } | null => (jarvisEnabled() ? jarvisModel() : null);
 
 /**
  * `app_config` key of one provider's "use only my models" flag. It is app-wide
@@ -160,7 +168,8 @@ const isUniqueConstraintError = (error: unknown): boolean => (
   && error !== undefined
   && typeof error === 'object'
   && 'code' in error
-  && String(error.code).startsWith('SQLITE_CONSTRAINT')
+  // Postgres unique_violation (the Jarvis fork's database), or SQLite's constraint codes
+  && (String(error.code) === '23505' || String(error.code).startsWith('SQLITE_CONSTRAINT'))
 );
 
 /**
@@ -177,6 +186,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
   const catalog = dependencies.catalog ?? providerModelsDb;
   const sessions = dependencies.sessions ?? sessionsDb;
   const settings = dependencies.settings ?? appConfigDb;
+  const fixedModel = dependencies.fixedModel ?? jarvisFixedModel;
 
   const isCustomModelsOnly = async (provider: LLMProvider): Promise<boolean> => (
     await settings.get(customModelsOnlyConfigKey(provider)) === 'true'
@@ -194,6 +204,10 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
   );
 
   const getProviderModels = async (provider: LLMProvider): Promise<ProviderModelsDefinition> => {
+    const fixed = fixedModel();
+    if (fixed) {
+      return { OPTIONS: [{ value: fixed.value, label: fixed.label, isCustom: false }], DEFAULT: fixed.value, EFFORT_LEVELS: [], CUSTOM_MODELS_ONLY: false };
+    }
     const predefined = await resolveProvider(provider).models.getSupportedModels();
     return readMergedCatalog(provider, predefined);
   };
@@ -377,6 +391,10 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     if (!normalizedSessionId || !normalizedModel) {
       return null;
     }
+    const fixed = fixedModel();
+    if (fixed) {
+      return { provider, sessionId: normalizedSessionId, model: fixed.value, effort: null, source: 'default' };
+    }
 
     const recordedSelection = await readRecordedSessionSelection(normalizedSessionId);
     if (!recordedSelection) {
@@ -407,7 +425,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
   ): Promise<{ provider: LLMProvider; sessionId: string; effort: string; source: 'session' } | null> => {
     const normalizedSessionId = sessionId.trim();
     const normalizedEffort = effort.trim();
-    if (!normalizedSessionId || !normalizedEffort) {
+    if (!normalizedSessionId || !normalizedEffort || fixedModel()) {
       return null;
     }
 
@@ -441,6 +459,10 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     const normalizedRequestedModel = typeof options.requestedModel === 'string'
       ? options.requestedModel.trim()
       : '';
+    const fixed = fixedModel();
+    if (fixed) {
+      return { provider, sessionId: normalizedSessionId || null, model: fixed.value, effort: null, source: 'default' };
+    }
 
     if (normalizedSessionId) {
       const recordedSelection = await readRecordedSessionSelection(normalizedSessionId);
@@ -512,6 +534,10 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     requestedModel?: string | null,
   ): Promise<string | undefined> => {
     void provider;
+    const fixed = fixedModel();
+    if (fixed) {
+      return fixed.value;
+    }
     const normalizedRequestedModel = typeof requestedModel === 'string' ? requestedModel.trim() : '';
     const normalizedSessionId = sessionId?.trim();
     if (!normalizedSessionId) {

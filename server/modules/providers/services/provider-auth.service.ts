@@ -1,5 +1,6 @@
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type { LLMProvider, ProviderAuthStatus } from '@/shared/types.js';
+import { jarvisEnabled, jarvisOwner } from '@/modules/jarvis/jarvis-config.js';
 
 export const providerAuthService = {
   /**
@@ -7,6 +8,11 @@ export const providerAuthService = {
    */
   async getProviderAuthStatus(providerName: string): Promise<ProviderAuthStatus> {
     const provider = providerRegistry.resolveProvider(providerName);
+    // Jarvis mode: Claude Code runs in the sandbox and egress holds the API key, so it is always set up and signed
+    // in; nothing on this host (CLI install, credentials) matters.
+    if (jarvisEnabled()) {
+      return { installed: true, provider: provider.id, authenticated: true, email: jarvisOwner() || null, method: 'jarvis' };
+    }
     return provider.auth.getStatus();
   },
 

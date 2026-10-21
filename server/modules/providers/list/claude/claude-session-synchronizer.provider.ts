@@ -11,6 +11,7 @@ import {
   readFileTimestamps,
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
+import { JARVIS_PROJECT_DIR_NAME, JARVIS_WORKSPACE_PATH, jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
 
 type ParsedSession = {
   sessionId: string;
@@ -47,8 +48,12 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
    */
   async synchronize(since?: Date): Promise<number> {
     const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
+    // Jarvis mode: only the one project's transcripts (cwd /workspace in every sandbox)
+    const projectsRoot = jarvisEnabled()
+      ? path.join(this.claudeHome, 'projects', JARVIS_PROJECT_DIR_NAME)
+      : path.join(this.claudeHome, 'projects');
     const files = await findFilesRecursivelyCreatedAfter(
-      path.join(this.claudeHome, 'projects'),
+      projectsRoot,
       '.jsonl',
       since ?? null
     );
@@ -122,6 +127,9 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       const projectPath = typeof data.cwd === 'string' ? data.cwd : undefined;
 
       if (!sessionId || !projectPath) {
+        return null;
+      }
+      if (jarvisEnabled() && projectPath !== JARVIS_WORKSPACE_PATH) {
         return null;
       }
 
