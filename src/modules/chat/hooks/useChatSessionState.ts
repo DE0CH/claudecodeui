@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { MutableRefObject } from 'react';
 
 import { api } from '@/shared/api';
+import { IS_JARVIS } from '@/shared/jarvis';
 import type { MarkSessionIdle, SessionActivityMap,Project,ProjectSession,LLMProvider,NormalizedMessage,ChatMessage,DiffCalculator } from '@/shared/types';
 import type { SessionStore } from '@/modules/chat/hooks/useSessionStore';
 import { SESSION_MESSAGES_PAGE_SIZE } from '@/modules/chat/utils/sessionMessagePagination';
@@ -968,7 +969,8 @@ export function useChatSessionState({
 
   // Initial token usage fetch for providers with file-backed usage data.
   useEffect(() => {
-    if (!selectedSession?.id) {
+    // Staff build: no token meter, and the server doesn't serve per-session usage.
+    if (!selectedSession?.id || IS_JARVIS) {
       setTokenBudget(null);
       return;
     }

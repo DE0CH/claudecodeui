@@ -1,7 +1,7 @@
 /** How the Files panel can show a file before it is downloaded. */
 export type PreviewKind = 'image' | 'pdf' | 'text' | 'none';
 
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif']);
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif']);
 const TEXT_EXTENSIONS = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log', 'yaml', 'yml', 'xml', 'html', 'htm']);
 
 /** Text previews are read in full, so only small files get one. */

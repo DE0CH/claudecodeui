@@ -44,5 +44,11 @@
     "optionsFor": "「{{name}}」的選項",
     "rename": "重新命名",
     "delete": "封存或刪除"
+  },
+  "age": {
+    "justNow": "剛剛",
+    "minutes": "{{count}} 分鐘前",
+    "hours": "{{count}} 小時前",
+    "days": "{{count}} 日前"
   }
 }

@@ -44,5 +44,11 @@
     "optionsFor": "Options for {{name}}",
     "rename": "Rename",
     "delete": "Archive or delete"
+  },
+  "age": {
+    "justNow": "now",
+    "minutes": "{{count}}m",
+    "hours": "{{count}}h",
+    "days": "{{count}}d"
   }
 }

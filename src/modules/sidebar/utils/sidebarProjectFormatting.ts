@@ -8,6 +8,8 @@ import type {
   SessionWithProvider,
   SettingsProject,
 } from '@/shared/types';
+import { IS_JARVIS } from '@/shared/jarvis';
+import { i18n } from '@/modules/i18n';
 
 // Presentation data the sidebar derives from a session before rendering its row.
 type SessionViewModel = {
@@ -27,6 +29,15 @@ export const formatCompactAge = (
   if (Number.isNaN(date.getTime())) return '';
 
   const minutes = Math.floor(Math.max(0, currentTime.getTime() - date.getTime()) / 60000);
+  // Staff build: the age in the reader's language (upstream keeps its compact English units).
+  if (IS_JARVIS) {
+    if (minutes < 1) return i18n.t('jarvis:age.justNow');
+    if (minutes < 60) return i18n.t('jarvis:age.minutes', { count: minutes });
+    const hours = Math.floor(minutes / 60);
+    return hours < 24
+      ? i18n.t('jarvis:age.hours', { count: hours })
+      : i18n.t('jarvis:age.days', { count: Math.floor(hours / 24) });
+  }
   if (minutes < 1) return '<1m';
   if (minutes < 60) return `${minutes}m`;
 
