@@ -11,7 +11,9 @@ const pkg = createRequire(import.meta.url)('./package.json')
 
 /**
  * Jarvis staff mode (VITE_JARVIS=true, see src/shared/jarvis.ts): the page's own branding (title, icons,
- * manifest, language) carries the product name instead of CloudCLI's.
+ * manifest, language) carries the product name instead of CloudCLI's, and YYC's logo (public/icons/jarvis-logo.svg =
+ * DE0CH/YYC yyc-ai/deploy/logo.svg; jarvis-icon-*.png = its logo.png, the navy square the old YYC AI UI used for the
+ * apple-touch and manifest icons; jarvis-favicon.png = the SVG at 32 px).
  */
 function jarvisBranding(env) {
   const enabled = env.VITE_JARVIS === 'true'
@@ -29,6 +31,7 @@ function jarvisBranding(env) {
     icons: [
       { src: '/icons/jarvis-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
       { src: '/icons/jarvis-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: '/icons/jarvis-logo.svg', sizes: 'any', type: 'image/svg+xml' },
     ],
   }, null, 2)
   const escapeHtml = (value) => value.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
@@ -40,7 +43,7 @@ function jarvisBranding(env) {
         .replace('<html lang="en">', '<html lang="zh-HK">')
         .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(name)}</title>`)
         .replace(/content="Claude UI"/, `content="${escapeHtml(name)}"`)
-        .replace('href="/favicon.svg"', 'href="/icons/jarvis-favicon.svg"')
+        .replace('href="/favicon.svg"', 'href="/icons/jarvis-logo.svg"')
         .replace('href="/favicon.png"', 'href="/icons/jarvis-favicon.png"')
         .replace('href="/manifest.json"', 'href="/icons/jarvis-manifest.json"')
         .replace(/<link rel="apple-touch-icon" sizes="152x152"[^>]*>/, '')

@@ -10,6 +10,9 @@
 // anyone else gets 403 and nothing is forwarded. It needs no CloudCLI process and is served by whichever replica
 // gets the request.
 //
+// GET /api/jarvis/me is answered by the router too (no CloudCLI process): {firstName}, the Access identity's first
+// name or null, for the empty chat's greeting.
+//
 // Several router replicas run side by side (stateless). Each person's process lives on one replica, picked by
 // rendezvous hashing over the ready replicas (a headless Service's DNS): a request that lands on another replica is
 // passed on to the owner, so a person's tabs all reach the same process (a run's live stream exists only there).
@@ -70,7 +73,7 @@ const b64url = (s) => Buffer.from(s, "base64url");
  * at most every 30 s), issuer https://<teamDomain>, audience, exp/nbf with 5 s tolerance, an email claim.
  */
 export class AccessVerifier {
-  #issuer; #audience; #jwks; #keys = new Map(); #fetchedAt = 0; #lastTry = 0; #fetch; #now;
+  #issuer; #audience; #jwks; #keys = new Map(); #names = new Map(); #fetchedAt = 0; #lastTry = 0; #fetch; #now;
   constructor({ teamDomain, audience, jwks, fetchImpl, now }) {
     if (!teamDomain || !audience) throw new Error("access.teamDomain and access.audience are required");
     this.#issuer = `https://${teamDomain}`;
@@ -100,6 +103,47 @@ export class AccessVerifier {
   }
   /** The signed-in email (lowercased); throws on anything but a valid, current identity token for this app. */
   async email(token) {
+    const p = await this.#verify(token);
+    const email = typeof p.email === "string" ? p.email.trim().toLowerCase() : "";
+    if (!email) throw new Error("no email (service tokens are not staff)");
+    return email;
+  }
+
+  /**
+   * The person's first name as their identity provider gives it (Google: given_name, else the first word of name), for
+   * the empty chat's greeting; null when there is none (e-mailed code). Never derived from the address. Best effort:
+   * the token's claims, else the team's get-identity endpoint (1.5 s timeout); cached per email (6 h; 5 min after a
+   * failure).
+   */
+  async firstName(token, email) {
+    const hit = this.#names.get(email);
+    if (hit && hit.until > this.#now()) return hit.name;
+    let name = null;
+    let ttl = 6 * 3600_000;
+    try {
+      name = pickFirstName(await this.#verify(token));
+      if (!name && !this.#jwks) name = pickFirstName(await this.#identity(token));
+    } catch {
+      ttl = 5 * 60_000;
+    }
+    this.#names.set(email, { name, until: this.#now() + ttl });
+    return name;
+  }
+
+  async #identity(token) {
+    const r = await this.#fetch(`${this.#issuer}/cdn-cgi/access/get-identity`, {
+      headers: { cookie: `CF_Authorization=${token}` },
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!r.ok) throw new Error(`get-identity ${r.status}`);
+    const j = await r.json();
+    // Google's claims arrive as `name` and, depending on the IdP setup, under oidc_fields
+    const oidc = j.oidc_fields ?? {};
+    return { given_name: oidc.given_name ?? j.given_name, name: oidc.name ?? j.name };
+  }
+
+  /** The verified claims; throws on anything but a valid, current token for this app. */
+  async #verify(token) {
     const parts = String(token).split(".");
     if (parts.length !== 3) throw new Error("malformed token");
     const header = JSON.parse(b64url(parts[0]).toString("utf8"));
@@ -120,10 +164,18 @@ export class AccessVerifier {
     if (!aud.includes(this.#audience)) throw new Error("bad audience");
     if (typeof p.exp !== "number" || p.exp + 5 < now) throw new Error("expired");
     if (typeof p.nbf === "number" && p.nbf - 5 > now) throw new Error("not yet valid");
-    const email = typeof p.email === "string" ? p.email.trim().toLowerCase() : "";
-    if (!email) throw new Error("no email (service tokens are not staff)");
-    return email;
+    return p;
   }
+}
+
+/** given_name, else the first word of name (a CJK name is kept whole); trimmed to 40 characters; null otherwise. */
+export function pickFirstName(id) {
+  if (!id) return null;
+  const given = typeof id.given_name === "string" ? id.given_name.trim() : "";
+  const full = typeof id.name === "string" ? id.name.trim() : "";
+  const n = given || (/[\u3400-\u9fff]/.test(full) ? full : full.split(/\s+/)[0] || "");
+  if (!n || n.includes("@")) return null;
+  return [...n].slice(0, 40).join("");
 }
 
 /** Rendezvous hashing: the replica that owns `key` among `peers` (addresses). */
@@ -445,6 +497,7 @@ export class Router {
     if (who.status === 401) return page(res, 401, "未登入", "請重新整理頁面登入。Not signed in: reload the page to sign in.");
     if (who.status === 403) return page(res, 403, "沒有權限", `${who.email} 沒有使用 YYC AI 的權限。This account is not allowed.`);
     if (url === "/ops" || url.startsWith("/ops/") || url.startsWith("/ops?")) return this.#ops(req, res, who.email);
+    if (url === "/api/jarvis/me" || url.startsWith("/api/jarvis/me?")) return this.#me(req, res, who.email);
     const owner = !req.headers[HOP] ? this.ownerFor(who.email) : null;
     if (owner) return this.#forwardHttp(req, res, owner, who.email);
     let p;
@@ -474,6 +527,13 @@ export class Router {
       else res.destroy();
     });
     req.pipe(up);
+  }
+
+  /** GET /api/jarvis/me: {firstName} for the empty chat's greeting (answered here, no CloudCLI process needed). */
+  async #me(req, res, email) {
+    const firstName = await this.verifier.firstName(accessToken(req), email).catch(() => null);
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify({ firstName }));
   }
 
   /** The operator page: admins only, read-only, forwarded to web's /internal/ops/* (see the top of this file). */

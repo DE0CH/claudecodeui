@@ -9,7 +9,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { AccessVerifier, Router, ownerOf, userKey } from "../router.mjs";
+import { AccessVerifier, Router, ownerOf, pickFirstName, userKey } from "../router.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE = path.join(HERE, "fake-cloudcli.mjs");
@@ -290,4 +290,41 @@ test("the operator page: /ops/* goes to web's /internal/ops/* for admins only, w
   } finally {
     web.close();
   }
+});
+
+test("GET /api/jarvis/me: the identity's first name for the greeting, answered by the router, never from the address", async () => {
+  const r = makeRouter();
+  await r.listen();
+  assert.equal((await get(r, "/api/jarvis/me")).status, 401);
+  assert.equal((await get(r, "/api/jarvis/me", auth("mallory@yyc.hk"))).status, 403);
+  const named = await get(r, "/api/jarvis/me", { "cf-access-jwt-assertion": jwt({ email: ALICE, given_name: "Alice", name: "Alice Wong" }) });
+  assert.equal(named.status, 200);
+  assert.deepEqual(named.json, { firstName: "Alice" });
+  assert.deepEqual((await get(r, "/api/jarvis/me", auth(BOB))).json, { firstName: null });
+  assert.equal(r.procs.size, 0, "no CloudCLI process for /api/jarvis/me");
+});
+
+test("first names: given_name, else the first word of name (CJK kept whole), never an address; get-identity fallback, cached", async () => {
+  assert.equal(pickFirstName({ given_name: " Deyao ", name: "Deyao Chen" }), "Deyao");
+  assert.equal(pickFirstName({ name: "Tai Man Chan" }), "Tai");
+  assert.equal(pickFirstName({ name: "陳大文" }), "陳大文");
+  assert.equal(pickFirstName({ name: "x@yyc.hk" }), null);
+  assert.equal(pickFirstName({}), null);
+  assert.equal(pickFirstName(null), null);
+  let identity = 0;
+  const v = new AccessVerifier({
+    teamDomain: TEAM, audience: AUD,
+    fetchImpl: async (url, init) => {
+      if (url.endsWith("/certs")) return { ok: true, json: async () => JWKS };
+      identity++;
+      assert.equal(url, `https://${TEAM}/cdn-cgi/access/get-identity`);
+      assert.match(init.headers.cookie, /^CF_Authorization=/);
+      return { ok: true, json: async () => ({ email: ALICE, oidc_fields: { given_name: "Alice", name: "Alice Wong" } }) };
+    },
+  });
+  const tok = jwt({ email: ALICE });
+  assert.equal(await v.firstName(tok, ALICE), "Alice");
+  assert.equal(await v.firstName(tok, ALICE), "Alice");
+  assert.equal(identity, 1, "cached");
+  assert.equal(await v.firstName("garbage", BOB), null);
 });

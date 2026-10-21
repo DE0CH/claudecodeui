@@ -26,8 +26,6 @@
     "newChat": "New chat"
   },
   "welcome": {
-    "title": "How can I help?",
-    "subtitle": "Ask about news coverage, analyse data or draft a document. Files you attach, and files I make, stay with this conversation.",
     "examples": {
       "one": "Summarise this week's news coverage of a company",
       "two": "Compare how two outlets covered the same story",

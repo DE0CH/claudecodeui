@@ -26,5 +26,5 @@ export const JARVIS_DEFAULT_LANGUAGE = 'zh-HK';
 /** The name shown wherever upstream shows "CloudCLI". */
 export const BRAND_NAME = IS_JARVIS ? PRODUCT_NAME : 'CloudCLI';
 
-/** The logo shown wherever upstream shows its own; the staff logo carries its own background. */
+/** The logo shown wherever upstream shows its own: YYC's logo (DE0CH/YYC yyc-ai/deploy/logo.svg, transparent). */
 export const BRAND_LOGO = IS_JARVIS ? '/icons/jarvis-logo.svg' : '/logo.svg';

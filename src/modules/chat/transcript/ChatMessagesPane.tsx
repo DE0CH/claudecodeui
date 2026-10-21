@@ -230,7 +230,11 @@ function ChatMessagesPane({
           </div>
         </div>
       ) : chatMessages.length === 0 && IS_JARVIS ? (
-        <JarvisWelcome textareaRef={textareaRef} setInput={setInput} />
+        <JarvisWelcome
+          textareaRef={textareaRef}
+          setInput={setInput}
+          hasEarlierConversations={(selectedProject?.sessions ?? []).some((s) => s.id !== (selectedSession?.id || currentSessionId))}
+        />
       ) : chatMessages.length === 0 ? (
         <ProviderSelectionEmptyState
           selectedSession={selectedSession}
