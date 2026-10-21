@@ -11,7 +11,7 @@
     "loading": "Loading…",
     "loadError": "Couldn't load the files.",
     "retry": "Try again",
-    "empty": "This conversation has no files yet. Files that YYC AI writes, and files you attach, appear here.",
+    "empty": "No files yet. Files that YYC AI sends you in this conversation appear here.",
     "notStarted": "Files appear here once the conversation has started.",
     "noPreview": "This type of file can't be previewed. Download it to open it."
   },
@@ -41,5 +41,9 @@
     "minutes": "{{count}}m",
     "hours": "{{count}}h",
     "days": "{{count}}d"
+  },
+  "sent": {
+    "sending": "Sending…",
+    "open": "Open {{name}}"
   }
 }

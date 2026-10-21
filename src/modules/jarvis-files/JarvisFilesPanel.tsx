@@ -29,8 +29,8 @@ const iconFor = (file: SessionFile) => {
 };
 
 /**
- * The staff build's Files sheet (WorkspaceMain renders it): the open conversation's workspace files,
- * newest first, each with a download and, for images, PDFs and small text files, a preview. Full
+ * The staff build's Files sheet (WorkspaceMain renders it): the files Claude sent in the open conversation
+ * (SendUserFile), newest first, each with a download and, for images, PDFs and small text files, a preview. Full
  * screen on a phone, a panel on the right on a wider screen.
  */
 export default function JarvisFilesPanel({ open, sessionId, initialPath, onClose }: JarvisFilesPanelProps) {
@@ -132,7 +132,7 @@ export default function JarvisFilesPanel({ open, sessionId, initialPath, onClose
               {files.map((file) => {
                 const Icon = iconFor(file);
                 const directory = fileDirectory(file.path);
-                const modified = new Date(file.mtime);
+                const sent = new Date(file.sentAt ?? file.mtime);
                 return (
                   <li key={file.path} className="flex items-center gap-1 pr-2">
                     <button
@@ -143,8 +143,11 @@ export default function JarvisFilesPanel({ open, sessionId, initialPath, onClose
                       <Icon className="h-5 w-5 flex-shrink-0 text-muted-foreground" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium text-foreground">{fileName(file.path)}</span>
+                        {file.caption ? (
+                          <span dir="auto" className="block truncate text-xs text-foreground/80">{file.caption}</span>
+                        ) : null}
                         <span className="block truncate text-xs text-muted-foreground">
-                          {[directory, formatFileSize(file.size), Number.isNaN(modified.getTime()) ? '' : dateFormat.format(modified)]
+                          {[directory, formatFileSize(file.size), Number.isNaN(sent.getTime()) ? '' : dateFormat.format(sent)]
                             .filter(Boolean)
                             .join(' · ')}
                         </span>

@@ -2,13 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api } from '@/shared/api';
 
-/** One file of a conversation's workspace, as `GET /api/jarvis/sessions/:id/files` lists it. */
+/**
+ * One file Claude sent in a conversation (SendUserFile), as `GET /api/jarvis/sessions/:id/files` lists it: only sent
+ * files are listed, never the scripts and scratch files around them.
+ */
 export type SessionFile = {
   /** Relative to the conversation's /workspace, with forward slashes. */
   path: string;
   size: number;
   /** Last modification, ISO 8601 or epoch milliseconds. */
   mtime: string | number;
+  /** When Claude last sent it (ISO 8601). */
+  sentAt?: string;
+  caption?: string;
 };
 
 type State = {
@@ -17,8 +23,10 @@ type State = {
   error: string | null;
 };
 
-const byNewestFirst = (a: SessionFile, b: SessionFile) =>
-  new Date(b.mtime).getTime() - new Date(a.mtime).getTime() || a.path.localeCompare(b.path);
+const sentTime = (file: SessionFile) => new Date(file.sentAt ?? file.mtime).getTime() || 0;
+
+/** Newest first; the server's order (latest send first) breaks ties. */
+const byNewestFirst = (a: SessionFile, b: SessionFile) => sentTime(b) - sentTime(a);
 
 /**
  * Used by JarvisFilesPanel: lists the open conversation's files while the panel is open, and

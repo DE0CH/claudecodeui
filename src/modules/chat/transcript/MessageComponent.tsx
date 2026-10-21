@@ -17,6 +17,8 @@ import MessageModelLabel from '@/modules/chat/transcript/MessageModelLabel';
 import MessageSpeakControl from '@/modules/chat/transcript/MessageSpeakControl';
 import { useIsExportingTranscript } from '@/modules/chat/context/TranscriptRenderContext';
 import { MemoryCitations } from '@/modules/chat/transcript/MemoryCitations';
+import { useTranscriptSessionId } from '@/modules/chat/context/TranscriptSessionContext';
+import { SentFileCards, SEND_USER_FILE_TOOL } from '@/modules/jarvis-files';
 
 type MessageComponentProps = {
   message: ChatMessage;
@@ -50,6 +52,7 @@ const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
  */
 const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, provider, onEditMessage, onForkFromMessage }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
+  const transcriptSessionId = useTranscriptSessionId();
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
       (prevMessage.type === 'user') ||
@@ -255,6 +258,16 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                   onFileOpen={onFileOpen}
                   createDiff={createDiff}
                   selectedProject={selectedProject}
+                />
+              </div>
+            ) : IS_JARVIS && message.isToolUse && message.toolName === SEND_USER_FILE_TOOL && !message.toolResult?.isError ? (
+              /* Staff build: files Claude sent (SendUserFile) are download cards, not a tool step. */
+              <div id={`tool-result-${message.toolId}`} className="scroll-mt-4">
+                <SentFileCards
+                  sessionId={transcriptSessionId}
+                  toolInput={message.toolInput}
+                  toolResult={message.toolResult}
+                  onOpen={onFileOpen ? (filePath) => onFileOpen(filePath) : undefined}
                 />
               </div>
             ) : message.isSubagentContainer ? (

@@ -11,7 +11,7 @@
     "loading": "載入中…",
     "loadError": "未能載入檔案。",
     "retry": "再試一次",
-    "empty": "這個對話暫時未有檔案。YYC AI 製作的檔案和你附加的檔案都會在這裏顯示。",
+    "empty": "這個對話暫時未有檔案。YYC AI 傳送給你的檔案會在這裏顯示。",
     "notStarted": "對話開始後，檔案會在這裏顯示。",
     "noPreview": "這類檔案無法預覽，請下載後開啟。"
   },
@@ -41,5 +41,9 @@
     "minutes": "{{count}} 分鐘前",
     "hours": "{{count}} 小時前",
     "days": "{{count}} 日前"
+  },
+  "sent": {
+    "sending": "傳送中…",
+    "open": "開啟 {{name}}"
   }
 }

@@ -1,18 +1,20 @@
 /**
  * Staff file access to a conversation's /workspace (the contract between this server and the UI):
  *
- *   GET /api/jarvis/sessions/:sessionId/files               → { files: [{ path, size, mtime }] }  (recursive)
+ *   GET /api/jarvis/sessions/:sessionId/files               → { files: [{ path, size, mtime, sentAt, caption? }] }
+ *                                                             the files Claude sent with SendUserFile, newest first
  *   GET /api/jarvis/sessions/:sessionId/files/raw?path=REL  → the bytes, as an attachment;
  *                                                             `inline=1` shows images and PDFs in the page
  *
  * The folder is $JARVIS_JFS_ROOT/ws/<sessionId> on the shared JuiceFS volume, written by the conversation's sandbox.
- * Read-only. Only sessions of this process's user exist here (the session row must be in its database). The sandbox
- * can put symlinks in its /workspace that point anywhere on the volume (another user's folder), so symlinks are never
- * followed: listings skip them, and a download opens the file without following a final symlink and then checks
- * where the open file really is (/proc/self/fd) before sending a byte.
+ * Read-only. Only sessions of this process's user exist here (the session row must be in its database). The listing
+ * holds only what Claude sent (jarvis-sent-files.ts), never the scripts and scratch files around it; a download may
+ * name any file of the workspace (the chat links to files too). The sandbox can put symlinks in its /workspace that
+ * point anywhere on the volume (another user's folder), so symlinks are never followed: a file is opened without
+ * following a final symlink and then checked for where the open file really is (/proc/self/fd) before a byte is sent.
  */
 import { constants as fsConstants } from 'node:fs';
-import { lstat, open, readdir, readlink, realpath } from 'node:fs/promises';
+import { open, readlink, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import express, { type Request, type Response } from 'express';
@@ -20,12 +22,9 @@ import mime from 'mime-types';
 
 import { sessionsDb } from '@/modules/database/index.js';
 import { conversationWorkspaceDir, isConversationId } from '@/modules/jarvis/jarvis-config.js';
+import { readSentFiles, transcriptPathFor } from '@/modules/jarvis/jarvis-sent-files.js';
 
-/** More files than the workspace quota (1,000) allows; a listing stops here. */
-const MAX_LISTED_FILES = 5000;
-const MAX_DEPTH = 32;
-
-export type WorkspaceFile = { path: string; size: number; mtime: string };
+export type SentWorkspaceFile = { path: string; size: number; mtime: string; sentAt: string; caption?: string };
 
 class FilesError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -42,54 +41,28 @@ function sendError(res: Response, error: unknown): void {
   res.status(500).json({ success: false, error: { code: 'FILES_FAILED', message: 'Could not read the files.' } });
 }
 
-async function workspaceFor(sessionId: string): Promise<string> {
-  if (!isConversationId(sessionId) || !(await sessionsDb.getSessionById(sessionId))) {
-    throw new FilesError(404, 'SESSION_NOT_FOUND', 'This conversation was not found.');
-  }
-  return conversationWorkspaceDir(sessionId);
+async function sessionFor(sessionId: string) {
+  const row = isConversationId(sessionId) ? await sessionsDb.getSessionById(sessionId) : null;
+  if (!row) throw new FilesError(404, 'SESSION_NOT_FOUND', 'This conversation was not found.');
+  return { row, root: conversationWorkspaceDir(sessionId) };
 }
 
-/** Every regular file under `root` (symlinks and special files skipped), as POSIX paths relative to it. */
-export async function listWorkspaceFiles(root: string): Promise<WorkspaceFile[]> {
-  const files: WorkspaceFile[] = [];
-  let realRoot: string;
-  try {
-    realRoot = await realpath(root);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return files;
-    throw error;
-  }
-  const walk = async (dir: string, rel: string, depth: number): Promise<void> => {
-    if (depth > MAX_DEPTH || files.length >= MAX_LISTED_FILES) return;
-    // a folder swapped for a symlink after it was listed must not lead outside
-    if (depth > 0 && !within(realRoot, await realpath(dir).catch(() => ''))) return;
-    let entries;
+/**
+ * The files Claude sent in this conversation (SendUserFile, from its transcript), newest first, each with its size
+ * and modification time now. A sent file that is gone, or is a symlink or not inside the workspace, is left out.
+ */
+export async function listSentWorkspaceFiles(root: string, transcriptPath: string): Promise<SentWorkspaceFile[]> {
+  const out: SentWorkspaceFile[] = [];
+  for (const sent of await readSentFiles(transcriptPath)) {
     try {
-      entries = await readdir(dir, { withFileTypes: true });
+      const { handle, size, mtime } = await openWorkspaceFile(root, sent.path);
+      await handle.close().catch(() => {});
+      out.push({ ...sent, size, mtime: mtime.toISOString() });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && depth === 0) return;
-      if (depth === 0) throw error;
-      return;
+      if (!(error instanceof FilesError)) throw error;
     }
-    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    for (const entry of entries) {
-      if (files.length >= MAX_LISTED_FILES) return;
-      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
-      const childAbs = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(childAbs, childRel, depth + 1);
-      } else if (entry.isFile()) {
-        try {
-          const st = await lstat(childAbs);
-          if (st.isFile()) files.push({ path: childRel, size: st.size, mtime: st.mtime.toISOString() });
-        } catch {
-          /* removed meanwhile */
-        }
-      }
-    }
-  };
-  await walk(realRoot, '', 0);
-  return files;
+  }
+  return out;
 }
 
 /** `rel` as a normalised path inside the workspace, or an error for anything that could leave it. */
@@ -156,9 +129,9 @@ export function createJarvisFilesRouter(): express.Router {
 
   router.get('/sessions/:sessionId/files', async (req: Request, res: Response) => {
     try {
-      const root = await workspaceFor(String(req.params.sessionId));
+      const { row, root } = await sessionFor(String(req.params.sessionId));
       res.setHeader('Cache-Control', 'no-store');
-      res.json({ files: await listWorkspaceFiles(root) });
+      res.json({ files: await listSentWorkspaceFiles(root, transcriptPathFor(row)) });
     } catch (error) {
       sendError(res, error);
     }
@@ -166,7 +139,7 @@ export function createJarvisFilesRouter(): express.Router {
 
   router.get('/sessions/:sessionId/files/raw', async (req: Request, res: Response) => {
     try {
-      const root = await workspaceFor(String(req.params.sessionId));
+      const { root } = await sessionFor(String(req.params.sessionId));
       const rel = safeRelativePath(req.query.path);
       const { handle, size, mtime } = await openWorkspaceFile(root, rel);
       const fileName = path.posix.basename(rel);

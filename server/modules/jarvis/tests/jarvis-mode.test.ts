@@ -15,7 +15,8 @@ import { ensureJarvisProject, ensureJarvisUser } from '@/modules/jarvis/jarvis-b
 import { conversationWorkspaceDir, jarvisLocale, jarvisModel, jarvisProductName, jarvisSessionName, resetJarvisInstanceConfig } from '@/modules/jarvis/jarvis-config.js';
 import { onConversationDeleted, onConversationForked, recordJarvisFailedTurn, stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
 import { readableClaudeApiError, readableSandboxError, SandboxServiceError } from '@/modules/jarvis/jarvis-errors.js';
-import { createJarvisFilesRouter, listWorkspaceFiles, openWorkspaceFile } from '@/modules/jarvis/jarvis-files.routes.js';
+import { createJarvisFilesRouter, listSentWorkspaceFiles, openWorkspaceFile } from '@/modules/jarvis/jarvis-files.routes.js';
+import { readSentFiles, sentPathToWorkspaceRelative } from '@/modules/jarvis/jarvis-sent-files.js';
 import { isUnavailableInJarvis, jarvisApiGuard } from '@/modules/jarvis/jarvis-guard.js';
 import { createJarvisWarmRouter, forwardWarm } from '@/modules/jarvis/jarvis-warm.routes.js';
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
@@ -171,7 +172,67 @@ test('Claude counts as installed and signed in (the sandbox and egress hold both
   });
 });
 
-test('workspace files: listing skips symlinks; downloads never leave the folder', async () => {
+/** Transcript lines as Claude Code writes them: a SendUserFile call, then its result. */
+function sendLines(id: string, files: unknown, at: string, result: { error?: boolean; reported?: string[]; caption?: string } = {}): string[] {
+  return [
+    JSON.stringify({ type: 'assistant', timestamp: at, message: { role: 'assistant', content: [
+      { type: 'tool_use', id, name: 'SendUserFile', input: { files, status: 'normal', ...(result.caption ? { caption: result.caption } : {}) } },
+    ] } }),
+    JSON.stringify({ type: 'user', timestamp: at, message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: id, content: result.error ? 'File not found' : 'delivered', ...(result.error ? { is_error: true } : {}) },
+    ] }, ...(result.reported ? { toolUseResult: { attachments: result.reported.map((p) => ({ path: p, size: 1, pathValidated: true })) } } : {}) }),
+  ];
+}
+
+test('sent paths: absolute under /workspace or relative to it, nothing outside', () => {
+  assert.equal(sentPathToWorkspaceRelative('/workspace/out/報告.pdf'), 'out/報告.pdf');
+  assert.equal(sentPathToWorkspaceRelative('report.pdf'), 'report.pdf');
+  assert.equal(sentPathToWorkspaceRelative('./a/../b.png'), 'b.png');
+  for (const bad of ['/etc/passwd', '/workspace', '/workspacex/a', '../x', 'a/../../x', '', 42, null]) {
+    assert.equal(sentPathToWorkspaceRelative(bad), null, String(bad));
+  }
+});
+
+test('sent files come from the transcript: successful SendUserFile calls only, latest send first', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'jarvis-sent-'));
+  try {
+    const transcript = path.join(temp, 's.jsonl');
+    await writeFile(transcript, [
+      JSON.stringify({ type: 'user', timestamp: '2026-10-21T10:00:00.000Z', message: { role: 'user', content: 'make a report' } }),
+      ...sendLines('t1', ['draft.pdf'], '2026-10-21T10:01:00.000Z', { reported: ['/workspace/draft.pdf'], caption: '初稿' }),
+      ...sendLines('t2', ['missing.pdf'], '2026-10-21T10:02:00.000Z', { error: true }),
+      ...sendLines('t3', ['/workspace/charts/a.png', '/etc/passwd', 'b.csv'], '2026-10-21T10:03:00.000Z'),
+      '{not json',
+      JSON.stringify({ type: 'assistant', isSidechain: true, timestamp: '2026-10-21T10:04:00.000Z', message: { content: [{ type: 'tool_use', id: 'sc', name: 'SendUserFile', input: { files: ['side.txt'] } }] } }),
+      JSON.stringify({ type: 'user', isSidechain: true, timestamp: '2026-10-21T10:04:00.000Z', message: { content: [{ type: 'tool_result', tool_use_id: 'sc', content: 'ok' }] } }),
+      ...sendLines('t4', ['/workspace/draft.pdf'], '2026-10-21T10:05:00.000Z'),
+      // still running: no result yet
+      JSON.stringify({ type: 'assistant', timestamp: '2026-10-21T10:06:00.000Z', message: { content: [{ type: 'tool_use', id: 't5', name: 'SendUserFile', input: { files: ['later.pdf'] } }] } }),
+    ].join('\n') + '\n');
+    const sent = await readSentFiles(transcript);
+    assert.deepEqual(sent.map((f) => [f.path, f.sentAt]), [
+      ['draft.pdf', '2026-10-21T10:05:00.000Z'],
+      ['b.csv', '2026-10-21T10:03:00.000Z'],
+      ['charts/a.png', '2026-10-21T10:03:00.000Z'],
+    ]);
+    assert.deepEqual(await readSentFiles(path.join(temp, 'none.jsonl')), []);
+
+    // what is listed exists inside the folder now, never through a symlink
+    const root = path.join(temp, 'ws');
+    await mkdir(path.join(root, 'charts'), { recursive: true });
+    await writeFile(path.join(temp, 'secret.txt'), 'other user data');
+    await writeFile(path.join(root, 'draft.pdf'), '%PDF-1.4');
+    await writeFile(path.join(root, 'script.py'), 'print(1)');
+    await symlink(path.join(temp, 'secret.txt'), path.join(root, 'b.csv'));
+    const listed = await listSentWorkspaceFiles(root, transcript);
+    assert.deepEqual(listed.map((f) => [f.path, f.size]), [['draft.pdf', 8]]);
+    assert.equal(typeof listed[0]!.mtime, 'string');
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('workspace downloads never leave the folder', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'jarvis-files-'));
   try {
     const root = path.join(temp, 'ws');
@@ -179,14 +240,9 @@ test('workspace files: listing skips symlinks; downloads never leave the folder'
     await mkdir(path.join(root, 'reports'), { recursive: true });
     await mkdir(outside);
     await writeFile(path.join(outside, 'key.txt'), 'other user data');
-    await writeFile(path.join(root, 'a.txt'), 'hello');
     await writeFile(path.join(root, 'reports', '報告.pdf'), '%PDF-1.4');
     await symlink(path.join(outside, 'key.txt'), path.join(root, 'link.txt'));
     await symlink(outside, path.join(root, 'linkdir'));
-
-    const files = await listWorkspaceFiles(root);
-    assert.deepEqual(files.map((f) => [f.path, f.size]), [['a.txt', 5], ['reports/報告.pdf', 8]]);
-    assert.deepEqual(await listWorkspaceFiles(path.join(temp, 'missing')), []);
 
     const opened = await openWorkspaceFile(root, 'reports/報告.pdf');
     assert.equal(opened.size, 8);
@@ -199,8 +255,9 @@ test('workspace files: listing skips symlinks; downloads never leave the folder'
   }
 });
 
-test('workspace file routes serve only this user\'s sessions, as attachments unless previewable', async () => {
+test('workspace file routes serve only this user\'s sessions: the list is the sent files, downloads as attachments unless previewable', async () => {
   await withJarvis(async ({ jfs }) => {
+    process.env.HOME = path.dirname(jfs);
     const sessionId = randomUUID();
     await sessionsDb.createAppSession(sessionId, 'claude', '/workspace', 'Files');
     const ws = path.join(jfs, 'ws', sessionId);
@@ -208,13 +265,21 @@ test('workspace file routes serve only this user\'s sessions, as attachments unl
     await writeFile(path.join(ws, 'chart.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     await writeFile(path.join(ws, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
     await writeFile(path.join(ws, 'notes 筆記.txt'), 'hi');
+    await writeFile(path.join(ws, 'make_chart.py'), 'print(1)');
+    const projects = path.join(path.dirname(jfs), '.claude', 'projects', '-workspace');
+    await mkdir(projects, { recursive: true });
+    await writeFile(path.join(projects, `${sessionId}.jsonl`), [
+      ...sendLines('a', ['chart.png'], '2026-10-21T10:00:00.000Z', { reported: ['/workspace/chart.png'], caption: '圖表' }),
+      ...sendLines('b', ['/workspace/notes 筆記.txt'], '2026-10-21T10:01:00.000Z'),
+    ].join('\n') + '\n');
 
     const app = express();
     app.use('/api/jarvis', createJarvisFilesRouter());
     await serve(app, async (base) => {
-      const list = (await (await fetch(`${base}/api/jarvis/sessions/${sessionId}/files`)).json()) as { files: Array<{ path: string; mtime: string }> };
-      assert.deepEqual(list.files.map((f: { path: string }) => f.path), ['chart.png', 'logo.svg', 'notes 筆記.txt']);
-      assert.equal(typeof list.files[0].mtime, 'string');
+      const list = (await (await fetch(`${base}/api/jarvis/sessions/${sessionId}/files`)).json()) as { files: Array<{ path: string; mtime: string; sentAt: string; caption?: string }> };
+      assert.deepEqual(list.files.map((f) => f.path), ['notes 筆記.txt', 'chart.png']);
+      assert.equal(list.files[1]!.caption, '圖表');
+      assert.equal(typeof list.files[0]!.mtime, 'string');
 
       const png = await fetch(`${base}/api/jarvis/sessions/${sessionId}/files/raw?path=chart.png&inline=1`);
       assert.equal(png.status, 200);
