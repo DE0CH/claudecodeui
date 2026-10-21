@@ -57,10 +57,10 @@ export function greetingLocale(language: string | undefined | null): GreetingLoc
   return /^zh/i.test(language || '') ? 'zh-HK' : 'en';
 }
 
-/** 05:00–11:59 morning, 12:00–17:59 afternoon, 18:00–22:59 evening, 23:00–04:59 late night, in the viewer's local
- * time (the old UI used Hong Kong time, which is the same for staff in Hong Kong). */
+/** 05:00–11:59 morning, 12:00–17:59 afternoon, 18:00–22:59 evening, 23:00–04:59 late night, Hong Kong time (as the
+ * old UI). */
 export function slotAt(d: Date): Slot {
-  const h = d.getHours();
+  const h = Number(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Hong_Kong' }).format(d));
   if (h >= 5 && h < 12) return 'morning';
   if (h >= 12 && h < 18) return 'afternoon';
   if (h >= 18 && h < 23) return 'evening';

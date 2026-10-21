@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { GREETINGS, greeting, greetingLocale, pool, slotAt } from '@/modules/chat/utils/jarvisGreeting';
 
-// the viewer's local time at the given hour
-const at = (hour: number) => new Date(2026, 9, 21, hour, 30);
+// Hong Kong is UTC+8 all year
+const at = (hkHour: number) => new Date(Date.UTC(2026, 9, 21, (hkHour - 8 + 24) % 24, 30));
 const HOUR = { morning: 8, afternoon: 14, evening: 20, night: 1 } as const;
 const SLOTS = ['morning', 'afternoon', 'evening', 'night'] as const;
 const ZH_ANY = ['你好呀', '你好', '哈囉', '嗨', '喂，你好', '哈囉哈囉', '嘿', '你好嗎？', '點呀？', '近排點呀？', '一切順利嗎？', '最近過成點？', '有咩新嘢？', '而家發生緊咩事？'];
@@ -11,7 +11,7 @@ const EN_ANY = ['Good day', 'Hello', 'Hi', 'Hey', 'Hello there', 'Hiya', 'Hey th
 
 // The set Deyao approved on 2026-10-21 (DE0CH/jarvis3 3953d31), verbatim.
 describe('jarvis greeting', () => {
-  it('time slots by the local hour', () => {
+  it('time slots by the Hong Kong hour, whatever the viewer\'s time zone', () => {
     expect([5, 11, 12, 17, 18, 22, 23, 2, 4].map((h) => slotAt(at(h)))).toEqual(
       ['morning', 'morning', 'afternoon', 'afternoon', 'evening', 'evening', 'night', 'night', 'night'],
     );
