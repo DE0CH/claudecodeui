@@ -45,6 +45,7 @@ import { bootstrapJarvis } from './modules/jarvis/jarvis-bootstrap.js';
 import { jarvisEnabled } from './modules/jarvis/jarvis-config.js';
 import { createJarvisFilesRouter } from './modules/jarvis/jarvis-files.routes.js';
 import { jarvisApiGuard } from './modules/jarvis/jarvis-guard.js';
+import { createJarvisWarmRouter } from './modules/jarvis/jarvis-warm.routes.js';
 
 const __dirname = getModuleDirectory(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
@@ -122,6 +123,8 @@ app.use('/api', jarvisApiGuard);
 if (jarvisEnabled()) {
     // a conversation's /workspace files, read-only (jarvis-files.routes.ts)
     app.use('/api/jarvis', authenticateToken, createJarvisFilesRouter());
+    // typing in the composer warms a sandbox host (jarvis-warm.routes.ts)
+    app.use('/api/jarvis', authenticateToken, createJarvisWarmRouter());
 }
 
 // Authentication routes (public)

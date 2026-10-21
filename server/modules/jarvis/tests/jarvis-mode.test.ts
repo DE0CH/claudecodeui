@@ -17,6 +17,7 @@ import { onConversationDeleted, onConversationForked, recordJarvisFailedTurn, st
 import { readableClaudeApiError, readableSandboxError, SandboxServiceError } from '@/modules/jarvis/jarvis-errors.js';
 import { createJarvisFilesRouter, listWorkspaceFiles, openWorkspaceFile } from '@/modules/jarvis/jarvis-files.routes.js';
 import { isUnavailableInJarvis, jarvisApiGuard } from '@/modules/jarvis/jarvis-guard.js';
+import { createJarvisWarmRouter, forwardWarm } from '@/modules/jarvis/jarvis-warm.routes.js';
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
 import { createProviderModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
@@ -421,5 +422,42 @@ test('conversation names: the first characters of the message, or a placeholder 
     assert.equal((await sessionsDb.getSessionById(created.sessionId))?.custom_name, '新對話');
     delete process.env.JARVIS_LOCALE;
     assert.equal(jarvisSessionName(''), 'New conversation');
+  });
+});
+
+test('typing warms a sandbox host: forwarded to web as the owner, at most once per conversation per interval', async () => {
+  await withJarvis(async ({ calls }) => {
+    const conv = randomUUID();
+    let t = 0;
+    const forwarded: Array<Promise<boolean>> = [];
+    const app = express();
+    app.use(express.json());
+    app.use('/api/jarvis', createJarvisWarmRouter((c) => {
+      const p = forwardWarm(c);
+      forwarded.push(p);
+      return p;
+    }, 30_000, () => t));
+    await serve(app, async (base) => {
+      const warm = (body: unknown) => fetch(`${base}/api/jarvis/warm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const first = await warm({});
+      assert.equal(first.status, 202);
+      await first.arrayBuffer();
+      await (await warm({})).arrayBuffer(); // same new chat, within the interval
+      await (await warm({ sessionId: conv.toUpperCase() })).arrayBuffer();
+      await (await warm({ sessionId: conv })).arrayBuffer();
+      await (await warm({ sessionId: 'not-a-uuid' })).arrayBuffer(); // counts as a new chat: throttled
+      t = 30_000;
+      await (await warm({ sessionId: conv })).arrayBuffer();
+    });
+    assert.deepEqual(await Promise.all(forwarded), [true, true, true]);
+    const warms = calls.filter((c) => c.path === '/internal/cc/warm').map((c) => c.body);
+    assert.deepEqual(warms, [{ owner: OWNER }, { owner: OWNER, conversation: conv }, { owner: OWNER, conversation: conv }]);
+  });
+});
+
+test('a warm that cannot reach web fails quietly', async () => {
+  await withJarvis(async () => {
+    process.env.JARVIS_WEB_URL = 'http://127.0.0.1:1';
+    assert.equal(await forwardWarm(null), false);
   });
 });

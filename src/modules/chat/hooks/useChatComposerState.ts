@@ -32,6 +32,7 @@ import { useFileMentions } from '@/modules/chat/hooks/useFileMentions';
 import { useInputHistory } from '@/modules/chat/hooks/useInputHistory';
 import { useSlashCommands } from '@/modules/chat/hooks/useSlashCommands';
 import { IS_JARVIS } from '@/shared/jarvis';
+import { warmSandbox } from '@/modules/chat/utils/jarvisWarm';
 
 type UseChatComposerStateArgs = {
   selectedProject: Project | null;
@@ -1232,9 +1233,12 @@ export function useChatComposerState({
         return;
       }
 
+      // Jarvis: typing warms a sandbox host for this conversation (throttled; jarvisWarm.ts)
+      if (IS_JARVIS) warmSandbox(selectedSession?.id || currentSessionId || null);
+
       handleCommandInputChange(newValue, cursorPos);
     },
-    [handleCommandInputChange, resetCommandMenuState, setCursorPosition],
+    [handleCommandInputChange, resetCommandMenuState, setCursorPosition, selectedSession?.id, currentSessionId],
   );
 
   const handleKeyDown = useCallback(

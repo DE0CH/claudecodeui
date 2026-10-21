@@ -593,6 +593,8 @@ export const api = {
     // A bare URL: images, PDFs and downloads load it directly (the router in front authenticates).
     sessionFileRawUrl: (sessionId: string, filePath: string, { inline = false }: { inline?: boolean } = {}) =>
       `/api/jarvis/sessions/${encodeURIComponent(sessionId)}/files/raw${query({ path: filePath, inline: inline ? 1 : null })}`,
+    // The user is typing: lets the server start a sandbox host early (null sessionId = a new chat).
+    warm: (sessionId: string | null) => post('/api/jarvis/warm', sessionId ? { sessionId } : {}),
   },
 
   browserUse: {
