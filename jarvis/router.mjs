@@ -31,7 +31,7 @@
 import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { spawn as nodeSpawn } from "node:child_process";
 import { promises as dns } from "node:dns";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { mkdir, readlink, symlink, unlink, chown, lstat } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
@@ -572,6 +572,8 @@ async function main() {
   process.on("SIGINT", () => void stop("SIGINT"));
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+// run as a program (also when started through a symlink, e.g. a ConfigMap mount)
+const isMain = (() => { try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]); } catch { return false; } })();
+if (isMain) {
   main().catch((e) => { log("error", "router failed", { error: String(e?.stack || e) }); process.exit(1); });
 }
