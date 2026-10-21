@@ -1,0 +1,8 @@
+.git
+node_modules
+dist
+dist-server
+dist-server.next
+dist-server.old
+.desktop-build
+*.log
