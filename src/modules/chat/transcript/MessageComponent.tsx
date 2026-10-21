@@ -6,6 +6,7 @@ import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult, LL
 import { formatUsageLimitText, stripProposedPlanEnvelope } from '@/modules/chat/utils/chatFormatting';
 import { ToolRenderer, ToolErrorDisplay, SubagentPanel, WorkflowPanel, shouldHideToolResult } from '@/modules/chat/tools';
 import { LLMProviderLogo } from '@/shared/ui';
+import { BRAND_LOGO, IS_JARVIS, PRODUCT_NAME } from '@/shared/jarvis';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/modules/chat/transcript/Reasoning';
 import ChatMessageImages from '@/modules/chat/transcript/ChatMessageImages';
 import ChatMessageFiles from '@/modules/chat/transcript/ChatMessageFiles';
@@ -132,7 +133,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                       <PencilIcon className="h-3.5 w-3.5" />
                     </button>
                   )}
-                  {onForkFromMessage && message.transcriptAnchorId && (
+                  {onForkFromMessage && message.transcriptAnchorId && !IS_JARVIS && (
                     <button
                       type="button"
                       onClick={() => onForkFromMessage(message)}
@@ -215,7 +216,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                 </div>
               ) : (
                 <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full p-1 text-sm text-foreground">
-                  <LLMProviderLogo provider={provider} className="h-full w-full" />
+                  {IS_JARVIS ? (
+                    <img src={BRAND_LOGO} alt="" className="h-full w-full rounded-md" />
+                  ) : (
+                    <LLMProviderLogo provider={provider} className="h-full w-full" />
+                  )}
                 </div>
               )}
               <div className="text-sm font-medium text-gray-900 dark:text-white">
@@ -223,7 +228,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                   ? t('messageTypes.error')
                   : message.type === 'tool'
                     ? t('messageTypes.tool')
-                    : (provider === 'cursor'
+                    : IS_JARVIS
+                      ? PRODUCT_NAME
+                      : (provider === 'cursor'
                         ? t('messageTypes.cursor')
                         : provider === 'codex'
                           ? t('messageTypes.codex')
@@ -421,7 +428,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                     on this row. Provenance rather than an affordance, so unlike
                     copy and speak it is not gated on the copy control, and an
                     exported transcript keeps it wherever the footer renders. */}
-                <MessageModelLabel model={message.model} />
+                {!IS_JARVIS && <MessageModelLabel model={message.model} />}
                 {!isGrouped && <span>{formattedTime}</span>}
               </div>
             )}

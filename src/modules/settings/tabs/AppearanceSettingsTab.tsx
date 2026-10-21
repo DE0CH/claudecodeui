@@ -7,6 +7,7 @@ import SettingsCard from '@/modules/settings/SettingsCard';
 import SettingsRow from '@/modules/settings/SettingsRow';
 import SettingsSection from '@/modules/settings/SettingsSection';
 import SettingsToggle from '@/modules/settings/SettingsToggle';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 type AppearanceSettingsTabProps = {
   projectSortOrder: ProjectSortOrder;
@@ -59,6 +60,8 @@ export default function AppearanceSettingsTab({
         </SettingsCard>
       </SettingsSection>
 
+      {/* Staff have no projects and no code editor. */}
+      {!IS_JARVIS && (<>
       <SettingsSection title={t('appearanceSettings.projectSorting.label')}>
         <SettingsCard>
           <SettingsRow
@@ -134,6 +137,7 @@ export default function AppearanceSettingsTab({
           </SettingsRow>
         </SettingsCard>
       </SettingsSection>
+      </>)}
     </div>
   );
 }

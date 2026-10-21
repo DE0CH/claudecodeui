@@ -4,6 +4,7 @@ import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from 'react';
 import { api } from '@/shared/api';
 import { escapeRegExp } from '@/modules/chat/utils/chatFormatting';
 import type { Project } from '@/shared/types';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 type ProjectFileNode = {
   name: string;
@@ -105,7 +106,8 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     const fetchProjectFiles = async () => {
       setFileList([]);
       setFilteredFiles([]);
-      if (!projectId) {
+      // Staff build: no project file tree to mention (each conversation has its own workspace).
+      if (!projectId || IS_JARVIS) {
         return;
       }
 
@@ -125,7 +127,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
   // keystroke, and the previous list stays visible until the response lands.
   useEffect(() => {
     const refreshProjectFiles = async () => {
-      if (!showFileDropdown || !projectId) {
+      if (!showFileDropdown || !projectId || IS_JARVIS) {
         return;
       }
 
@@ -139,7 +141,7 @@ export function useFileMentions({ selectedProject, input, setInput, textareaRef 
     const textBeforeCursor = input.slice(0, cursorPosition);
     const lastAtIndex = textBeforeCursor.lastIndexOf('@');
 
-    if (lastAtIndex === -1) {
+    if (lastAtIndex === -1 || IS_JARVIS) {
       setShowFileDropdown(false);
       setAtSymbolPosition(-1);
       return;

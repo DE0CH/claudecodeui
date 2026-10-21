@@ -37,6 +37,7 @@ import { ScheduleMessagePopover } from '@/modules/chat/composer/ScheduleMessageP
 import { ScheduledMessageList } from '@/modules/chat/composer/ScheduledMessageList';
 import ComposerModelMenu from '@/modules/chat/composer/ComposerModelMenu';
 import ComposerPermissionMenu from '@/modules/chat/composer/ComposerPermissionMenu';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 type MentionableFile = {
   name: string;
@@ -262,9 +263,11 @@ export default function ChatComposer({
     ? hasQueuedDraft
       ? t('input.hintText.updateQueued', { defaultValue: 'Enter to update queued message' })
       : t('input.hintText.queue', { defaultValue: 'Enter to queue your next message' })
-    : sendByCtrlEnter
-      ? t('input.hintText.ctrlEnter')
-      : t('input.hintText.enter');
+    : IS_JARVIS
+      ? t(sendByCtrlEnter ? 'jarvis:composer.hintCtrlEnter' : 'jarvis:composer.hintEnter')
+      : sendByCtrlEnter
+        ? t('input.hintText.ctrlEnter')
+        : t('input.hintText.enter');
   const submitAriaLabel = canQueueDraft
     ? hasQueuedDraft
       ? t('input.queue.update', { defaultValue: 'Update queued message' })
@@ -453,9 +456,9 @@ export default function ChatComposer({
               <VoiceInputButton state={voiceState} onToggle={voiceToggle} errorMsg={voiceError} />
             )}
 
-            <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />
+            {!IS_JARVIS && <TokenUsageSummary usage={tokenBudget} onClick={onShowTokenUsage} />}
 
-            <PromptInputButton
+            {!IS_JARVIS && <PromptInputButton
               tooltip={{ content: t('input.showAllCommands') }}
               onClick={onToggleCommandMenu}
               className="relative"
@@ -468,7 +471,7 @@ export default function ChatComposer({
                   {slashCommandsCount}
                 </span>
               )}
-            </PromptInputButton>
+            </PromptInputButton>}
 
             {hasInput && (
               <PromptInputButton
@@ -483,6 +486,8 @@ export default function ChatComposer({
           </PromptInputTools>
 
           <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+            {/* Staff build: one model, no permission modes, no scheduling or token meter. */}
+            {!IS_JARVIS && (<>
             <ScheduleMessagePopover
               disabled={!input.trim()}
               onSchedule={onScheduleMessage}
@@ -504,6 +509,7 @@ export default function ChatComposer({
               onSelectPermissionMode={onSelectPermissionMode}
               providerLabel={providerLabel}
             />
+            </>)}
 
             <PromptInputSubmit
               onClick={

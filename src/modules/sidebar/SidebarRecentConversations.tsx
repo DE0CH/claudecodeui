@@ -7,6 +7,7 @@ import { cn } from '@/shared/utils';
 import type { ProjectSession, RecentConversationListItem, SessionRowActions } from '@/shared/types';
 import { formatCompactAge } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import SessionOptions from '@/modules/sidebar/SessionOptions';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 type SidebarRecentConversationsProps = {
   conversations: RecentConversationListItem[];
@@ -167,7 +168,11 @@ export default function SidebarRecentConversations({
                   'flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md',
                   isSelected ? 'bg-primary/10' : 'bg-muted/60',
                 )}>
-                  <LLMProviderLogo provider={conversation.provider} className="h-3.5 w-3.5" />
+                  {IS_JARVIS ? (
+                    <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+                  ) : (
+                    <LLMProviderLogo provider={conversation.provider} className="h-3.5 w-3.5" />
+                  )}
                 </span>
 
                 <span className="min-w-0 flex-1">
@@ -175,10 +180,11 @@ export default function SidebarRecentConversations({
                     {conversation.sessionTitle}
                   </span>
                   <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] leading-3 text-muted-foreground">
-                    <span className="truncate">{conversation.projectDisplayName}</span>
+                    {/* Staff have one workspace: no project name. */}
+                    {!IS_JARVIS && <span className="truncate">{conversation.projectDisplayName}</span>}
                     {isProcessing ? (
                       <>
-                        <span className="flex-shrink-0 text-muted-foreground/40">·</span>
+                        {!IS_JARVIS && <span className="flex-shrink-0 text-muted-foreground/40">·</span>}
                         <Tooltip content={t('tooltips.processingSessionIndicator', 'Processing session')} position="top">
                           <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" />
                         </Tooltip>
@@ -187,7 +193,7 @@ export default function SidebarRecentConversations({
                       // No spinner: nothing is responding. The purple of the
                       // workflow and agent cards says what is still running.
                       <>
-                        <span className="flex-shrink-0 text-muted-foreground/40">·</span>
+                        {!IS_JARVIS && <span className="flex-shrink-0 text-muted-foreground/40">·</span>}
                         <Tooltip content={t('tooltips.backgroundWorkIndicator', 'Background work running')} position="top">
                           <span
                             role="status"
@@ -198,7 +204,7 @@ export default function SidebarRecentConversations({
                       </>
                     ) : age && (
                       <>
-                        <span className="flex-shrink-0 text-muted-foreground/40">·</span>
+                        {!IS_JARVIS && <span className="flex-shrink-0 text-muted-foreground/40">·</span>}
                         <time className="flex-shrink-0 tabular-nums" dateTime={conversation.lastActivity ?? undefined}>
                           {age}
                         </time>

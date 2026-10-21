@@ -8,6 +8,7 @@ import type { LLMProvider } from '@/shared/types';
 import { useSessionForkingProviders } from '@/shared/hooks/useProviderCapabilities';
 import { useProviderSessionIdCopy } from '@/modules/sidebar/hooks/useProviderSessionIdCopy';
 import { PROVIDER_LABELS } from '@/modules/sidebar/utils/sidebarProjectFormatting';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 type SessionOptionsProps = {
   sessionId: string;
@@ -141,8 +142,8 @@ export default function SessionOptions({
         </>
       ) : (
         <ActionMenu
-          label="Session options"
-          ariaLabel={`Session options for ${sessionName}`}
+          label={IS_JARVIS ? t('jarvis:sessionMenu.options') : 'Session options'}
+          ariaLabel={IS_JARVIS ? t('jarvis:sessionMenu.optionsFor', { name: sessionName }) : `Session options for ${sessionName}`}
           icon={MoreHorizontal}
           iconOnly
           portal
@@ -156,17 +157,19 @@ export default function SessionOptions({
               <p className="truncate text-xs font-medium text-foreground" title={sessionName}>
                 {sessionName}
               </p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">{providerLabel} session</p>
+              {!IS_JARVIS && <p className="mt-0.5 text-[11px] text-muted-foreground">{providerLabel} session</p>}
             </div>
           )}
           items={[
             ...(projectId !== null ? [{
               key: 'rename',
-              label: 'Rename session',
+              label: IS_JARVIS ? t('jarvis:sessionMenu.rename') : 'Rename session',
               icon: Edit2,
               onSelect: () => onStartEditingSession(projectId, sessionId, sessionName),
             }] : []),
-            {
+            // Staff build: no provider session ids to copy, and no forking (a fork would not carry
+            // the conversation's workspace files).
+            ...(IS_JARVIS ? [] : [{
               key: 'copy',
               label: copyLabel,
               description: copyState === 'error' ? 'Click to try again.' : undefined,
@@ -174,8 +177,8 @@ export default function SessionOptions({
               loading: isCopyPending,
               closeOnSelect: false,
               onSelect: handleCopyAction,
-            },
-            ...(canFork && onFork ? [{
+            }]),
+            ...(canFork && onFork && !IS_JARVIS ? [{
               key: 'fork',
               label: 'Fork session',
               description: 'Continue from a copy, leaving this one untouched.',
@@ -184,7 +187,7 @@ export default function SessionOptions({
             }] : []),
             ...(canDelete && !isProcessing ? [{
               key: 'delete',
-              label: 'Archive or delete session',
+              label: IS_JARVIS ? t('jarvis:sessionMenu.delete') : 'Archive or delete session',
               icon: Trash2,
               isDanger: true,
               showDividerBefore: true,

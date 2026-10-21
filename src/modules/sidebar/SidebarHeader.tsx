@@ -7,6 +7,7 @@ import { IS_PLATFORM } from '@/shared/utils';
 import type { SidebarSearchMode } from '@/shared/types';
 import GitHubStarBadge from '@/modules/sidebar/GitHubStarBadge';
 import SidebarModeTabs from '@/modules/sidebar/SidebarModeTabs';
+import { BRAND_LOGO, IS_JARVIS, PRODUCT_NAME } from '@/shared/jarvis';
 
 const MOD_KEY =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
@@ -27,12 +28,22 @@ type SidebarHeaderProps = {
   onRefresh: () => void;
   isRefreshing: boolean;
   onCreateProject: () => void;
+  /** Staff build: the "+" starts a new chat instead of creating a project. */
+  onNewChat?: () => void;
   onCollapseSidebar: () => void;
   t: TFunction;
 };
 
 /** Module-level, not a nested render function, so the wordmark is not remounted on every SidebarHeader render. */
 function LogoBlock({ t }: { t: TFunction }) {
+  if (IS_JARVIS) {
+    return (
+      <div className="flex min-w-0 items-center gap-2.5">
+        <img src={BRAND_LOGO} alt="" className="h-7 w-7 flex-shrink-0 rounded-lg" />
+        <h1 className="truncate text-sm font-bold tracking-tight text-foreground">{PRODUCT_NAME}</h1>
+      </div>
+    );
+  }
   return (
     <div className="flex min-w-0 items-center gap-2.5">
       <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-primary/90 shadow-sm">
@@ -67,9 +78,11 @@ export default function SidebarHeader({
   onRefresh,
   isRefreshing,
   onCreateProject,
+  onNewChat,
   onCollapseSidebar,
   t,
 }: SidebarHeaderProps) {
+  const handleCreate = IS_JARVIS && onNewChat ? onNewChat : onCreateProject;
   const showSearchTools = (projectsCount > 0 || runningSessionsCount > 0 || archivedSessionsCount > 0 || isArchivedSessionsLoading) && !isLoading;
   const searchPlaceholder = searchMode === 'conversations'
     ? t('search.conversationsPlaceholder')
@@ -87,7 +100,7 @@ export default function SidebarHeader({
         style={{}}
       >
         <div className="flex items-center justify-between gap-2">
-          {IS_PLATFORM ? (
+          {IS_PLATFORM && !IS_JARVIS ? (
             <a
               href="https://cloudcli.ai/dashboard"
               className="flex min-w-0 items-center gap-2.5 transition-opacity hover:opacity-80"
@@ -118,8 +131,8 @@ export default function SidebarHeader({
               variant="ghost"
               size="sm"
               className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent/80 hover:text-foreground"
-              onClick={onCreateProject}
-              title={t('tooltips.createProject')}
+              onClick={handleCreate}
+              title={IS_JARVIS ? t('jarvis:sidebar.newChat') : t('tooltips.createProject')}
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
@@ -188,7 +201,7 @@ export default function SidebarHeader({
         style={isPWA && isMobile ? { paddingTop: '16px' } : {}}
       >
         <div className="flex items-center justify-between">
-          {IS_PLATFORM ? (
+          {IS_PLATFORM && !IS_JARVIS ? (
             <a
               href="https://cloudcli.ai/dashboard"
               className="flex min-w-0 items-center gap-2.5 transition-opacity active:opacity-70"
@@ -210,9 +223,10 @@ export default function SidebarHeader({
             </button>
             <button
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/90 text-primary-foreground transition-all active:scale-95"
-              onClick={onCreateProject}
+              onClick={handleCreate}
+              aria-label={IS_JARVIS ? t('jarvis:sidebar.newChat') : t('tooltips.createProject')}
             >
-              <FolderPlus className="h-4 w-4" />
+              {IS_JARVIS ? <Plus className="h-4 w-4" /> : <FolderPlus className="h-4 w-4" />}
             </button>
           </div>
         </div>

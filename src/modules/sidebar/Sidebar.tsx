@@ -175,6 +175,12 @@ function Sidebar({
     document.body.classList.toggle('pwa-mode', isPWA);
   }, [isPWA]);
 
+  // Staff build: one workspace, so "+" is a new chat in it.
+  const newChatProject = selectedProject ?? projects[0] ?? null;
+  const handleNewChat = useCallback(() => {
+    if (newChatProject) onNewSession(newChatProject);
+  }, [newChatProject, onNewSession]);
+
   const handleProjectCreated = () => {
     void paletteOps.refreshProjects();
   };
@@ -342,6 +348,7 @@ function Sidebar({
             }}
             isRefreshing={isRefreshing}
             onCreateProject={() => setShowNewProject(true)}
+            onNewChat={handleNewChat}
             onCollapseSidebar={handleCollapseSidebar}
             updateAvailable={updateAvailable}
             restartRequired={restartRequired}

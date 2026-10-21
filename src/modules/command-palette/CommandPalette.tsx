@@ -30,6 +30,7 @@ import {
 import { useTheme } from '@/shared/context/ThemeContext';
 import { usePaletteOps } from '@/modules/command-palette/context/PaletteOpsContext';
 import { SETTINGS_MAIN_TABS } from '@/shared/constants';
+import { IS_JARVIS } from '@/shared/jarvis';
 import type { AppTab, Project } from '@/shared/types';
 import { useSessionsSource } from '@/modules/command-palette/hooks/useSessionsSource';
 import { useFilesSource } from '@/modules/command-palette/hooks/useFilesSource';
@@ -94,9 +95,11 @@ function CommandPalette({
 
   const showActions = !page || page === 'actions';
   const showSessions = !page || page === 'sessions';
-  const showFiles = !page || page === 'files';
-  const showCommits = !page || page === 'commits';
-  const showBranches = !page || page === 'branches' || page === 'actions';
+  // The staff build has no file tree, git or tabs: the palette is chats, settings and theme.
+  const showFiles = !IS_JARVIS && (!page || page === 'files');
+  const showCommits = !IS_JARVIS && (!page || page === 'commits');
+  const showBranches = !IS_JARVIS && (!page || page === 'branches' || page === 'actions');
+  const showDeveloperActions = showActions && !IS_JARVIS;
 
   const sessions = useSessionsSource(projectId, open && showSessions);
   const messageMatches = useSessionMessageSearch(projectId, search, open && showSessions);
@@ -215,7 +218,7 @@ function CommandPalette({
               </CommandGroup>
             )}
 
-            {showActions && (
+            {showDeveloperActions && (
               <CommandGroup heading={t('commandPalette.groupNavigate')}>
                 {NAV_TABS.map((tab) => (
                   <CommandItem
@@ -229,7 +232,7 @@ function CommandPalette({
               </CommandGroup>
             )}
 
-            {showActions && projectId && (
+            {showDeveloperActions && projectId && (
               <CommandGroup heading={t('commandPalette.groupGit')}>
                 <CommandItem
                   value={`${t('commandPalette.gitFetch')} fetch remote`}
@@ -255,7 +258,7 @@ function CommandPalette({
               </CommandGroup>
             )}
 
-            {showActions && (
+            {showDeveloperActions && (
               <CommandGroup heading={t('commandPalette.groupSettings')}>
                 {SETTINGS_MAIN_TABS.map(({ id, label, keywords, icon: Icon }) => (
                   <CommandItem
@@ -285,7 +288,7 @@ function CommandPalette({
                         <span className="truncate text-xs text-muted-foreground">{s.snippet}</span>
                       )}
                     </div>
-                    {s.provider && (
+                    {s.provider && !IS_JARVIS && (
                       <span className="text-xs text-muted-foreground">{s.provider}</span>
                     )}
                   </CommandItem>

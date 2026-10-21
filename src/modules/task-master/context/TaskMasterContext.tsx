@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@/shared/api';
+import { IS_JARVIS } from '@/shared/jarvis';
 import { useAuth } from '@/modules/auth';
 import { useWebSocket } from '@/shared/context/WebSocketContext';
 import type { Project, ServerEvent, TaskMasterProject, TaskMasterProjectInfo, TaskMasterTask } from '@/shared/types';
@@ -292,6 +293,7 @@ export function TaskMasterProvider({ children }: { children: React.ReactNode }) 
   }, [clearError, handleError, token, user]);
 
   useEffect(() => {
+    if (IS_JARVIS) return;
     if (!isAuthLoading && user && token) {
       void refreshSelectedProjectTaskMaster();
       void refreshMCPStatus();
@@ -299,6 +301,7 @@ export function TaskMasterProvider({ children }: { children: React.ReactNode }) 
   }, [isAuthLoading, refreshMCPStatus, refreshSelectedProjectTaskMaster, token, user]);
 
   useEffect(() => {
+    if (IS_JARVIS) return;
     if (currentProject?.projectId && user && token) {
       void refreshTasks();
     }

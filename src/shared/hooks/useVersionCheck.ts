@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 
 import { APP_VERSION } from '@/shared/constants';
 import type { InstallMode, ReleaseInfo } from '@/shared/types';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 /**
  * Compare two semantic version strings
@@ -32,6 +33,8 @@ export const useVersionCheck = (owner: string, repo: string) => {
   const [restartRequired, setRestartRequired] = useState(false);
 
   useEffect(() => {
+    // The staff build is deployed by its operator: staff never see upgrade or restart prompts.
+    if (IS_JARVIS) return;
     const fetchHealth = async () => {
       try {
         const response = await fetch('/health');
@@ -56,6 +59,7 @@ export const useVersionCheck = (owner: string, repo: string) => {
   }, []);
 
   useEffect(() => {
+    if (IS_JARVIS) return undefined;
     const checkVersion = async () => {
       try {
         const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`);

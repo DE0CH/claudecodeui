@@ -31,6 +31,7 @@ import { describeBackgroundTask, ownBackgroundTasks } from '@/modules/chat/utils
 import { useFileMentions } from '@/modules/chat/hooks/useFileMentions';
 import { useInputHistory } from '@/modules/chat/hooks/useInputHistory';
 import { useSlashCommands } from '@/modules/chat/hooks/useSlashCommands';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 type UseChatComposerStateArgs = {
   selectedProject: Project | null;
@@ -1250,7 +1251,8 @@ export function useChatComposerState({
         return;
       }
 
-      if (event.key === 'Tab' && !showFileDropdown && !showCommandMenu) {
+      // Staff build: one fixed permission mode, so Tab stays a plain Tab.
+      if (event.key === 'Tab' && !showFileDropdown && !showCommandMenu && !IS_JARVIS) {
         event.preventDefault();
         cyclePermissionMode();
         return;

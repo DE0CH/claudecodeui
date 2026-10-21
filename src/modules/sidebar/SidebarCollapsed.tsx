@@ -1,5 +1,6 @@
 import { Settings, Sparkles, PanelLeftOpen, Bug, AlertTriangle } from 'lucide-react';
 import type { TFunction } from 'i18next';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 const DISCORD_INVITE_URL = 'https://discord.gg/buxwujPNRE';
 const GITHUB_ISSUES_URL = 'https://github.com/siteboon/claudecodeui/issues/new';
@@ -54,7 +55,8 @@ export default function SidebarCollapsed({
         <Settings className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
       </button>
 
-      {/* Report Issue */}
+      {/* Report Issue and Discord: upstream's community links, not for staff */}
+      {!IS_JARVIS && (<>
       <a
         href={GITHUB_ISSUES_URL}
         target="_blank"
@@ -77,6 +79,7 @@ export default function SidebarCollapsed({
       >
         <DiscordIcon className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
       </a>
+      </>)}
 
       {/* Restart-required indicator */}
       {restartRequired && (

@@ -15,6 +15,8 @@ import { useLazyRowObserver } from '@/modules/chat/hooks/useLazyRowObserver';
 import LazyMessageRow from '@/modules/chat/transcript/LazyMessageRow';
 import MessageComponent from '@/modules/chat/transcript/MessageComponent';
 import ProviderSelectionEmptyState from '@/modules/chat/transcript/ProviderSelectionEmptyState';
+import JarvisWelcome from '@/modules/chat/transcript/JarvisWelcome';
+import { IS_JARVIS } from '@/shared/jarvis';
 import ToolGroupContainer from '@/modules/chat/transcript/ToolGroupContainer';
 import LoadAllMessagesOverlay from '@/modules/chat/transcript/LoadAllMessagesOverlay';
 import ChatExportMenu from '@/modules/chat/transcript/ChatExportMenu';
@@ -227,6 +229,8 @@ function ChatMessagesPane({
             <p>{t('session.loading.sessionMessages')}</p>
           </div>
         </div>
+      ) : chatMessages.length === 0 && IS_JARVIS ? (
+        <JarvisWelcome textareaRef={textareaRef} setInput={setInput} />
       ) : chatMessages.length === 0 ? (
         <ProviderSelectionEmptyState
           selectedSession={selectedSession}

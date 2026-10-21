@@ -586,6 +586,15 @@ export const api = {
       ),
   },
 
+  // Jarvis staff build: the files of one conversation's workspace (its sandbox's /workspace), read-only.
+  jarvis: {
+    sessionFiles: (sessionId: string, options: ApiRequestOptions = {}) =>
+      get(`/api/jarvis/sessions/${encodeURIComponent(sessionId)}/files`, options),
+    // A bare URL: images, PDFs and downloads load it directly (the router in front authenticates).
+    sessionFileRawUrl: (sessionId: string, filePath: string, { inline = false }: { inline?: boolean } = {}) =>
+      `/api/jarvis/sessions/${encodeURIComponent(sessionId)}/files/raw${query({ path: filePath, inline: inline ? 1 : null })}`,
+  },
+
   browserUse: {
     status: () => get('/api/browser-use/status'),
     settings: () => get('/api/browser-use/settings'),

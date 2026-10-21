@@ -15,6 +15,9 @@ import { EditorSidebar, useEditorSidebar } from '@/modules/code-editor';
 import WorkspaceHeader from '@/modules/project-workspace/WorkspaceHeader';
 import WorkspaceStateView from '@/modules/project-workspace/WorkspaceStateView';
 import WorkspaceErrorBoundary from '@/modules/project-workspace/WorkspaceErrorBoundary';
+import JarvisWorkspaceHeader from '@/modules/project-workspace/JarvisWorkspaceHeader';
+import { JarvisFilesPanel, toWorkspaceRelativePath } from '@/modules/jarvis-files';
+import { IS_JARVIS, JARVIS_WORKSPACE_PATH } from '@/shared/jarvis';
 
 type WorkspaceMainProps = {
   selectedProject: Project | null;
@@ -133,12 +136,67 @@ function WorkspaceMain({
   // rewriting the whole palette registry on every render.
   usePaletteOpsRegister({ openFile, openFileInEditor, openDirectory });
 
+  // Staff build: the Files sheet replaces the file tree and the editor. A file the chat links to
+  // opens in it when it lies in the conversation's workspace.
+  const [filesPanel, setFilesPanel] = useState<{ open: boolean; path: string | null }>({ open: false, path: null });
+  const openFilesPanel = useCallback(() => setFilesPanel({ open: true, path: null }), []);
+  const closeFilesPanel = useCallback(() => setFilesPanel({ open: false, path: null }), []);
+  const openFileInFilesPanel = useCallback((filePath: string) => {
+    setFilesPanel({ open: true, path: toWorkspaceRelativePath(filePath, JARVIS_WORKSPACE_PATH) });
+  }, []);
+  const selectedSessionId = selectedSession?.id ?? null;
+  useEffect(() => {
+    setFilesPanel({ open: false, path: null });
+  }, [selectedSessionId]);
+
   if (isLoading) {
     return <WorkspaceStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;
   }
 
   if (!selectedProject) {
     return <WorkspaceStateView mode="empty" isMobile={isMobile} onMenuClick={onMenuClick} />;
+  }
+
+  if (IS_JARVIS) {
+    return (
+      <div className="flex h-full flex-col">
+        <JarvisWorkspaceHeader
+          selectedProject={selectedProject}
+          selectedSession={selectedSession}
+          isMobile={isMobile}
+          onMenuClick={onMenuClick}
+          onRenameSession={onRenameSession}
+          onOpenFiles={openFilesPanel}
+        />
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <WorkspaceErrorBoundary showDetails>
+            <ChatInterface
+              isActive
+              selectedProject={selectedProject}
+              selectedSession={selectedSession}
+              ws={ws}
+              sendMessage={sendMessage}
+              onFileOpen={openFileInFilesPanel}
+              onNavigateToSession={onNavigateToSession}
+              onSessionEstablished={onSessionEstablished}
+              onShowSettings={onShowSettings}
+              showRawParameters={showRawParameters}
+              showThinking={showThinking}
+              sendByCtrlEnter={sendByCtrlEnter}
+              externalMessageUpdate={externalMessageUpdate}
+              newSessionTrigger={newSessionTrigger}
+              onShowAllTasks={null}
+            />
+          </WorkspaceErrorBoundary>
+        </div>
+        <JarvisFilesPanel
+          open={filesPanel.open}
+          sessionId={selectedSessionId}
+          initialPath={filesPanel.path}
+          onClose={closeFilesPanel}
+        />
+      </div>
+    );
   }
 
   return (

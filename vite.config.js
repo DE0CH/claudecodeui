@@ -9,6 +9,57 @@ import { getConnectableHost, normalizeLoopbackHost } from './shared/networkHosts
 // injecting it keeps the frontend free of imports that reach outside src/.
 const pkg = createRequire(import.meta.url)('./package.json')
 
+/**
+ * Jarvis staff mode (VITE_JARVIS=true, see src/shared/jarvis.ts): the page's own branding (title, icons,
+ * manifest, language) carries the product name instead of CloudCLI's.
+ */
+function jarvisBranding(env) {
+  const enabled = env.VITE_JARVIS === 'true'
+  const name = env.VITE_PRODUCT_NAME || 'YYC AI'
+  const manifest = JSON.stringify({
+    name,
+    short_name: name,
+    description: name,
+    start_url: '/',
+    display: 'standalone',
+    background_color: '#ffffff',
+    theme_color: '#ffffff',
+    orientation: 'portrait-primary',
+    scope: '/',
+    icons: [
+      { src: '/icons/jarvis-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/icons/jarvis-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+    ],
+  }, null, 2)
+  const escapeHtml = (value) => value.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+  return {
+    name: 'jarvis-branding',
+    transformIndexHtml(html) {
+      if (!enabled) return html
+      return html
+        .replace('<html lang="en">', '<html lang="zh-HK">')
+        .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(name)}</title>`)
+        .replace(/content="Claude UI"/, `content="${escapeHtml(name)}"`)
+        .replace('href="/favicon.svg"', 'href="/icons/jarvis-favicon.svg"')
+        .replace('href="/favicon.png"', 'href="/icons/jarvis-favicon.png"')
+        .replace('href="/manifest.json"', 'href="/icons/jarvis-manifest.json"')
+        .replace(/<link rel="apple-touch-icon" sizes="152x152"[^>]*>/, '')
+        .replace(/<link rel="apple-touch-icon" sizes="180x180" href="[^"]*"/, '<link rel="apple-touch-icon" sizes="180x180" href="/icons/jarvis-icon-180.png"')
+    },
+    configureServer(server) {
+      if (!enabled) return
+      server.middlewares.use('/icons/jarvis-manifest.json', (_req, res) => {
+        res.setHeader('Content-Type', 'application/manifest+json')
+        res.end(manifest)
+      })
+    },
+    generateBundle() {
+      if (!enabled) return
+      this.emitFile({ type: 'asset', fileName: 'icons/jarvis-manifest.json', source: manifest })
+    },
+  }
+}
+
 export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
   const env = loadEnv(mode, process.cwd(), '')
@@ -25,7 +76,7 @@ export default defineConfig(({ mode }) => {
   const serverPort = env.SERVER_PORT || env.PORT || 3001
 
   return {
-    plugins: [react()],
+    plugins: [react(), jarvisBranding(env)],
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version)
     },

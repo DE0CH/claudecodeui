@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react';
 
 import { api, readApiErrorMessage } from '@/shared/api';
+import { IS_JARVIS } from '@/shared/jarvis';
 import type { Plugin } from '@/shared/types';
 
 
@@ -59,6 +60,11 @@ export function PluginsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // The staff build has no plugins (the server doesn't serve them).
+    if (IS_JARVIS) {
+      setLoading(false);
+      return;
+    }
     void refreshPlugins();
   }, [refreshPlugins]);
 

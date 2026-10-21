@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 
+import { IS_JARVIS, JARVIS_WORKSPACE_PATH } from '@/shared/jarvis';
 import { api } from '@/shared/api';
 import type { ServerEvent,
   AppTab,
@@ -368,6 +369,8 @@ const isValidTab = (tab: string): tab is AppTab => {
 };
 
 const readPersistedTab = (): AppTab => {
+  // The staff build has only the chat.
+  if (IS_JARVIS) return 'chat';
   try {
     const stored = localStorage.getItem('activeTab');
     if (stored && isValidTab(stored)) {
@@ -649,7 +652,7 @@ export function useProjectsState({
   // Hydrates TaskMaster details for the given `projectId`. The project
   // identifier comes directly from the DB-driven /api/projects response.
   const hydrateProjectTaskMaster = useCallback(async (projectId: string) => {
-    if (!projectId) {
+    if (!projectId || IS_JARVIS) {
       return;
     }
 
@@ -714,6 +717,13 @@ export function useProjectsState({
   useEffect(() => {
     if (!isLoadingProjects && projects.length === 1 && !selectedProject && !sessionId) {
       setSelectedProject(projects[0]);
+      return;
+    }
+    // The staff build has one fixed workspace and no project picker: always land in it.
+    if (IS_JARVIS && !isLoadingProjects && projects.length > 0 && !selectedProject && !sessionId) {
+      setSelectedProject(
+        projects.find((project) => (project.fullPath || project.path) === JARVIS_WORKSPACE_PATH) ?? projects[0],
+      );
     }
   }, [isLoadingProjects, projects, selectedProject, sessionId]);
 

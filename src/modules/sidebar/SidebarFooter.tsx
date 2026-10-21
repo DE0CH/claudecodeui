@@ -2,6 +2,7 @@ import { Settings, ArrowUpCircle, Bug, AlertTriangle } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { IS_PLATFORM } from '@/shared/utils';
+import { IS_JARVIS, PRODUCT_NAME, SOURCE_URL } from '@/shared/jarvis';
 import type { ReleaseInfo } from '@/shared/types';
 
 const GITHUB_ISSUES_URL = 'https://github.com/siteboon/claudecodeui/issues/new';
@@ -43,7 +44,7 @@ export default function SidebarFooter({
     <div className="flex-shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0)' }}>
       {/* Restart-required banner: the running server version differs from the
           installed/frontend version (updated but not restarted). */}
-      {restartRequired && (
+      {restartRequired && !IS_JARVIS && (
         <>
           <div className="nav-divider" />
           <div className="px-2 py-1.5 md:px-2 md:py-1.5">
@@ -58,7 +59,7 @@ export default function SidebarFooter({
       )}
 
       {/* Update banner */}
-      {updateAvailable && (
+      {updateAvailable && !IS_JARVIS && (
         <>
           <div className="nav-divider" />
           {/* Desktop update */}
@@ -109,6 +110,7 @@ export default function SidebarFooter({
       <div className="nav-divider" />
 
       {/* Desktop Report Issue */}
+      {!IS_JARVIS && (<>
       <div className="hidden px-2 pt-1.5 md:block">
         <a
           href={GITHUB_ISSUES_URL}
@@ -133,6 +135,8 @@ export default function SidebarFooter({
           <span className="text-sm">{t('actions.joinCommunity')}</span>
         </a>
       </div>
+
+      </>)}
 
       {/* Desktop settings */}
       <div className="hidden px-2 py-1.5 md:block">
@@ -160,6 +164,7 @@ export default function SidebarFooter({
       )}
 
       {/* Mobile Report Issue */}
+      {!IS_JARVIS && (<>
       <div className="px-3 pt-3 md:hidden">
         <a
           href={GITHUB_ISSUES_URL}
@@ -189,8 +194,10 @@ export default function SidebarFooter({
         </a>
       </div>
 
+      </>)}
+
       {/* Mobile settings */}
-      <div className="px-3 pb-3 pt-2 md:hidden">
+      <div className={IS_JARVIS ? 'px-3 pb-1 pt-3 md:hidden' : 'px-3 pb-3 pt-2 md:hidden'}>
         <button
           className="flex h-10 w-full items-center gap-3 rounded-xl bg-muted/40 px-3.5 transition-all hover:bg-muted/60 active:scale-[0.98]"
           onClick={onShowSettings}
@@ -201,6 +208,20 @@ export default function SidebarFooter({
           <span className="text-sm font-normal text-foreground">{t('actions.settings')}</span>
         </button>
       </div>
+
+      {/* Staff build: AGPL-3.0 §13, the source stays one tap away. */}
+      {IS_JARVIS && (
+        <div className="px-3 pb-2 pt-1 text-center md:pt-0">
+          <a
+            href={SOURCE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[11px] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+          >
+            {PRODUCT_NAME} · {t('jarvis:about.source')} (AGPL-3.0)
+          </a>
+        </div>
+      )}
     </div>
   );
 }

@@ -11,6 +11,9 @@ import type { PendingPermissionRequest, PermissionMode,
   ProviderModelsDefinition } from '@/shared/types';
 import { DEFAULT_EFFORT_VALUE } from '@/shared/constants';
 import { readSelectedProvider, writeSelectedProvider } from '@/shared/selectedProvider';
+import { IS_JARVIS } from '@/shared/jarvis';
+
+const JARVIS_PERMISSION_MODE: PermissionMode = 'bypassPermissions';
 
 const FALLBACK_PROVIDER_EFFORT_VALUES: Partial<Record<LLMProvider, readonly string[]>> = {
   // Superset used only before the model catalog loads; `ultracode` belongs to the
@@ -125,7 +128,9 @@ const getSessionSelectionKey = (provider: LLMProvider, sessionId: string): strin
 );
 
 export function useChatProviderState({ selectedSession, selectedProject: _selectedProject }: UseChatProviderStateArgs) {
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
+  // Staff build: the sandbox is the boundary, so Claude Code runs without approval prompts and
+  // staff never pick a permission mode.
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(IS_JARVIS ? JARVIS_PERMISSION_MODE : 'default');
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
   // The provider the composer sends under. Held here rather than read from
   // storage per render because switching it has to reset the model menu, the
@@ -395,6 +400,10 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   }, [providerEfforts, providerModels, reconcileStoredEffort]);
 
   useEffect(() => {
+    if (IS_JARVIS) {
+      setPermissionMode(JARVIS_PERMISSION_MODE);
+      return;
+    }
     const validModes = getPermissionModesForProvider(provider);
     const sessionSavedMode = selectedSession?.id
       ? (localStorage.getItem(`permissionMode-${selectedSession.id}`) as PermissionMode | null)

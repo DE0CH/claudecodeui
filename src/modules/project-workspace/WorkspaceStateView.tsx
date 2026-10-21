@@ -1,6 +1,7 @@
 import { Folder } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { IS_JARVIS } from '@/shared/jarvis';
 import MobileMenuButton from '@/modules/project-workspace/MobileMenuButton';
 
 type WorkspaceStateViewProps = {
@@ -13,7 +14,8 @@ type WorkspaceStateViewProps = {
 export default function WorkspaceStateView({ mode, isMobile, onMenuClick }: WorkspaceStateViewProps) {
   const { t } = useTranslation();
 
-  const isLoading = mode === 'loading';
+  // Staff have no projects to choose: the workspace is always there once the server has listed it.
+  const isLoading = mode === 'loading' || IS_JARVIS;
 
   return (
     <div className="flex h-full flex-col">

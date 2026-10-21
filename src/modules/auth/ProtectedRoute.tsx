@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+import { IS_JARVIS } from '@/shared/jarvis';
 import { IS_PLATFORM } from '@/shared/utils';
 import { useAuth } from '@/modules/auth/context/AuthContext';
 import { Onboarding } from '@/modules/onboarding';
@@ -20,7 +21,9 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   }
 
   if (IS_PLATFORM) {
-    if (!hasCompletedOnboarding) {
+    // Staff never see the onboarding wizard: it sets up git identity and agent logins, which the
+    // staff build has no use for.
+    if (!IS_JARVIS && !hasCompletedOnboarding) {
       return <Onboarding onComplete={refreshOnboardingStatus} />;
     }
 

@@ -4,6 +4,7 @@ import { LLMProviderLogo } from '@/shared/ui';
 import type { AppTab, Project, ProjectSession } from '@/shared/types';
 import { usePlugins } from '@/modules/plugins';
 import { getSessionTitle } from '@/shared/utils';
+import { IS_JARVIS } from '@/shared/jarvis';
 import { useSessionTitleRename } from '@/modules/project-workspace/hooks/useSessionTitleRename';
 
 type WorkspaceTitleProps = {
@@ -58,7 +59,8 @@ export default function WorkspaceTitle({
     ? plugins.find((p) => p.name === activeTab.replace('plugin:', ''))?.displayName
     : undefined;
 
-  const showSessionIcon = activeTab === 'chat' && Boolean(selectedSession);
+  // Staff have one model and one workspace: no provider logo and no project name.
+  const showSessionIcon = !IS_JARVIS && activeTab === 'chat' && Boolean(selectedSession);
   const showChatNewSession = activeTab === 'chat' && !selectedSession;
   const sessionTitle = selectedSession ? getSessionTitle(selectedSession) : '';
 
@@ -113,19 +115,19 @@ export default function WorkspaceTitle({
                 {sessionTitle}
               </h2>
             )}
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            {!IS_JARVIS && <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>}
           </div>
         ) : showChatNewSession ? (
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold leading-tight text-foreground">{t('mainContent.newSession')}</h2>
-            <div className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            {!IS_JARVIS && <div className="truncate text-xs leading-tight text-muted-foreground">{selectedProject.displayName}</div>}
           </div>
         ) : (
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold leading-tight text-foreground">
               {getTabTitle(activeTab, shouldShowTasksTab, t, pluginDisplayName)}
             </h2>
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>
+            {!IS_JARVIS && <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.displayName}</div>}
           </div>
         )}
       </div>

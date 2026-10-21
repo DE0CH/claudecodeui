@@ -7,6 +7,10 @@ import { ActionMenu, Tooltip } from '@/shared/ui';
 import { cn } from '@/shared/utils';
 import type { SidebarSearchMode } from '@/shared/types';
 import { useTabOverflow } from '@/modules/sidebar/hooks/useTabOverflow';
+import { IS_JARVIS } from '@/shared/jarvis';
+
+// The staff build has no projects and lists running work in the conversation list itself.
+const JARVIS_MODES: ReadonlySet<SidebarSearchMode> = new Set(['conversations', 'archived']);
 
 type ModeTab = {
   mode: SidebarSearchMode;
@@ -37,12 +41,13 @@ export default function SidebarModeTabs({
   runningSessionsCount,
   t,
 }: SidebarModeTabsProps) {
-  const tabs: ModeTab[] = [
+  const allTabs: ModeTab[] = [
     { mode: 'projects', label: t('search.modeProjects'), icon: Folder, showLabel: true },
     { mode: 'conversations', label: t('search.modeConversations'), icon: MessageSquare, showLabel: true },
     { mode: 'running', label: t('search.runningTooltip', 'Running sessions'), icon: Activity, showLabel: false },
     { mode: 'archived', label: t('search.archiveOnlyTooltip', 'Archive only'), icon: Archive, showLabel: false },
   ];
+  const tabs = allTabs.filter((tab) => !IS_JARVIS || JARVIS_MODES.has(tab.mode));
 
   const activeIndex = tabs.findIndex((tab) => tab.mode === searchMode);
   const { rowRef, mirrorRef, visibleIndexes } = useTabOverflow(tabs.length, activeIndex);

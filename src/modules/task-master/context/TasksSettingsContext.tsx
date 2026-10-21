@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 
 import { api } from '@/shared/api';
+import { IS_JARVIS } from '@/shared/jarvis';
 import {
   readUserPreference,
   subscribeToUserPreferences,
@@ -82,6 +83,11 @@ export const TasksSettingsProvider = ({ children }: { children: ReactNode }) => 
 
   // Check TaskMaster installation status asynchronously on component mount
   useEffect(() => {
+    // The staff build has no TaskMaster (the server doesn't serve it): tasks stay off.
+    if (IS_JARVIS) {
+      setTasksEnabled(false);
+      return;
+    }
     const checkInstallation = async () => {
       try {
         const response = await api.taskmaster.installationStatus();

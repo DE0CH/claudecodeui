@@ -1,7 +1,8 @@
 import { Cloud, ExternalLink, MessageSquare, Star, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { CLOUDCLI_WORDMARK_FONT_FAMILY } from '@/shared/constants';
+import { APP_VERSION, CLOUDCLI_WORDMARK_FONT_FAMILY } from '@/shared/constants';
+import { BRAND_LOGO, IS_JARVIS, PRODUCT_NAME, SOURCE_URL } from '@/shared/jarvis';
 import { IS_PLATFORM } from '@/shared/utils';
 import { useVersionCheck } from '@/shared/hooks/useVersionCheck';
 import PremiumFeatureCard from '@/modules/settings/PremiumFeatureCard';
@@ -29,6 +30,37 @@ function DiscordIcon({ className }: { className?: string }) {
 
 /** Rendered by Settings for the "about" tab, showing version, links and premium upsell cards. */
 export default function AboutTab() {
+  if (IS_JARVIS) return <JarvisAboutContent />;
+  return <UpstreamAboutTab />;
+}
+
+/** The staff build's about page: name, version, and the AGPL-3.0 source offer (§13). */
+function JarvisAboutContent() {
+  const { t } = useTranslation('jarvis');
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-3">
+        <img src={BRAND_LOGO} alt="" className="h-10 w-10 flex-shrink-0 rounded-xl" />
+        <div>
+          <div className="text-base font-semibold text-foreground">{PRODUCT_NAME}</div>
+          <div className="text-sm text-muted-foreground">{t('about.version', { version: APP_VERSION })}</div>
+        </div>
+      </div>
+      <p className="text-sm leading-relaxed text-muted-foreground">{t('about.licence', { product: PRODUCT_NAME })}</p>
+      <a
+        href={SOURCE_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-2 break-all text-sm font-medium text-primary hover:underline"
+      >
+        <ExternalLink className="h-4 w-4 flex-shrink-0" />
+        {SOURCE_URL}
+      </a>
+    </div>
+  );
+}
+
+function UpstreamAboutTab() {
   const { t } = useTranslation('settings');
   const { updateAvailable, latestVersion, currentVersion, releaseInfo } = useVersionCheck('siteboon', 'claudecodeui');
   const releasesUrl = releaseInfo?.htmlUrl || `${GITHUB_REPO_URL}/releases`;

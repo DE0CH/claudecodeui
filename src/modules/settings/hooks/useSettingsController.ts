@@ -13,6 +13,7 @@ import {
 } from '@/shared/userSettings';
 import { useProviderAuthStatus } from '@/modules/provider-auth';
 import type { AgentProvider, ClaudePermissionsState, CodeEditorSettingsState, CodexPermissionMode, CursorPermissionsState, NotificationPreferencesState, ProjectSortOrder, SettingsMainTab } from '@/shared/types';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 const DEFAULT_CURSOR_PERMISSIONS: CursorPermissionsState = {
   allowedCommands: [],
@@ -56,7 +57,13 @@ type ActiveLoginProvider = AgentProvider | '';
 
 const KNOWN_MAIN_TABS: SettingsMainTab[] = ['agents', 'appearance', 'git', 'api', 'tasks', 'browser', 'notifications', 'plugins', 'about'];
 
+// The staff build's settings: look and language, notifications, and the about page (licence, source).
+export const JARVIS_SETTINGS_TABS: readonly SettingsMainTab[] = ['appearance', 'notifications', 'about'];
+
 const normalizeMainTab = (tab: string): SettingsMainTab => {
+  if (IS_JARVIS) {
+    return JARVIS_SETTINGS_TABS.includes(tab as SettingsMainTab) ? (tab as SettingsMainTab) : 'appearance';
+  }
   // Keep backwards compatibility with older callers that still pass "tools".
   if (tab === 'tools') {
     return 'agents';
@@ -289,7 +296,8 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
 
     setActiveTab(normalizeMainTab(initialTab));
     void loadSettings();
-    void refreshProviderAuthStatuses();
+    // Staff never sign in to a provider (the sandbox's egress holds the key).
+    if (!IS_JARVIS) void refreshProviderAuthStatuses();
   }, [initialTab, isOpen, loadSettings, refreshProviderAuthStatuses]);
 
   useEffect(() => {

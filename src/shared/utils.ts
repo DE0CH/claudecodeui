@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
+import { IS_JARVIS } from '@/shared/jarvis';
 import type { Project, ProjectSession, QuickSettingsTab, SlashCommand } from '@/shared/types';
 
 //----------------- DEPLOYMENT MODE ------------
@@ -8,8 +9,9 @@ import type { Project, ProjectSession, QuickSettingsTab, SlashCommand } from '@/
 /**
  * Indicates whether the app runs in Platform mode (hosted) or OSS mode (self-hosted).
  * Read it to hide or gate features that only exist in one of the two deployments.
+ * The Jarvis staff build (IS_JARVIS) is a platform deployment too: the router in front authenticates.
  */
-export const IS_PLATFORM = import.meta.env?.VITE_IS_PLATFORM === 'true';
+export const IS_PLATFORM = import.meta.env?.VITE_IS_PLATFORM === 'true' || IS_JARVIS;
 
 // ---------------------------
 

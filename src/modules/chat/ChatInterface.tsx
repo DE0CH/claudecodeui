@@ -29,6 +29,7 @@ import {
 import ChatMessagesPane from '@/modules/chat/transcript/ChatMessagesPane';
 import ChatComposer from '@/modules/chat/composer/ChatComposer';
 import CommandResultModal from '@/modules/chat/modals/CommandResultModal';
+import { IS_JARVIS, PRODUCT_NAME } from '@/shared/jarvis';
 
 type ChatInterfaceProps = {
   isActive: boolean;
@@ -429,7 +430,7 @@ function ChatInterface({
   // overlapping the last message.
   const hasActivityIndicator = Boolean(sessionActivity && pendingPermissionRequests.length === 0);
 
-  const selectedProviderLabel =
+  const selectedProviderLabel = IS_JARVIS ? PRODUCT_NAME :
     provider === 'cursor'
       ? t('messageTypes.cursor')
       : provider === 'codex'
@@ -602,7 +603,7 @@ function ChatInterface({
           onTextareaInput={handleTextareaInput}
           isInputFocused={isInputFocused}
           onInputFocusChange={handleInputFocusChange}
-          placeholder={t('input.placeholder', { provider: selectedProviderLabel })}
+          placeholder={IS_JARVIS ? t('jarvis:composer.placeholder', { product: PRODUCT_NAME }) : t('input.placeholder', { provider: selectedProviderLabel })}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
         />

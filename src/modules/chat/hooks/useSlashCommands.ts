@@ -5,6 +5,7 @@ import { safeLocalStorage } from '@/modules/chat/utils/chatStorage';
 import { useProjectSlashCommands } from '@/shared/hooks/useProjectSlashCommands';
 import type { LLMProvider, Project, SlashCommand } from '@/shared/types';
 import { isSkillCommand } from '@/shared/utils';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 const COMMAND_QUERY_DEBOUNCE_MS = 150;
 
@@ -276,7 +277,8 @@ export function useSlashCommands({
       const slashPattern = /(?:^|\s)(\/\S*)$/;
       const match = textBeforeCursor.match(slashPattern);
 
-      if (!match) {
+      // Staff build: no slash-command menu ("/" is just text, Claude Code still reads typed commands).
+      if (!match || IS_JARVIS) {
         resetCommandMenuState();
         return;
       }
