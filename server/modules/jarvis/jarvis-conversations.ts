@@ -3,7 +3,7 @@
  * its sandbox (/internal/cc/release) and removes the conversation's /workspace folder ($JARVIS_JFS_ROOT/ws/<id>);
  * forking one gives the fork a copy of the files, since every conversation has its own /workspace.
  */
-import { copyFile, cp, mkdir, rm, stat } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { conversationWorkspaceDir, isConversationId, jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
@@ -14,9 +14,31 @@ type Deps = {
   removeDir: (dir: string) => Promise<void>;
 };
 
+/**
+ * Empties the folder, then removes it. ws/ itself belongs to root on the volume (the sandbox hosts make each
+ * ws/<id> and hand it to uid 1000, the sandbox user and this pod's user), so removing the emptied folder's own entry
+ * can be refused; an empty folder is left then.
+ */
+async function removeWorkspaceDir(dir: string): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  for (const entry of entries) await rm(path.join(dir, entry), { recursive: true, force: true });
+  try {
+    await rmdir(dir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'EACCES' && code !== 'EPERM' && code !== 'ENOENT') throw error;
+  }
+}
+
 const defaultDeps: Deps = {
   release: releaseSandbox,
-  removeDir: async (dir) => await rm(dir, { recursive: true, force: true }),
+  removeDir: removeWorkspaceDir,
 };
 
 /**
