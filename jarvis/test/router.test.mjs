@@ -252,3 +252,42 @@ test("a request for a user owned by the other replica is served there", async ()
   if (res2.status === 503) assert.equal((await get(a, "/hello", auth(email))).status, 200);
   assert.ok(a.procs.has(email));
 });
+
+test("the operator page: /ops/* goes to web's /internal/ops/* for admins only, with the token and X-Jarvis-User", async () => {
+  const seen = [];
+  const web = http.createServer((req, res) => {
+    seen.push({ url: req.url, method: req.method, auth: req.headers.authorization, user: req.headers["x-jarvis-user"] });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, url: req.url }));
+  });
+  await new Promise((r) => web.listen(0, "127.0.0.1", r));
+  try {
+    const r = makeRouter({
+      config: { access: { teamDomain: TEAM, audience: AUD }, users: [ALICE, BOB], admins: [ALICE.toUpperCase()] },
+      webUrl: `http://127.0.0.1:${web.address().port}`,
+      ccToken: "cc-secret",
+    });
+    await r.listen();
+    // not signed in, a user who is not an admin, someone not even a user: refused, nothing forwarded
+    assert.equal((await get(r, "/ops/")).status, 401);
+    assert.equal((await get(r, "/ops/", auth(BOB))).status, 403);
+    assert.equal((await get(r, "/ops/snapshot", auth(BOB))).status, 403);
+    assert.equal((await get(r, "/ops/", auth("mallory@yyc.hk"))).status, 403);
+    assert.equal(seen.length, 0);
+    assert.equal(r.procs.size, 0, "no CloudCLI process for the operator page");
+    // the admin: forwarded with the token and their (verified) address, never a forged one
+    const res = await get(r, "/ops/snapshot?tz=Asia/Hong_Kong", { ...auth(ALICE), "x-jarvis-user": "forged@yyc.hk", authorization: "Bearer mine" });
+    assert.equal(res.status, 200);
+    assert.deepEqual(seen.at(-1), { url: "/internal/ops/snapshot?tz=Asia/Hong_Kong", method: "GET", auth: "Bearer cc-secret", user: ALICE });
+    assert.equal((await get(r, "/ops", auth(ALICE))).headers.location, "/ops/");
+    // read-only, and dot segments can't reach another /internal path
+    assert.equal((await get(r, "/ops/snapshot", auth(ALICE), "POST", "{}")).status, 405);
+    const n = seen.length;
+    assert.equal((await get(r, "/ops/../cc/sandbox", auth(ALICE))).status, 404);
+    assert.equal((await get(r, "/ops/%2e%2e/cc/sandbox", auth(ALICE))).status, 404);
+    assert.equal(seen.length, n);
+    assert.equal(r.procs.size, 0);
+  } finally {
+    web.close();
+  }
+});

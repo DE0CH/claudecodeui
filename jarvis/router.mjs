@@ -5,6 +5,11 @@
 // audience, expiry, an email claim, the instance's `users`) and proxied (HTTP and WebSocket) to that person's process
 // with `X-Jarvis-User: <email>`.
 //
+// The operator page (DE0CH/jarvis3 docs/CHAT.md, "Operator page"): GET /ops/* from a signed-in user who is also in the
+// config's `admins` is forwarded to web's /internal/ops/* (JARVIS_WEB_URL, bearer JARVIS_CC_TOKEN, X-Jarvis-User);
+// anyone else gets 403 and nothing is forwarded. It needs no CloudCLI process and is served by whichever replica
+// gets the request.
+//
 // Several router replicas run side by side (stateless). Each person's process lives on one replica, picked by
 // rendezvous hashing over the ready replicas (a headless Service's DNS): a request that lands on another replica is
 // passed on to the owner, so a person's tabs all reach the same process (a run's live stream exists only there).
@@ -14,7 +19,7 @@
 //
 // Environment (defaults in brackets):
 //   PORT [8080]                       listen port (all interfaces)
-//   JARVIS_CONFIG [/etc/jarvis/config.json]   instance config: access.teamDomain, access.audience, users
+//   JARVIS_CONFIG [/etc/jarvis/config.json]   instance config: access.teamDomain, access.audience, users, admins
 //                                     (access.jwksFile: a local JWKS instead of the team's, for tests only)
 //   JARVIS_UI_SERVER [<repo>/dist-server/server/index.js]   the CloudCLI server entry
 //   JARVIS_UI_HOME_ROOT [/var/lib/cloudcli/home]   per-user HOME folders (HOME/.claude -> $JARVIS_JFS_ROOT/users/<key>/claude)
@@ -316,6 +321,9 @@ export class Router {
     const jwks = o.jwks ?? (a.jwksFile ? JSON.parse(readFileSync(a.jwksFile, "utf8")) : undefined);
     this.verifier = o.verifier ?? new AccessVerifier({ teamDomain: a.teamDomain, audience: a.audience, jwks });
     this.users = new Set((this.config.users ?? []).map((u) => String(u).trim().toLowerCase()));
+    this.admins = new Set((this.config.admins ?? []).map((u) => String(u).trim().toLowerCase()));
+    this.webUrl = o.webUrl ?? process.env.JARVIS_WEB_URL ?? "";
+    this.ccToken = o.ccToken ?? process.env.JARVIS_CC_TOKEN ?? "";
     this.serverEntry = o.serverEntry ?? process.env.JARVIS_UI_SERVER ?? path.join(HERE, "..", "dist-server", "server", "index.js");
     this.homeRoot = o.homeRoot ?? process.env.JARVIS_UI_HOME_ROOT ?? "/var/lib/cloudcli/home";
     this.jfsRoot = o.jfsRoot ?? process.env.JARVIS_JFS_ROOT ?? "/jfs";
@@ -436,6 +444,7 @@ export class Router {
     const who = await this.#identify(req);
     if (who.status === 401) return page(res, 401, "未登入", "請重新整理頁面登入。Not signed in: reload the page to sign in.");
     if (who.status === 403) return page(res, 403, "沒有權限", `${who.email} 沒有使用 YYC AI 的權限。This account is not allowed.`);
+    if (url === "/ops" || url.startsWith("/ops/") || url.startsWith("/ops?")) return this.#ops(req, res, who.email);
     const owner = !req.headers[HOP] ? this.ownerFor(who.email) : null;
     if (owner) return this.#forwardHttp(req, res, owner, who.email);
     let p;
@@ -465,6 +474,30 @@ export class Router {
       else res.destroy();
     });
     req.pipe(up);
+  }
+
+  /** The operator page: admins only, read-only, forwarded to web's /internal/ops/* (see the top of this file). */
+  #ops(req, res, email) {
+    if (!this.admins.has(email)) return page(res, 403, "Not allowed", `${email} is not an operator of this instance.`);
+    if (req.method !== "GET" && req.method !== "HEAD") return page(res, 405, "Not allowed", "Read-only.");
+    const u = new URL(req.url, "http://x");
+    // only /ops itself or below it once dot segments are resolved (never another /internal path)
+    if (u.pathname !== "/ops" && !u.pathname.startsWith("/ops/")) return page(res, 404, "Not found", "Not found.");
+    if (u.pathname === "/ops") { res.writeHead(302, { location: "/ops/", "cache-control": "no-store" }); return res.end(); }
+    if (!this.webUrl || !this.ccToken) return page(res, 503, "Not configured", "JARVIS_WEB_URL / JARVIS_CC_TOKEN are not set.");
+    const target = new URL("/internal" + u.pathname + u.search, this.webUrl);
+    const up = http.request(target, { method: req.method, headers: { authorization: `Bearer ${this.ccToken}`, "x-jarvis-user": email, accept: String(req.headers.accept || "*/*") }, timeout: 30_000 }, (ures) => {
+      res.writeHead(ures.statusCode || 502, ures.statusMessage, responseHeaders(ures));
+      ures.pipe(res);
+    });
+    res.on("close", () => { if (!res.writableFinished) up.destroy(); });
+    up.on("timeout", () => up.destroy(new Error("timeout")));
+    up.on("error", (e) => {
+      log("warn", "ops proxy error", { error: e.message });
+      if (!res.headersSent) page(res, 502, "Not reachable", "The control plane did not answer; reload in a moment.");
+      else res.destroy();
+    });
+    up.end();
   }
 
   #forwardHttp(req, res, owner, email) {
