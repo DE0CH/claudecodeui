@@ -93,12 +93,15 @@ test('session_created is swallowed and persisted as the provider-id mapping', as
 
     // The upsert is broadcast without blocking the run: resolving the owning
     // project's display name is async (database reads), so wait for it before asserting.
-    for (let waited = 0; waited < 5000 && !connection.frames.some((frame) => frame.kind === 'session_upserted'); waited += 10) {
+    // Starting the run announces the session's activity too (with no provider id yet); only the mapping's upsert
+    // carries one.
+    const mapped = (frame: Record<string, unknown>) => frame.kind === 'session_upserted' && frame.providerSessionId;
+    for (let waited = 0; waited < 5000 && !connection.frames.some(mapped); waited += 10) {
       await new Promise((resolve) => { setTimeout(resolve, 10); });
     }
 
     // The provider-native event itself is never forwarded...
-    const sessionUpserts = connection.frames.filter((frame) => frame.kind === 'session_upserted');
+    const sessionUpserts = connection.frames.filter(mapped);
     assert.equal(sessionUpserts.length, 1);
     assert.equal(sessionUpserts[0]?.sessionId, 'app-run-2');
     assert.equal(sessionUpserts[0]?.providerSessionId, 'cursor-native-7');
