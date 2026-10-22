@@ -22,7 +22,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { recordJarvisFailedTurn } from '@/modules/jarvis/jarvis-conversations.js';
 import { prepareJarvisAttachments } from '@/modules/jarvis/jarvis-images.js';
 import { readableSandboxError } from '@/modules/jarvis/jarvis-errors.js';
-import { acquireSandbox, jarvisEnabled, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
+import { acquireSandboxReporting, jarvisEnabled, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
 
 import {
   appendFilesInputTag,
@@ -1070,7 +1070,10 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       // uploads are on this pod's side: originals go into the conversation's /workspace/uploads for the sandbox,
       // images also as a copy Claude can see (HEIC converted, large photos downscaled; jarvis-images.ts)
       ({ images: promptImages, files: promptFiles, savedImages } = await prepareJarvisAttachments(sessionId, options.images, options.files));
-      const sandbox = await acquireSandbox(sessionId);
+      // a wait for the sandbox (a host booting) is its own state in the UI, not "thinking"
+      const sandbox = await acquireSandboxReporting(sessionId, ({ text, canInterrupt }) => {
+        ws.send(createNormalizedMessage({ kind: 'status', text, canInterrupt, sessionId, provider: 'claude' }));
+      });
       sdkOptions.cwd = '/workspace';
       delete sdkOptions.mcpServers;
       // the instance's model is the sandbox's ANTHROPIC_MODEL (egress allows only the instance's models)

@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next';
 import { Shimmer } from '@/shared/ui';
 import type { BackgroundTaskSummary, SessionActivity } from '@/shared/types';
 import { describeBackgroundTask, ownBackgroundTasks } from '@/modules/chat/utils/backgroundTasks';
+import { JARVIS_PREPARING_STATUS } from '@/shared/jarvis';
 
 type ActivityIndicatorProps = {
   activity: SessionActivity | null;
@@ -22,6 +23,8 @@ const ACTION_KEYS = [
 ];
 const DEFAULT_ACTION_WORDS = ['Thinking', 'Processing', 'Analyzing', 'Working', 'Computing', 'Reasoning'];
 const EXIT_ANIMATION_MS = 220;
+/** After this long in the "preparing the workspace" state, a second line says the wait can take a minute or two. */
+export const PREPARING_SLOW_AFTER_S = 20;
 
 /** What the background work is: the one task by kind and name, or how many when there are several. */
 function describeBackgroundTasks(allTasks: BackgroundTaskSummary[], t: TFunction): string {
@@ -41,6 +44,10 @@ function describeBackgroundTasks(allTasks: BackgroundTaskSummary[], t: TFunction
  * A session whose turn has ended while the tasks it launched still run is
  * drawn in the workflow and agent cards' purple, naming the work, and with no
  * Stop: nothing is responding, and the composer can send.
+ *
+ * A Jarvis turn waiting for its sandbox (status `jarvis_preparing`: a host may be booting, up to a minute or two)
+ * is drawn as its own state, not as thinking: a spinner on a sky-tinted tab saying the workspace is being
+ * prepared, with no Stop (nothing runs yet), and after PREPARING_SLOW_AFTER_S a line saying how long it can take.
  *
  * Rendered by chat's ChatComposer above the input so the user can see and
  * interrupt the in-flight turn without leaving the composer.
@@ -81,6 +88,7 @@ export default function ActivityIndicator({ activity, onAbort, isInputFocused = 
   if (!renderedActivity) return null;
 
   const isBackground = Boolean(renderedActivity.background);
+  const isPreparing = !isBackground && renderedActivity.statusText === JARVIS_PREPARING_STATUS;
   const actionWords = ACTION_KEYS.map((key, i) => t(key, { defaultValue: DEFAULT_ACTION_WORDS[i] }));
   const label = isBackground
     ? t('claudeStatus.backgroundWork', 'Background work')
@@ -99,6 +107,45 @@ export default function ActivityIndicator({ activity, onAbort, isInputFocused = 
       ? 'border-primary/30 shadow-[0_-1px_2px_hsl(var(--foreground)/0.08),1px_0_2px_hsl(var(--foreground)/0.06),-1px_0_2px_hsl(var(--foreground)/0.06)]'
       : 'border-border/50 shadow-[0_-1px_1px_hsl(var(--foreground)/0.04),1px_0_1px_hsl(var(--foreground)/0.03),-1px_0_1px_hsl(var(--foreground)/0.03)]',
   ].join(' ');
+
+  if (isPreparing) {
+    const slow = elapsedSeconds >= PREPARING_SLOW_AFTER_S;
+    return (
+      <div
+        className={`pointer-events-none bg-transparent ${
+          isExiting ? 'chat-activity-exit' : 'chat-activity-enter'
+        }`}
+      >
+        <div className="flex items-end justify-between gap-2">
+          <div
+            role="status"
+            aria-live="polite"
+            data-testid="jarvis-preparing"
+            className={[
+              'chat-activity-tab inline-flex min-h-8 min-w-0 max-w-full items-center gap-2.5 rounded-b-none rounded-t-lg border border-b-0 px-3 py-1.5 text-xs transition-all duration-200',
+              'border-sky-300/70 bg-sky-50 text-sky-950 dark:border-sky-700/60 dark:bg-sky-950 dark:text-sky-100',
+            ].join(' ')}
+          >
+            <svg className="h-3.5 w-3.5 shrink-0 animate-spin text-sky-600 dark:text-sky-400" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
+              <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+            <span className="flex min-w-0 flex-col leading-snug">
+              <span className="font-medium">
+                {`${t('claudeStatus.preparing.label', { defaultValue: 'Preparing the workspace' })}…`}
+              </span>
+              {slow && (
+                <span className="text-sky-800/80 dark:text-sky-200/75">
+                  {t('claudeStatus.preparing.slow', { defaultValue: 'This can take a minute or two.' })}
+                </span>
+              )}
+            </span>
+            <span className="shrink-0 tabular-nums text-sky-800/60 dark:text-sky-200/60">{elapsedLabel}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

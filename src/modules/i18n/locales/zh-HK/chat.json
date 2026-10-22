@@ -276,6 +276,10 @@
       "startingNow": "即將開始"
     },
     "stop": "停止",
+    "preparing": {
+      "label": "正在準備工作環境",
+      "slow": "可能需要一至兩分鐘，請稍候。"
+    },
     "backgroundWork": "背景工作",
     "backgroundTask": {
       "workflow": "工作流程 {{name}}",

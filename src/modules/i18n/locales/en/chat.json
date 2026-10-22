@@ -276,6 +276,10 @@
       "startingNow": "Starting now"
     },
     "stop": "Stop",
+    "preparing": {
+      "label": "Preparing the workspace",
+      "slow": "This can take a minute or two."
+    },
     "backgroundWork": "Background work",
     "backgroundTask": {
       "workflow": "Workflow {{name}}",

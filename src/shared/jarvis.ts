@@ -28,3 +28,11 @@ export const BRAND_NAME = IS_JARVIS ? PRODUCT_NAME : 'CloudCLI';
 
 /** The logo shown wherever upstream shows its own: YYC's logo (DE0CH/YYC yyc-ai/deploy/logo.svg, transparent). */
 export const BRAND_LOGO = IS_JARVIS ? '/icons/jarvis-logo.svg' : '/logo.svg';
+
+/**
+ * `status` frames the Jarvis server sends while a turn waits for the conversation's sandbox (a host may be booting;
+ * server/modules/jarvis/sandbox-process.ts `acquireSandboxReporting`): the first is shown as its own "preparing the
+ * workspace" indicator, the second ends it (the turn then shows the usual thinking indicator).
+ */
+export const JARVIS_PREPARING_STATUS = 'jarvis_preparing';
+export const JARVIS_READY_STATUS = 'jarvis_ready';

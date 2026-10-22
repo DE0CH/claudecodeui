@@ -66,6 +66,43 @@ export async function acquireSandbox(conversationId: string): Promise<JarvisSand
   return await internal('/internal/cc/sandbox', { owner, conversation: conversationId });
 }
 
+/**
+ * Status texts of the wait for the conversation's sandbox, sent to the client as `status` frames: the staff UI shows
+ * `JARVIS_PREPARING_STATUS` as its own "preparing the workspace" indicator (not the thinking one), and
+ * `JARVIS_READY_STATUS` ends it. Only a wait longer than `PREPARING_AFTER_MS` is announced, so a warm sandbox
+ * (ready in well under a second) never flashes it.
+ */
+export const JARVIS_PREPARING_STATUS = 'jarvis_preparing';
+export const JARVIS_READY_STATUS = 'jarvis_ready';
+export const PREPARING_AFTER_MS = 1_000;
+
+export type SandboxStatusFrame = { text: typeof JARVIS_PREPARING_STATUS | typeof JARVIS_READY_STATUS; canInterrupt: boolean };
+
+/**
+ * `acquireSandbox`, telling the client through `report` when it has to wait: `preparing` once the wait passes
+ * `afterMs` (nothing can be stopped yet: the turn has no Claude Code process), `ready` when the sandbox came after
+ * that. A failure ends with no `ready`: the turn's error and `complete` follow.
+ */
+export async function acquireSandboxReporting(
+  conversationId: string,
+  report: (frame: SandboxStatusFrame) => void,
+  { afterMs = PREPARING_AFTER_MS, acquire = acquireSandbox }: { afterMs?: number; acquire?: (id: string) => Promise<JarvisSandbox> } = {},
+): Promise<JarvisSandbox> {
+  let announced = false;
+  const timer = setTimeout(() => {
+    announced = true;
+    report({ text: JARVIS_PREPARING_STATUS, canInterrupt: false });
+  }, afterMs);
+  try {
+    const sandbox = await acquire(conversationId);
+    clearTimeout(timer);
+    if (announced) report({ text: JARVIS_READY_STATUS, canInterrupt: true });
+    return sandbox;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function releaseSandbox(conversationId: string): Promise<void> {
   await internal('/internal/cc/release', { conversation: conversationId });
 }
