@@ -1,7 +1,7 @@
 import { Folder } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { IS_JARVIS } from '@/shared/jarvis';
+import { BRAND_NAME, IS_JARVIS } from '@/shared/jarvis';
 import MobileMenuButton from '@/modules/project-workspace/MobileMenuButton';
 
 type WorkspaceStateViewProps = {
@@ -38,7 +38,7 @@ export default function WorkspaceStateView({ mode, isMobile, onMenuClick }: Work
                 }}
               />
             </div>
-            <h2 className="mb-1 text-lg font-semibold text-foreground">{t('mainContent.loading')}</h2>
+            <h2 className="mb-1 text-lg font-semibold text-foreground">{t('mainContent.loading', { name: BRAND_NAME })}</h2>
             <p className="text-sm">{t('mainContent.settingUpWorkspace')}</p>
           </div>
         </div>

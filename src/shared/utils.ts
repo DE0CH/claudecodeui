@@ -1,7 +1,7 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { IS_JARVIS } from '@/shared/jarvis';
+import { BRAND_NAME, IS_JARVIS } from '@/shared/jarvis';
 import type { Project, ProjectSession, QuickSettingsTab, SlashCommand } from '@/shared/types';
 
 //----------------- DEPLOYMENT MODE ------------
@@ -196,7 +196,7 @@ export const playChatCompletionSound = (options = {}): Promise<void> => playNoti
 //----------------- DOCUMENT TITLE ------------
 
 /** Browser tab title shown when no project or session is selected. Private to the title helpers. */
-const DEFAULT_PAGE_TITLE = 'CloudCLI UI';
+const DEFAULT_PAGE_TITLE = IS_JARVIS ? BRAND_NAME : 'CloudCLI UI';
 
 /**
  * Resolves the human-readable label for a session: the persisted `summary` (the custom

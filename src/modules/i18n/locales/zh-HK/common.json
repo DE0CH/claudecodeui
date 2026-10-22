@@ -88,7 +88,7 @@
     "openInEditor": "在編輯器中開啟"
   },
   "mainContent": {
-    "loading": "正在載入 CloudCLI",
+    "loading": "正在載入 {{name}}",
     "settingUpWorkspace": "正在設定你的工作區...",
     "chooseProject": "選擇你的項目",
     "selectProjectDescription": "從側邊欄選擇一個項目，開始與 Claude 一起工作。每個項目都包含你的對話及檔案記錄。",
