@@ -22,7 +22,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { recordJarvisFailedTurn } from '@/modules/jarvis/jarvis-conversations.js';
 import { prepareJarvisAttachments } from '@/modules/jarvis/jarvis-images.js';
 import { readableSandboxError } from '@/modules/jarvis/jarvis-errors.js';
-import { acquireSandboxReporting, jarvisEnabled, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
+import { acquireSandboxReporting, jarvisEnabled, SandboxWaitCancelled, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
 
 import {
   appendFilesInputTag,
@@ -59,6 +59,8 @@ const pendingToolApprovals = new Map();
 // terminal `complete` (aborted: true) to the client, so the run loop must not
 // emit a second one when its generator winds down.
 const abortedSessionIds = new Set();
+// Jarvis: turns waiting for their sandbox (no Claude Code process yet), by app session id, so Stop can cancel the wait.
+const pendingSandboxWaits = new Map();
 // Query instances interrupted because a newer run took over their session id
 // (see addSession). Their run loops must stay silent on wind-down: the map
 // entry, the abort flag, and all client-facing events belong to the new run.
@@ -1071,9 +1073,16 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       // images also as a copy Claude can see (HEIC converted, large photos downscaled; jarvis-images.ts)
       ({ images: promptImages, files: promptFiles, savedImages } = await prepareJarvisAttachments(sessionId, options.images, options.files));
       // a wait for the sandbox (a host booting) is its own state in the UI, not "thinking"
-      const sandbox = await acquireSandboxReporting(sessionId, ({ jarvisSandbox, canInterrupt }) => {
-        ws.send(createNormalizedMessage({ kind: 'status', jarvisSandbox, canInterrupt, sessionId, provider: 'claude' }));
-      });
+      const sandboxWait = new AbortController();
+      pendingSandboxWaits.set(sessionId, sandboxWait);
+      let sandbox;
+      try {
+        sandbox = await acquireSandboxReporting(sessionId, ({ jarvisSandbox, canInterrupt }) => {
+          ws.send(createNormalizedMessage({ kind: 'status', jarvisSandbox, canInterrupt, sessionId, provider: 'claude' }));
+        }, { signal: sandboxWait.signal });
+      } finally {
+        if (pendingSandboxWaits.get(sessionId) === sandboxWait) pendingSandboxWaits.delete(sessionId);
+      }
       sdkOptions.cwd = '/workspace';
       delete sdkOptions.mcpServers;
       // the instance's model is the sandbox's ANTHROPIC_MODEL (egress allows only the instance's models)
@@ -1439,6 +1448,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
 
     const wasAborted = sessionKey() ? abortedSessionIds.delete(sessionKey()) : false;
     if (wasAborted) {
+      // Jarvis: stopped while its sandbox was being prepared. Claude Code never read the message, so it is kept in
+      // our own table (no error): after a reload it shows as sent and not answered, as a stopped turn upstream.
+      if (error instanceof SandboxWaitCancelled) {
+        await recordJarvisFailedTurn({ sessionId, userText: command, sentAt: options.sentAt, receivedAt: turnReceivedAt, error: '' });
+      }
       // The abort already produced the terminal complete; a generator throw
       // caused by interrupt() is expected noise, not a user-facing error.
       return;
@@ -1496,6 +1510,15 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
  */
 async function abortClaudeSDKSession(sessionId) {
   const session = getSession(sessionId);
+
+  // Jarvis: the turn is still waiting for its sandbox; stop the wait (the run then ends quietly, no Claude Code ran)
+  const sandboxWait = pendingSandboxWaits.get(sessionId);
+  if (!session && sandboxWait) {
+    abortedSessionIds.add(sessionId);
+    pendingSandboxWaits.delete(sessionId);
+    sandboxWait.abort();
+    return true;
+  }
 
   if (!session) {
     console.log(`Session ${sessionId} not found`);

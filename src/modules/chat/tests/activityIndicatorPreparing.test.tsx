@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { test, vi } from 'vitest';
 
@@ -11,17 +11,17 @@ import type { SessionActivity } from '@/shared/types';
 
 /**
  * A Jarvis turn waiting for its sandbox (a host may be booting) is its own state: "preparing the workspace" on a
- * tinted tab with a spinner, not the rotating thinking words, no Stop, and after a while a line saying how long it
- * can take.
+ * tinted tab with a spinner, not the rotating thinking words, a Stop that cancels the wait, and after a while a line
+ * saying how long it can take.
  */
 
 const preparing = (secondsAgo: number): SessionActivity => ({
   statusText: JARVIS_PREPARING_STATUS,
-  canInterrupt: false,
+  canInterrupt: true,
   startedAt: Date.now() - secondsAgo * 1000,
 });
 
-test('the wait for the workspace has its own indicator, without Stop or the thinking words', async () => {
+test('the wait for the workspace has its own indicator, with Stop and without the thinking words', async () => {
   await i18n.changeLanguage('en');
   const onAbort = vi.fn();
   const { container } = render(<ActivityIndicator activity={preparing(3)} onAbort={onAbort} />);
@@ -30,7 +30,8 @@ test('the wait for the workspace has its own indicator, without Stop or the thin
   assert.match(container.textContent ?? '', /Preparing the workspace…/);
   assert.doesNotMatch(container.textContent ?? '', /jarvis_preparing|Thinking|Processing/);
   assert.doesNotMatch(container.textContent ?? '', /minute or two/, 'no long-wait line yet');
-  assert.equal(screen.queryByRole('button', { name: 'Stop' }), null);
+  fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+  assert.equal(onAbort.mock.calls.length, 1, 'Stop cancels the wait');
   assert.ok(container.querySelector('.animate-spin'), 'a spinner, not the pulsing dot');
   assert.equal(container.querySelector('.bg-primary'), null);
 });

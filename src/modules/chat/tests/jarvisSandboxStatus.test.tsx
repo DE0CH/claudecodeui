@@ -61,9 +61,9 @@ test('preparing then ready on a turn in flight: its own state, then the usual in
   const activity = new Map<string, SessionActivity>([['viewed', { statusText: null, canInterrupt: true, startedAt: Date.now() }]]);
   const { dispatch } = renderHandlers(activity);
 
-  dispatch({ kind: 'status', jarvisSandbox: 'preparing', canInterrupt: false, sessionId: 'viewed' });
+  dispatch({ kind: 'status', jarvisSandbox: 'preparing', canInterrupt: true, sessionId: 'viewed' });
   assert.equal(activity.get('viewed')?.statusText, JARVIS_PREPARING_STATUS);
-  assert.equal(activity.get('viewed')?.canInterrupt, false);
+  assert.equal(activity.get('viewed')?.canInterrupt, true, 'Stop cancels the wait');
 
   dispatch({ kind: 'status', jarvisSandbox: 'ready', canInterrupt: true, sessionId: 'viewed' });
   assert.equal(activity.get('viewed')?.statusText, null);

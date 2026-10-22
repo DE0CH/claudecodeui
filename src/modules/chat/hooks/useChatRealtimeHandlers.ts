@@ -362,7 +362,7 @@ export function useChatRealtimeHandlers({
             if (msg.jarvisSandbox === 'preparing') {
               // a turn that already ended (a late or replayed frame) is not brought back
               if (!current || current.background) break;
-              onSessionProcessing?.(sid, { statusText: JARVIS_PREPARING_STATUS, canInterrupt: false });
+              onSessionProcessing?.(sid, { statusText: JARVIS_PREPARING_STATUS, canInterrupt: msg.canInterrupt !== false });
             } else if (current && !current.background && current.statusText === JARVIS_PREPARING_STATUS) {
               // ready: the usual indicator takes over; nothing is created for a turn that already ended
               onSessionProcessing?.(sid, { statusText: null, canInterrupt: msg.canInterrupt !== false });

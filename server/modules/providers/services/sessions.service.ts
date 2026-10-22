@@ -629,10 +629,13 @@ export const sessionsService = {
           kind: 'text', role: 'user', content: turn.user_text,
         }));
       }
-      extra.push(createNormalizedMessage({
-        id: `jarvis-failed-${turn.id}-error`, sessionId, timestamp: turn.error_at, provider: 'claude',
-        kind: 'error', content: turn.error,
-      }));
+      // a turn stopped while its sandbox was prepared has no error: just the message, unanswered
+      if (turn.error) {
+        extra.push(createNormalizedMessage({
+          id: `jarvis-failed-${turn.id}-error`, sessionId, timestamp: turn.error_at, provider: 'claude',
+          kind: 'error', content: turn.error,
+        }));
+      }
     }
     const time = (message: NormalizedMessage) => {
       const t = Date.parse(message.timestamp);

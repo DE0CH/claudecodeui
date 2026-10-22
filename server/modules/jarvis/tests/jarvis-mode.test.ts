@@ -22,8 +22,12 @@ import { createJarvisWarmRouter, forwardWarm } from '@/modules/jarvis/jarvis-war
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
 import { createProviderModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
+import { abortClaudeSDKSession, queryClaudeSDK } from '@/modules/providers/list/claude/claude-runtime.provider.js';
+import type { NormalizedMessage, ProviderRuntimeContext } from '@/shared/types.js';
 
 const OWNER = 'staff@yyc.example';
+/** How long the stub web takes to hand out a sandbox (a host booting); 0 = at once. */
+let sandboxDelayMs = 0;
 
 /** Jarvis env for one test, a private database schema, and a temp JuiceFS root. */
 async function withJarvis(run: (ctx: { jfs: string; webUrl: string; calls: Array<{ path: string; body: any }> }) => Promise<void>): Promise<void> {
@@ -35,8 +39,13 @@ async function withJarvis(run: (ctx: { jfs: string; webUrl: string; calls: Array
     req.on('data', (c) => (body += c));
     req.on('end', () => {
       calls.push({ path: req.url ?? '', body: body ? JSON.parse(body) : null });
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end('{"ok":true}');
+      const answer = () => {
+        if (res.destroyed) return;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"ok":true}');
+      };
+      if (req.url === '/internal/cc/sandbox' && sandboxDelayMs > 0) setTimeout(answer, sandboxDelayMs);
+      else answer();
     });
   });
   await new Promise<void>((resolve) => stub.listen(0, '127.0.0.1', () => resolve()));
@@ -524,5 +533,41 @@ test('a warm that cannot reach web fails quietly', async () => {
   await withJarvis(async () => {
     process.env.JARVIS_WEB_URL = 'http://127.0.0.1:1';
     assert.equal(await forwardWarm(null), false);
+  });
+});
+
+test('Stop while the workspace is prepared cancels the turn: no Claude Code, no error, the message kept unanswered', async () => {
+  await withJarvis(async ({ calls }) => {
+    sandboxDelayMs = 3_000;
+    try {
+      const created = await sessionsService.createAppSession('claude', '/workspace', '寫一份新聞稿');
+      const sent: NormalizedMessage[] = [];
+      let queries = 0;
+      const context = {
+        resolveProviderSessionId: async () => null,
+        resolveResumeModel: async () => undefined,
+        getProviderModels: async () => [],
+        normalizeMessage: () => [],
+        isProviderInstalled: async () => true,
+        createQuery: () => { queries += 1; throw new Error('Claude Code must not start for a stopped turn'); },
+      } as unknown as ProviderRuntimeContext;
+      const writer = { send: (m: NormalizedMessage) => { sent.push(m); }, userId: null };
+      const done = queryClaudeSDK('寫一份新聞稿', { sessionId: created.sessionId, cwd: '/workspace' }, writer as never, context);
+
+      for (let i = 0; i < 50 && !sent.some((m) => (m as any).jarvisSandbox === 'preparing'); i += 1) await new Promise((r) => setTimeout(r, 100));
+      assert.ok(sent.some((m) => (m as any).jarvisSandbox === 'preparing'), 'the wait was announced');
+      assert.equal(await abortClaudeSDKSession(created.sessionId), true, 'a turn waiting for its sandbox can be stopped');
+      await done;
+
+      assert.equal(queries, 0);
+      assert.deepEqual(sent.filter((m) => m.kind === 'error' || m.kind === 'complete'), [], 'the abort handler sends the one complete');
+      assert.equal(sent.some((m) => (m as any).jarvisSandbox === 'ready'), false);
+      assert.equal(calls.filter((c) => c.path === '/internal/cc/sandbox').length, 1);
+      const history = await sessionsService.fetchHistory(created.sessionId);
+      assert.deepEqual(history.messages.map((m) => [m.kind, m.role ?? null, m.content]), [['text', 'user', '寫一份新聞稿']]);
+      assert.equal(await abortClaudeSDKSession(created.sessionId), false, 'nothing left to stop');
+    } finally {
+      sandboxDelayMs = 0;
+    }
   });
 });

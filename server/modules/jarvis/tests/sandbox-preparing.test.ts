@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   acquireSandboxReporting,
+  SandboxWaitCancelled,
   type JarvisSandbox,
   type SandboxStatusFrame,
 } from '@/modules/jarvis/sandbox-process.js';
@@ -30,7 +31,7 @@ test('a long wait is announced once as preparing (no `text`: an older client sho
   });
   assert.equal(sb, SANDBOX);
   assert.deepEqual(frames, [
-    { jarvisSandbox: 'preparing', canInterrupt: false },
+    { jarvisSandbox: 'preparing', canInterrupt: true },
     { jarvisSandbox: 'ready', canInterrupt: true },
   ]);
 });
@@ -47,10 +48,44 @@ test('a failed wait ends without ready (the turn reports the error), and a quick
     }),
     /hosts are full/,
   );
-  assert.deepEqual(frames, [{ jarvisSandbox: 'preparing', canInterrupt: false }]);
+  assert.deepEqual(frames, [{ jarvisSandbox: 'preparing', canInterrupt: true }]);
 
   const quick: SandboxStatusFrame[] = [];
   await assert.rejects(acquireSandboxReporting('c1', (f) => quick.push(f), { afterMs: 50, acquire: async () => { throw new Error('x'); } }));
   await after(80);
   assert.deepEqual(quick, []);
+});
+
+test('Stop while preparing cancels the wait: the web call is aborted and nothing says ready', async () => {
+  const frames: SandboxStatusFrame[] = [];
+  const stop = new AbortController();
+  let webSignal: AbortSignal | undefined;
+  const wait = acquireSandboxReporting('c1', (f) => frames.push(f), {
+    afterMs: 10,
+    signal: stop.signal,
+    acquire: (_id, signal) => {
+      webSignal = signal;
+      return new Promise<JarvisSandbox>((resolve) => setTimeout(() => resolve(SANDBOX), 200));
+    },
+  });
+  await after(40);
+  stop.abort();
+  await assert.rejects(wait, SandboxWaitCancelled);
+  assert.equal(webSignal?.aborted, true, 'the request to web is cancelled too');
+  await after(220);
+  assert.deepEqual(frames, [{ jarvisSandbox: 'preparing', canInterrupt: true }]);
+});
+
+test('a sandbox that arrives as Stop is pressed is dropped: the stopped turn never runs', async () => {
+  const stop = new AbortController();
+  const wait = acquireSandboxReporting('c1', () => {}, {
+    afterMs: 10,
+    signal: stop.signal,
+    acquire: async () => {
+      await after(30);
+      stop.abort();
+      return SANDBOX;
+    },
+  });
+  await assert.rejects(wait, SandboxWaitCancelled);
 });

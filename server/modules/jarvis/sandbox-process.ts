@@ -33,7 +33,7 @@ export interface JarvisSandbox {
 
 export { jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
 
-async function internal(path: string, body: Record<string, unknown>): Promise<any> {
+async function internal(path: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<any> {
   const base = process.env.JARVIS_WEB_URL;
   const token = process.env.JARVIS_CC_TOKEN;
   if (!base || !token) throw new Error('JARVIS_WEB_URL and JARVIS_CC_TOKEN must be set');
@@ -43,9 +43,10 @@ async function internal(path: string, body: Record<string, unknown>): Promise<an
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(20 * 60_000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20 * 60_000)]) : AbortSignal.timeout(20 * 60_000),
     });
   } catch (error) {
+    if (signal?.aborted) throw new SandboxWaitCancelled();
     throw new SandboxServiceError(0, `sandbox service unreachable: ${error instanceof Error ? error.message : String(error)}`);
   }
   const text = await r.text();
@@ -60,10 +61,18 @@ async function internal(path: string, body: Record<string, unknown>): Promise<an
 }
 
 /** The conversation's sandbox (made if needed; may take a minute when a host has to start). */
-export async function acquireSandbox(conversationId: string): Promise<JarvisSandbox> {
+export async function acquireSandbox(conversationId: string, signal?: AbortSignal): Promise<JarvisSandbox> {
   const owner = process.env.JARVIS_CC_OWNER;
   if (!owner) throw new Error('JARVIS_CC_OWNER must be set');
-  return await internal('/internal/cc/sandbox', { owner, conversation: conversationId });
+  return await internal('/internal/cc/sandbox', { owner, conversation: conversationId }, signal);
+}
+
+/** The person stopped the turn while it waited for its sandbox (the sandbox, if web still makes it, idles out). */
+export class SandboxWaitCancelled extends Error {
+  constructor() {
+    super('the turn was stopped while its workspace was being prepared');
+    this.name = 'SandboxWaitCancelled';
+  }
 }
 
 /**
@@ -79,21 +88,32 @@ export type SandboxStatusFrame = { jarvisSandbox: 'preparing' | 'ready'; canInte
 
 /**
  * `acquireSandbox`, telling the client through `report` when it has to wait: `preparing` once the wait passes
- * `afterMs` (nothing can be stopped yet: the turn has no Claude Code process), `ready` when the sandbox came after
- * that. A failure ends with no `ready`: the turn's error and `complete` follow.
+ * `afterMs`, `ready` when the sandbox came after that. A failure ends with no `ready`: the turn's error and `complete`
+ * follow. `signal` stops the wait (Stop pressed while preparing): it rejects with `SandboxWaitCancelled`, also when
+ * the sandbox arrived at the same moment, so a stopped turn never runs.
  */
 export async function acquireSandboxReporting(
   conversationId: string,
   report: (frame: SandboxStatusFrame) => void,
-  { afterMs = PREPARING_AFTER_MS, acquire = acquireSandbox }: { afterMs?: number; acquire?: (id: string) => Promise<JarvisSandbox> } = {},
+  {
+    afterMs = PREPARING_AFTER_MS,
+    acquire = acquireSandbox,
+    signal,
+  }: { afterMs?: number; acquire?: (id: string, signal?: AbortSignal) => Promise<JarvisSandbox>; signal?: AbortSignal } = {},
 ): Promise<JarvisSandbox> {
+  if (signal?.aborted) throw new SandboxWaitCancelled();
   let announced = false;
   const timer = setTimeout(() => {
     announced = true;
-    report({ jarvisSandbox: 'preparing', canInterrupt: false });
+    report({ jarvisSandbox: 'preparing', canInterrupt: true });
   }, afterMs);
   try {
-    const sandbox = await acquire(conversationId);
+    const sandbox = await new Promise<JarvisSandbox>((resolve, reject) => {
+      const onAbort = () => reject(new SandboxWaitCancelled());
+      signal?.addEventListener('abort', onAbort, { once: true });
+      acquire(conversationId, signal).then(resolve, reject).finally(() => signal?.removeEventListener('abort', onAbort));
+    });
+    if (signal?.aborted) throw new SandboxWaitCancelled();
     clearTimeout(timer);
     if (announced) report({ jarvisSandbox: 'ready', canInterrupt: true });
     return sandbox;

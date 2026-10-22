@@ -47,7 +47,7 @@ function describeBackgroundTasks(allTasks: BackgroundTaskSummary[], t: TFunction
  *
  * A Jarvis turn waiting for its sandbox (status `jarvis_preparing`: a host may be booting, up to a minute or two)
  * is drawn as its own state, not as thinking: a spinner on a sky-tinted tab saying the workspace is being
- * prepared, with no Stop (nothing runs yet), and after PREPARING_SLOW_AFTER_S a line saying how long it can take.
+ * prepared, and after PREPARING_SLOW_AFTER_S a line saying how long it can take. Stop cancels the wait.
  *
  * Rendered by chat's ChatComposer above the input so the user can see and
  * interrupt the in-flight turn without leaving the composer.
@@ -110,6 +110,23 @@ export default function ActivityIndicator({ activity, onAbort, isInputFocused = 
       : 'border-border/50 shadow-[0_-1px_1px_hsl(var(--foreground)/0.04),1px_0_1px_hsl(var(--foreground)/0.03),-1px_0_1px_hsl(var(--foreground)/0.03)]',
   ].join(' ');
 
+  const stopButton = renderedActivity.canInterrupt && onAbort ? (
+    <button
+      type="button"
+      onClick={onAbort}
+      className={`${tabSurfaceClassName} pointer-events-auto gap-1.5 text-muted-foreground hover:bg-card hover:text-destructive`}
+      aria-label={t('claudeStatus.stop', { defaultValue: 'Stop' })}
+    >
+      <svg className="h-2.5 w-2.5 fill-current" viewBox="0 0 24 24" aria-hidden>
+        <rect x="5" y="5" width="14" height="14" rx="2" />
+      </svg>
+      <span>{t('claudeStatus.stop', { defaultValue: 'Stop' })}</span>
+      <kbd className="hidden rounded border border-border/60 px-1 text-[10px] text-muted-foreground/70 sm:inline-block">
+        esc
+      </kbd>
+    </button>
+  ) : null;
+
   if (isPreparing) {
     const slow = elapsedSeconds >= PREPARING_SLOW_AFTER_S;
     return (
@@ -144,6 +161,7 @@ export default function ActivityIndicator({ activity, onAbort, isInputFocused = 
             </span>
             <span className="shrink-0 tabular-nums text-sky-800/60 dark:text-sky-200/60">{elapsedLabel}</span>
           </div>
+          {stopButton}
         </div>
       </div>
     );
@@ -170,22 +188,7 @@ export default function ActivityIndicator({ activity, onAbort, isInputFocused = 
           <span className="shrink-0 tabular-nums text-muted-foreground/60">{elapsedLabel}</span>
         </div>
 
-        {renderedActivity.canInterrupt && onAbort && (
-          <button
-            type="button"
-            onClick={onAbort}
-            className={`${tabSurfaceClassName} pointer-events-auto gap-1.5 text-muted-foreground hover:bg-card hover:text-destructive`}
-            aria-label={t('claudeStatus.stop', { defaultValue: 'Stop' })}
-          >
-            <svg className="h-2.5 w-2.5 fill-current" viewBox="0 0 24 24" aria-hidden>
-              <rect x="5" y="5" width="14" height="14" rx="2" />
-            </svg>
-            <span>{t('claudeStatus.stop', { defaultValue: 'Stop' })}</span>
-            <kbd className="hidden rounded border border-border/60 px-1 text-[10px] text-muted-foreground/70 sm:inline-block">
-              esc
-            </kbd>
-          </button>
-        )}
+        {stopButton}
       </div>
     </div>
   );
