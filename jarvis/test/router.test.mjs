@@ -328,3 +328,24 @@ test("first names: given_name, else the first word of name (CJK kept whole), nev
   assert.equal(identity, 1, "cached");
   assert.equal(await v.firstName("garbage", BOB), null);
 });
+
+test("GET /api/jarvis/app-signin: redirects only to the configured app scheme, with the caller's own token and state", async () => {
+  const off = makeRouter();
+  await off.listen();
+  const tok = jwt({ email: ALICE });
+  assert.equal((await get(off, "/api/jarvis/app-signin?state=abcdefghijklmnop", { "cf-access-jwt-assertion": tok })).status, 404, "off without JARVIS_APP_SCHEME");
+  const r = makeRouter({ appScheme: "pwashell-test" });
+  await r.listen();
+  assert.equal((await get(r, "/api/jarvis/app-signin?state=abcdefghijklmnop")).status, 401, "needs a signed-in caller");
+  assert.equal((await get(r, "/api/jarvis/app-signin?state=abcdefghijklmnop", auth("mallory@yyc.hk"))).status, 403, "staff only");
+  assert.equal((await get(r, "/api/jarvis/app-signin?state=short", { "cf-access-jwt-assertion": tok })).status, 400);
+  assert.equal((await get(r, "/api/jarvis/app-signin?state=abcdefghijklmnop%2F%2Fevil", { "cf-access-jwt-assertion": tok })).status, 400);
+  const viaHeader = await get(r, "/api/jarvis/app-signin?state=abcdefghijklmnop", { "cf-access-jwt-assertion": tok });
+  assert.equal(viaHeader.status, 302);
+  assert.equal(viaHeader.headers.location, `pwashell-test://signed-in?state=abcdefghijklmnop#token=${encodeURIComponent(tok)}`);
+  assert.equal(viaHeader.headers["cache-control"], "no-store");
+  const viaCookie = await get(r, "/api/jarvis/app-signin?state=abcdefghijklmnop&scheme=evil", { cookie: `a=b; CF_Authorization=${tok}` });
+  assert.equal(viaCookie.status, 302);
+  assert.ok(viaCookie.headers.location.startsWith("pwashell-test://signed-in?state=abcdefghijklmnop#token="), "the scheme is never the caller's");
+  assert.equal(r.procs.size, 0, "no CloudCLI process for the sign-in");
+});

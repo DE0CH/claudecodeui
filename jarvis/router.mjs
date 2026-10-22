@@ -391,6 +391,8 @@ export class Router {
     this.port = o.port ?? Number(process.env.PORT || 8080);
     this.host = o.host ?? undefined;
     this.uid = o.uid ?? Number(process.env.JARVIS_UID || 1000);
+    // The native app's sign-in callback scheme (GET /api/jarvis/app-signin); unset = the endpoint is off.
+    this.appScheme = o.appScheme ?? process.env.JARVIS_APP_SCHEME ?? "";
     this.spawnImpl = o.spawn ?? nodeSpawn;
     this.resolve = o.resolve ?? ((name) => dns.resolve4(name));
     this.now = o.now ?? (() => Date.now());
@@ -498,6 +500,7 @@ export class Router {
     if (who.status === 403) return page(res, 403, "沒有權限", `${who.email} 沒有使用 YYC AI 的權限。This account is not allowed.`);
     if (url === "/ops" || url.startsWith("/ops/") || url.startsWith("/ops?")) return this.#ops(req, res, who.email);
     if (url === "/api/jarvis/me" || url.startsWith("/api/jarvis/me?")) return this.#me(req, res, who.email);
+    if (url === "/api/jarvis/app-signin" || url.startsWith("/api/jarvis/app-signin?")) return this.#appSignin(req, res);
     const owner = !req.headers[HOP] ? this.ownerFor(who.email) : null;
     if (owner) return this.#forwardHttp(req, res, owner, who.email);
     let p;
@@ -534,6 +537,29 @@ export class Router {
     const firstName = await this.verifier.firstName(accessToken(req), email).catch(() => null);
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify({ firstName }));
+  }
+
+  /**
+   * GET /api/jarvis/app-signin?state=…: the native app's sign-in. The app opens this URL in ASWebAuthenticationSession,
+   * Access signs the person in as usual (Google or an emailed code), and this answers with a redirect to the app's own
+   * scheme (JARVIS_APP_SCHEME, the only target) carrying the caller's own Access token and the app's state, which the app
+   * checks against the one it sent. The token is the CF_Authorization cookie Access just set for this host (else the
+   * Cf-Access-Jwt-Assertion header); the app then sends it as a cookie/`cf-access-token` header on its API and WebSocket
+   * calls. It travels in the fragment, so it is never in a server log or a Referer.
+   */
+  #appSignin(req, res) {
+    if (!this.appScheme) return page(res, 404, "Not found", "Not found.");
+    if (req.method !== "GET") return page(res, 405, "Not allowed", "GET only.");
+    const state = new URL(req.url, "http://x").searchParams.get("state") || "";
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(state)) return page(res, 400, "Bad request", "Bad state.");
+    const m = /(?:^|;\s*)CF_Authorization=([^;]+)/.exec(req.headers.cookie || "");
+    const token = m ? decodeURIComponent(m[1]) : accessToken(req);
+    res.writeHead(302, {
+      location: `${this.appScheme}://signed-in?state=${state}#token=${encodeURIComponent(token)}`,
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    });
+    res.end();
   }
 
   /** The operator page: admins only, read-only, forwarded to web's /internal/ops/* (see the top of this file). */
