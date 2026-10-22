@@ -5,7 +5,8 @@
  *    Access-verified email (and strips any client-sent copy), so a missing or different value is refused.
  * 2. Routes that make no sense for staff on a hosted instance answer 404 with a short reason: local sign-in and
  *    registration, provider model/skill/MCP editing (the sandbox's managed settings decide those), creating, cloning,
- *    renaming or deleting projects (there is one, /workspace), API keys and stored credentials, git config, and
+ *    renaming, deleting, archiving or restoring projects (there is one, /workspace), the archive (a delete goes to
+ *    Recently deleted instead), API keys and stored credentials, git config, and
  *    self-update. Chat, sessions, search, drafts, preferences, notifications and scheduled messages stay.
  */
 import type { IncomingHttpHeaders } from 'node:http';
@@ -34,6 +35,10 @@ const UNAVAILABLE: Array<[Method, RegExp]> = [
   ['*', /^\/projects\/clone(-progress)?\/?$/],
   ['PUT', /^\/projects\/[^/]+\/rename\/?$/],
   ['DELETE', /^\/projects\/[^/]+\/?$/],
+  // no archive (Deyao, 2026-10-22): a delete goes to Recently deleted (GET /providers/sessions/deleted)
+  ['GET', /^\/projects\/archived\/?$/],
+  ['POST', /^\/projects\/[^/]+\/restore\/?$/],
+  ['GET', /^\/providers\/sessions\/archived\/?$/],
   ['*', /^\/projects\/[^/]+\/taskmaster\/?$/],
   // host-level settings
   ['*', /^\/settings\/(api-keys|credentials)(\/.*)?$/],

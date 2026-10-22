@@ -34,7 +34,7 @@
     "options": "對話選項",
     "optionsFor": "「{{name}}」的選項",
     "rename": "重新命名",
-    "delete": "封存或刪除",
+    "delete": "刪除",
     "share": "分享"
   },
   "age": {
@@ -68,5 +68,34 @@
     "loadFailed": "未能載入，請再試。",
     "loading": "載入中…",
     "creating": "正在建立連結…"
+  },
+  "recentlyDeleted": {
+    "tab": "最近刪除",
+    "searchPlaceholder": "搜尋最近刪除的對話…",
+    "hint": "刪除的對話會保留 30 日，期間可以還原，之後會永久刪除。",
+    "empty": "沒有最近刪除的對話",
+    "emptyHint": "刪除的對話會在這裏保留 30 日，期間可以還原。",
+    "noMatch": "沒有符合的對話",
+    "loading": "載入中…",
+    "restore": "還原",
+    "deletePermanently": "永久刪除",
+    "daysLeft_one": "{{count}} 日後永久刪除",
+    "daysLeft_other": "{{count}} 日後永久刪除",
+    "dueNow": "即將永久刪除"
+  },
+  "deleteDialog": {
+    "title": "刪除對話",
+    "titleMany_one": "刪除 {{count}} 個對話",
+    "titleMany_other": "刪除 {{count}} 個對話",
+    "confirm": "要刪除「{{name}}」嗎？",
+    "confirmMany_one": "要刪除已選的 {{count}} 個對話嗎？",
+    "confirmMany_other": "要刪除已選的 {{count}} 個對話嗎？",
+    "notice": "對話會移到「最近刪除」，30 日後永久刪除，期間可以還原。",
+    "delete": "刪除",
+    "cancel": "取消",
+    "permanentTitle": "永久刪除對話",
+    "permanentConfirm": "要永久刪除「{{name}}」嗎？",
+    "permanentNotice": "永久刪除後無法還原，對話的記錄及檔案會一併刪除。",
+    "deletePermanently": "永久刪除"
   }
 }

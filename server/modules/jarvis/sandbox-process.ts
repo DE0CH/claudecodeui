@@ -273,3 +273,98 @@ export function spawnInSandbox(sandbox: JarvisSandbox, conversationId: string, o
   };
   return proc as unknown as SpawnedProcess;
 }
+
+/**
+ * Runs a short command in the sandbox (no Claude Code, no touch: its own use is a few seconds) with `input` as its
+ * whole stdin, and collects stdout. Ends with an error when it exits non-zero, prints more than `maxBytes` or takes
+ * longer than `timeoutMs` (then it is killed).
+ */
+export function runInSandbox(
+  sandbox: JarvisSandbox,
+  args: string[],
+  input: string,
+  { timeoutMs = 60_000, maxBytes = 1_000_000 }: { timeoutMs?: number; maxBytes?: number } = {},
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const out: Buffer[] = [];
+    let size = 0;
+    let stderr = '';
+    let settled = false;
+    const settle = (err: Error | null, value = '') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve(value);
+    };
+    const url = new URL('/proc', sandbox.url);
+    const spec = { args, cwd: '/workspace', env: {} };
+    const req = httpRequest({
+      hostname: url.hostname,
+      port: url.port || 80,
+      path: url.pathname,
+      headers: {
+        ...sandbox.headers,
+        connection: 'Upgrade',
+        upgrade: 'jarvis-proc',
+        authorization: `Bearer ${sandbox.token}`,
+        'x-proc': Buffer.from(JSON.stringify(spec)).toString('base64'),
+      },
+    });
+    let socket: Socket | null = null;
+    const timer = setTimeout(() => {
+      if (socket && !socket.destroyed) socket.write(frame(PROC_SIGNAL, 'SIGKILL'));
+      req.destroy();
+      socket?.destroy();
+      settle(new Error(`timed out after ${timeoutMs} ms`));
+    }, timeoutMs);
+    timer.unref?.();
+    req.on('upgrade', (_res, sock) => {
+      socket = sock;
+      sock.write(frame(PROC_STDIN, input));
+      sock.write(frame(PROC_STDIN_END));
+      let buf: Buffer = Buffer.alloc(0);
+      sock.on('data', (c: Buffer) => {
+        buf = buf.length ? Buffer.concat([buf, c]) : c;
+        while (buf.length >= 5) {
+          const n = buf.readUInt32BE(1);
+          if (buf.length < 5 + n) break;
+          const type = buf[0];
+          const payload = buf.subarray(5, 5 + n);
+          buf = buf.subarray(5 + n);
+          if (type === PROC_STDOUT) {
+            size += payload.length;
+            if (size > maxBytes) {
+              sock.write(frame(PROC_SIGNAL, 'SIGKILL'));
+              sock.destroy();
+              settle(new Error('too much output'));
+              return;
+            }
+            out.push(Buffer.from(payload));
+          } else if (type === PROC_STDERR) {
+            if (stderr.length < 2000) stderr += payload.toString('utf8');
+          } else if (type === PROC_EXIT) {
+            let e: { code: number | null; signal: string | null } = { code: 1, signal: null };
+            try {
+              e = JSON.parse(payload.toString('utf8'));
+            } catch {
+              /* keep the default */
+            }
+            sock.end();
+            if (e.code === 0) settle(null, Buffer.concat(out).toString('utf8'));
+            else settle(new Error(`exited ${e.code ?? e.signal}: ${stderr.trim().slice(0, 300)}`));
+          }
+        }
+      });
+      sock.on('close', () => settle(new Error(`the process ended without an exit status: ${stderr.trim().slice(0, 300)}`)));
+      sock.on('error', (e) => settle(e));
+    });
+    req.on('response', (res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('end', () => settle(new Error(`the sandbox refused the process (${res.statusCode}): ${body.trim().slice(0, 200)}`)));
+    });
+    req.on('error', (e) => settle(e));
+    req.end();
+  });
+}

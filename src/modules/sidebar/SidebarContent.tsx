@@ -3,7 +3,8 @@ import { Activity, Archive, Folder, MessageSquare, RotateCcw, Search, Trash2 } f
 import type { TFunction } from 'i18next';
 
 import { LLMProviderLogo, ScrollArea } from '@/shared/ui';
-import type { ArchivedProjectListItem, ArchivedSessionListItem, ConversationSearchResults, Project, RecentConversationListItem, ReleaseInfo, SearchProgress, SidebarProjectListProps, SidebarSearchMode } from '@/shared/types';
+import type { ArchivedProjectListItem, ArchivedSessionListItem, RecentlyDeletedSessionItem, ConversationSearchResults, Project, RecentConversationListItem, ReleaseInfo, SearchProgress, SidebarProjectListProps, SidebarSearchMode } from '@/shared/types';
+import JarvisRecentlyDeleted from '@/modules/sidebar/JarvisRecentlyDeleted';
 import { formatCompactAge, getAllSessions } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import SidebarFooter from '@/modules/sidebar/SidebarFooter';
 import SidebarHeader from '@/modules/sidebar/SidebarHeader';
@@ -91,6 +92,10 @@ type SidebarContentProps = {
   archivedSessions: ArchivedSessionListItem[];
   archivedSessionsCount: number;
   isArchivedSessionsLoading: boolean;
+  /** Staff build: Recently deleted (search-filtered) and its full count. */
+  deletedSessions: RecentlyDeletedSessionItem[];
+  deletedSessionsCount: number;
+  onDeleteRecentlyDeletedSession: (session: RecentlyDeletedSessionItem) => void;
   recentConversations: RecentConversationListItem[];
   recentConversationsTotal: number;
   recentConversationsHasMore: boolean;
@@ -141,6 +146,9 @@ export default function SidebarContent({
   archivedSessions,
   archivedSessionsCount,
   isArchivedSessionsLoading,
+  deletedSessions,
+  deletedSessionsCount,
+  onDeleteRecentlyDeletedSession,
   recentConversations,
   recentConversationsTotal,
   recentConversationsHasMore,
@@ -427,6 +435,16 @@ export default function SidebarContent({
               <SidebarProjectList {...projectListProps} />
             </div>
           )
+        ) : searchMode === 'deleted' ? (
+          <JarvisRecentlyDeleted
+            sessions={deletedSessions}
+            total={deletedSessionsCount}
+            isLoading={isArchivedSessionsLoading}
+            now={projectListProps.currentTime}
+            onRestore={onRestoreArchivedSession}
+            onDeletePermanently={onDeleteRecentlyDeletedSession}
+            t={t}
+          />
         ) : searchMode === 'archived' ? (
           isArchivedSessionsLoading ? (
             <div className="space-y-2 px-2 py-1" aria-live="polite" aria-busy="true">

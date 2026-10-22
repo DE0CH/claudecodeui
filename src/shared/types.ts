@@ -1578,7 +1578,19 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 export type ProjectSortOrder = 'name' | 'date';
 
 /** Which list the sidebar is currently showing: projects, conversation search results, running sessions or archived items. */
-export type SidebarSearchMode = 'projects' | 'conversations' | 'running' | 'archived';
+/** `deleted` is the staff build's Recently deleted (it has no archive). */
+export type SidebarSearchMode = 'projects' | 'conversations' | 'running' | 'archived' | 'deleted';
+
+/** Staff build: a conversation in Recently deleted (GET /api/providers/sessions/deleted). */
+export type RecentlyDeletedSessionItem = {
+  sessionId: string;
+  sessionTitle: string;
+  /** ISO time it was deleted */
+  deletedAt: string;
+  /** ISO time it is deleted for good (30 days later) */
+  purgeAt: string;
+  lastActivity: string | null;
+};
 
 /** A Project narrowed to the archived state so archived entries can be listed and restored without being mistaken for active projects. */
 export type ArchivedProjectListItem = Project & { isArchived: true };

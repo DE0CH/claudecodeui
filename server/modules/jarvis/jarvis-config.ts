@@ -10,6 +10,7 @@
  *   JARVIS_PRODUCT_NAME              display name of the one project, /workspace
  *   JARVIS_MODEL                     the instance's model id (the sandbox's ANTHROPIC_MODEL decides what runs)
  *   JARVIS_MODEL_LABEL               its label in the UI (e.g. "Sonnet 5.5")
+ *   JARVIS_TITLE_MODEL               the model that names conversations (jarvis-title.ts; else config titleModel)
  *   JARVIS_LOCALE                    language of server-made messages (zh-* → Traditional Chinese, HK usage)
  *   JARVIS_CONFIG [/etc/jarvis/config.json]  the instance config the router reads too: product.name,
  *                                    product.locale, defaultModel and its models[] label fill whatever the
@@ -23,6 +24,7 @@ type InstanceConfig = {
   product?: { name?: string; locale?: string };
   models?: Array<{ id?: string; label?: string }>;
   defaultModel?: string;
+  titleModel?: string;
 };
 
 let instanceConfig: InstanceConfig | null = null;
@@ -81,6 +83,12 @@ export function jarvisModel(): { value: string; label: string } {
     || config.models?.find((model) => model.id === value)?.label?.trim()
     || value;
   return { value, label };
+}
+
+/** The small, fast model that names conversations (config titleModel; Claude Code's small/fast model too). */
+export function jarvisTitleModel(): string {
+  const config = readInstanceConfig();
+  return (process.env.JARVIS_TITLE_MODEL || '').trim() || config.titleModel?.trim() || config.defaultModel?.trim() || '';
 }
 
 export function jarvisJfsRoot(): string {

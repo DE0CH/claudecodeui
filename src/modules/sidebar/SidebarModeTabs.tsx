@@ -1,5 +1,5 @@
 import { Fragment } from 'react';
-import { Activity, Archive, Folder, MessageSquare, MoreHorizontal } from 'lucide-react';
+import { Activity, Archive, Folder, MessageSquare, MoreHorizontal, Trash2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -9,8 +9,9 @@ import type { SidebarSearchMode } from '@/shared/types';
 import { useTabOverflow } from '@/modules/sidebar/hooks/useTabOverflow';
 import { IS_JARVIS } from '@/shared/jarvis';
 
-// The staff build has no projects and lists running work in the conversation list itself.
-const JARVIS_MODES: ReadonlySet<SidebarSearchMode> = new Set(['conversations', 'archived']);
+// The staff build has no projects, lists running work in the conversation list itself, and has no archive: a
+// deleted conversation goes to Recently deleted.
+const JARVIS_MODES: ReadonlySet<SidebarSearchMode> = new Set(['conversations', 'deleted']);
 
 type ModeTab = {
   mode: SidebarSearchMode;
@@ -46,6 +47,7 @@ export default function SidebarModeTabs({
     { mode: 'conversations', label: t('search.modeConversations'), icon: MessageSquare, showLabel: true },
     { mode: 'running', label: t('search.runningTooltip', 'Running sessions'), icon: Activity, showLabel: false },
     { mode: 'archived', label: t('search.archiveOnlyTooltip', 'Archive only'), icon: Archive, showLabel: false },
+    ...(IS_JARVIS ? [{ mode: 'deleted' as const, label: t('jarvis:recentlyDeleted.tab'), icon: Trash2, showLabel: true }] : []),
   ];
   const tabs = allTabs.filter((tab) => !IS_JARVIS || JARVIS_MODES.has(tab.mode));
 

@@ -23,6 +23,8 @@ import { recordJarvisFailedTurn } from '@/modules/jarvis/jarvis-conversations.js
 import { prepareJarvisAttachments } from '@/modules/jarvis/jarvis-images.js';
 import { readableSandboxError } from '@/modules/jarvis/jarvis-errors.js';
 import { acquireSandboxReporting, jarvisEnabled, SandboxWaitCancelled, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
+import { sessionsDb } from '@/modules/database/index.js';
+import { titleConversation } from '@/modules/jarvis/jarvis-title.js';
 
 import {
   appendFilesInputTag,
@@ -1088,6 +1090,12 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       // the instance's model is the sandbox's ANTHROPIC_MODEL (egress allows only the instance's models)
       delete sdkOptions.model;
       sdkOptions.spawnClaudeCodeProcess = (spawnOptions) => spawnInSandbox(sandbox, sessionId, spawnOptions);
+      // a new conversation (no Claude Code session yet) still on its provisional name gets a title from the title
+      // model, alongside the turn (jarvis-title.ts)
+      if (!providerSessionId && typeof command === 'string' && command.trim()) {
+        const row = await sessionsDb.getSessionById(sessionId).catch(() => null);
+        if (row && row.name_source == null) void titleConversation(sandbox, sessionId, command);
+      }
     }
 
     // Every turn uses streaming input so stdin stays open past the turn's

@@ -104,6 +104,13 @@ test('the guard refuses requests without the owner and the routes staff do not u
   assert.equal(isUnavailableInJarvis('GET', '/auth/status'), false);
   assert.equal(isUnavailableInJarvis('GET', '/providers/claude/models'), false);
   assert.equal(isUnavailableInJarvis('POST', '/providers/claude/models'), true);
+  // no archive: Recently deleted instead
+  assert.equal(isUnavailableInJarvis('GET', '/providers/sessions/archived'), true);
+  assert.equal(isUnavailableInJarvis('GET', '/projects/archived'), true);
+  assert.equal(isUnavailableInJarvis('POST', '/projects/p1/restore'), true);
+  assert.equal(isUnavailableInJarvis('GET', '/providers/sessions/deleted'), false);
+  assert.equal(isUnavailableInJarvis('POST', '/providers/sessions/abc/restore'), false);
+  assert.equal(isUnavailableInJarvis('DELETE', '/providers/sessions/abc'), false);
   assert.equal(isUnavailableInJarvis('PUT', '/providers/claude/models/custom-only'), true);
   assert.equal(isUnavailableInJarvis('POST', '/providers/claude/sessions/x/active-model'), false);
   assert.equal(isUnavailableInJarvis('GET', '/providers/claude/mcp/servers'), true);

@@ -8,7 +8,7 @@ import { providerModelsService } from '@/modules/providers/services/provider-mod
 import { providerTokenUsageService } from '@/modules/providers/services/provider-token-usage.service.js';
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
-import { sessionsService } from '@/modules/providers/services/sessions.service.js';
+import { RECENTLY_DELETED_DAYS, sessionsService } from '@/modules/providers/services/sessions.service.js';
 import type {
   CustomProviderModelEffort,
   CustomProviderModelInput,
@@ -898,6 +898,15 @@ router.get(
   asyncHandler(async (_req: Request, res: Response) => {
     const sessions = await sessionsService.listArchivedSessions();
     res.json(createApiSuccessResponse({ sessions }));
+  }),
+);
+
+// Jarvis mode: Recently deleted (a delete moves a conversation there; restore and permanent delete as usual)
+router.get(
+  '/sessions/deleted',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const sessions = await sessionsService.listRecentlyDeletedSessions();
+    res.json(createApiSuccessResponse({ sessions, retentionDays: RECENTLY_DELETED_DAYS }));
   }),
 );
 

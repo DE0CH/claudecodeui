@@ -6,7 +6,7 @@ import { IS_JARVIS } from '@/shared/jarvis';
 import { subscribeToUserPreferences } from '@/shared/userSettings';
 import { usePaletteOps } from '@/modules/command-palette';
 import { mergeLiveRecentConversations } from '@/modules/sidebar/utils/liveRecentConversations';
-import type { ArchivedProjectListItem, ArchivedSessionListItem, ConversationProjectResult, ConversationSearchResults, LLMProvider, Project, ProjectSession, ProjectSortOrder, RecentConversationListItem, SearchProgress, ActiveSidebarRename, PendingSidebarDeletion, SessionTitleSearchResult, SessionWithProvider, SidebarSearchMode, SidebarSessionSelection } from '@/shared/types';
+import type { ArchivedProjectListItem, ArchivedSessionListItem, RecentlyDeletedSessionItem, ConversationProjectResult, ConversationSearchResults, LLMProvider, Project, ProjectSession, ProjectSortOrder, RecentConversationListItem, SearchProgress, ActiveSidebarRename, PendingSidebarDeletion, SessionTitleSearchResult, SessionWithProvider, SidebarSearchMode, SidebarSessionSelection } from '@/shared/types';
 import {
   filterProjects,
   getAllSessions,
@@ -123,6 +123,7 @@ export function useSidebarController({
   const [archivedProjects, setArchivedProjects] = useState<ArchivedProjectListItem[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<ArchivedSessionListItem[]>([]);
   const [isArchivedSessionsLoading, setIsArchivedSessionsLoading] = useState(false);
+  const [deletedSessions, setDeletedSessions] = useState<RecentlyDeletedSessionItem[]>([]);
   const [recentConversations, setRecentConversations] = useState<RecentConversationListItem[]>([]);
   const [recentConversationsTotal, setRecentConversationsTotal] = useState(0);
   const [recentConversationsHasMore, setRecentConversationsHasMore] = useState(false);
@@ -202,7 +203,27 @@ export function useSidebarController({
     onRefreshRef.current = onRefresh;
   }, [onRefresh]);
 
+  // Staff build: Recently deleted instead of the archive. Every place that refreshes the archive after a delete or
+  // restore refreshes this list through the same call.
+  const fetchRecentlyDeletedSessions = useCallback(async () => {
+    setIsArchivedSessionsLoading(true);
+    try {
+      const response = await api.getRecentlyDeletedSessions();
+      if (!response.ok) throw new Error(`Failed to load Recently deleted: ${response.status}`);
+      const payload = (await response.json()) as { data?: { sessions?: RecentlyDeletedSessionItem[] } };
+      setDeletedSessions(Array.isArray(payload.data?.sessions) ? payload.data.sessions : []);
+    } catch (error) {
+      console.error('[Sidebar] Failed to load Recently deleted:', error);
+    } finally {
+      setIsArchivedSessionsLoading(false);
+    }
+  }, []);
+
   const fetchArchivedSessions = useCallback(async () => {
+    if (IS_JARVIS) {
+      await fetchRecentlyDeletedSessions();
+      return;
+    }
     setIsArchivedSessionsLoading(true);
 
     try {
@@ -234,7 +255,7 @@ export function useSidebarController({
     } finally {
       setIsArchivedSessionsLoading(false);
     }
-  }, []);
+  }, [fetchRecentlyDeletedSessions]);
 
   const fetchRecentConversationsPage = useCallback(async (offset: number, append: boolean) => {
     const requestSequence = ++recentConversationsSeqRef.current;
@@ -359,7 +380,7 @@ export function useSidebarController({
   }, [fetchArchivedSessions, removedSessionIds]);
 
   useEffect(() => {
-    if (searchMode !== 'archived') {
+    if (searchMode !== 'archived' && searchMode !== 'deleted') {
       return;
     }
 
@@ -759,6 +780,12 @@ export function useSidebarController({
       return searchableFields.some((value) => value.toLowerCase().includes(normalizedSearch));
     });
   }, [archivedSessions, debouncedSearchQuery]);
+
+  const filteredDeletedSessions = useMemo(() => {
+    const normalizedSearch = debouncedSearchQuery.trim().toLowerCase();
+    if (!normalizedSearch) return deletedSessions;
+    return deletedSessions.filter((session) => session.sessionTitle.toLowerCase().includes(normalizedSearch));
+  }, [deletedSessions, debouncedSearchQuery]);
 
   const filteredArchivedProjects = useMemo(() => {
     const normalizedSearch = debouncedSearchQuery.trim().toLowerCase();
@@ -1250,6 +1277,8 @@ export function useSidebarController({
     archivedProjects: filteredArchivedProjects,
     archivedSessions: filteredArchivedSessions,
     archivedSessionsCount: archivedProjects.length + archivedSessions.length,
+    deletedSessions: filteredDeletedSessions,
+    deletedSessionsCount: deletedSessions.length,
     isArchivedSessionsLoading,
     recentConversations: recentConversationsWithCurrentTitles,
     recentConversationsTotal: Math.max(

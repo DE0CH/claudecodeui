@@ -229,4 +229,15 @@ CREATE TABLE jarvis_failed_turns (
 );
 CREATE INDEX idx_jarvis_failed_turns_session ON jarvis_failed_turns(session_id);
 `,
+  // 3: Jarvis mode — where a conversation's name came from (`name_source`: NULL = provisional, the first words or
+  // Claude Code's own title; 'title' = the title model's; 'user' = renamed by the person, never overwritten), and
+  // Recently deleted (`deleted_at`, UTC text like the other timestamps: a deleted conversation keeps "isArchived" = 1,
+  // the upstream soft-delete flag every list already filters on, and is purged 30 days after deleted_at). Archive is
+  // gone from the staff UI: every archived conversation is back in the list.
+  `
+ALTER TABLE sessions ADD COLUMN name_source TEXT COLLATE "C";
+ALTER TABLE sessions ADD COLUMN deleted_at TEXT COLLATE "C";
+UPDATE sessions SET "isArchived" = 0 WHERE "isArchived" = 1;
+CREATE INDEX idx_sessions_deleted_at ON sessions(deleted_at) WHERE deleted_at IS NOT NULL;
+`,
 ];

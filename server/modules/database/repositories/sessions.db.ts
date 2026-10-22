@@ -15,7 +15,12 @@ type SessionRow = {
   effort: string | null;
   /** The app session this one was branched from; NULL unless it is a fork. */
   forked_from_session_id: string | null;
+  /** Upstream's soft-delete flag; in Jarvis mode 1 = in Recently deleted (deleted_at says since when). */
   isArchived: number;
+  /** Where custom_name came from: NULL provisional, 'title' the title model, 'user' a rename (never overwritten). */
+  name_source?: string | null;
+  /** Jarvis mode: when the conversation went to Recently deleted (UTC text), NULL otherwise. */
+  deleted_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -26,7 +31,7 @@ type RecentSessionsPage = {
 };
 
 const SESSION_ROW_COLUMNS =
-  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, forked_from_session_id, isArchived, created_at, updated_at';
+  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, forked_from_session_id, isArchived, name_source, deleted_at, created_at, updated_at';
 
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -107,8 +112,9 @@ export const sessionsDb = {
            updated_at = COALESCE(?, CURRENT_TIMESTAMP),
            project_path = ?,
            jsonl_path = ?,
-           isArchived = CASE WHEN ? IS NULL OR julianday(?) > julianday(updated_at) THEN 0 ELSE isArchived END,
+           isArchived = CASE WHEN deleted_at IS NOT NULL THEN isArchived WHEN ? IS NULL OR julianday(?) > julianday(updated_at) THEN 0 ELSE isArchived END,
            custom_name = CASE
+             WHEN name_source IS NOT NULL THEN custom_name
              WHEN session_id <> provider_session_id AND custom_name IS NOT NULL THEN custom_name
              ELSE COALESCE(?, custom_name)
            END
@@ -135,8 +141,9 @@ export const sessionsDb = {
          updated_at = excluded.updated_at,
          project_path = excluded.project_path,
          jsonl_path = excluded.jsonl_path,
-         isArchived = CASE WHEN ? IS NULL OR julianday(excluded.updated_at) > julianday(sessions.updated_at) THEN 0 ELSE sessions.isArchived END,
+         isArchived = CASE WHEN sessions.deleted_at IS NOT NULL THEN sessions.isArchived WHEN ? IS NULL OR julianday(excluded.updated_at) > julianday(sessions.updated_at) THEN 0 ELSE sessions.isArchived END,
          custom_name = CASE
+           WHEN sessions.name_source IS NOT NULL THEN sessions.custom_name
            WHEN sessions.session_id <> sessions.provider_session_id AND sessions.custom_name IS NOT NULL
              THEN sessions.custom_name
            ELSE COALESCE(excluded.custom_name, sessions.custom_name)
@@ -390,10 +397,25 @@ export const sessionsDb = {
        WHERE session_id = ?`, [sessionId]));
   },
 
+  /** A rename by the person: it wins over every generated name, now and later. */
   async updateSessionCustomName(sessionId: string, customName: string): Promise<void> {
     (await run(`UPDATE sessions
-       SET custom_name = ?
+       SET custom_name = ?, name_source = 'user'
        WHERE session_id = ?`, [customName, sessionId]));
+  },
+
+  /** A provisional name (the first words, Claude Code's own title): only while nothing better named the session. */
+  async setProvisionalSessionName(sessionId: string, customName: string): Promise<boolean> {
+    return (await run(`UPDATE sessions
+       SET custom_name = ?
+       WHERE session_id = ? AND name_source IS NULL`, [customName, sessionId])).changes > 0;
+  },
+
+  /** The title model's title: replaces a provisional name, never a rename. False when the row kept its name. */
+  async setGeneratedSessionTitle(sessionId: string, title: string): Promise<boolean> {
+    return (await run(`UPDATE sessions
+       SET custom_name = ?, name_source = 'title'
+       WHERE session_id = ? AND name_source IS NULL`, [title, sessionId])).changes > 0;
   },
 
   async getSessionById(sessionId: string): Promise<SessionRow | null> {
@@ -573,6 +595,39 @@ export const sessionsDb = {
     (await run(`UPDATE sessions
        SET isArchived = ?
        WHERE session_id = ?`, [isArchived ? 1 : 0, sessionId]));
+  },
+
+  /** Jarvis mode: the conversation goes to Recently deleted (hidden from every list, purged later). */
+  async moveSessionToRecentlyDeleted(sessionId: string): Promise<void> {
+    (await run(`UPDATE sessions
+       SET isArchived = 1, deleted_at = CURRENT_TIMESTAMP
+       WHERE session_id = ?`, [sessionId]));
+  },
+
+  /** Jarvis mode: back from Recently deleted into the conversation list. */
+  async restoreSessionFromRecentlyDeleted(sessionId: string): Promise<void> {
+    (await run(`UPDATE sessions
+       SET isArchived = 0, deleted_at = NULL
+       WHERE session_id = ?`, [sessionId]));
+  },
+
+  /** Jarvis mode: Recently deleted, most recently deleted first. */
+  async getRecentlyDeletedSessions(): Promise<SessionRow[]> {
+    const rows = (await all(`SELECT ${SESSION_ROW_COLUMNS}
+         FROM sessions
+         WHERE deleted_at IS NOT NULL
+         ORDER BY deleted_at DESC, session_id DESC`)) as SessionRow[];
+    return normalizeSessionRows(rows).map((row) => ({ ...row, deleted_at: normalizeTimestamp(row.deleted_at ?? undefined) }));
+  },
+
+  /** Jarvis mode: the ids in Recently deleted for at least `days` days. */
+  async getSessionIdsDeletedBefore(days: number): Promise<string[]> {
+    const rows = (await all(`SELECT session_id
+         FROM sessions
+         WHERE deleted_at IS NOT NULL
+           AND deleted_at <= to_char(now() at time zone 'utc' - make_interval(days => ?), 'YYYY-MM-DD HH24:MI:SS')
+         ORDER BY deleted_at`, [days])) as Array<{ session_id: string }>;
+    return rows.map((row) => row.session_id);
   },
 
   async deleteSessionById(sessionId: string): Promise<boolean> {

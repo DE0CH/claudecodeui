@@ -105,6 +105,8 @@ function Sidebar({
     archivedSessions,
     archivedSessionsCount,
     isArchivedSessionsLoading,
+    deletedSessions,
+    deletedSessionsCount,
     recentConversations,
     recentConversationsTotal,
     recentConversationsHasMore,
@@ -290,6 +292,11 @@ function Sidebar({
             archivedSessions={archivedSessions}
             archivedSessionsCount={archivedSessionsCount}
             isArchivedSessionsLoading={isArchivedSessionsLoading}
+            deletedSessions={deletedSessions}
+            deletedSessionsCount={deletedSessionsCount}
+            onDeleteRecentlyDeletedSession={(session) => {
+              showDeleteSessionConfirmation(session.sessionId, session.sessionTitle, { isArchived: true });
+            }}
             recentConversations={recentConversations}
             recentConversationsTotal={recentConversationsTotal}
             recentConversationsHasMore={recentConversationsHasMore}

@@ -34,7 +34,7 @@
     "options": "Conversation options",
     "optionsFor": "Options for {{name}}",
     "rename": "Rename",
-    "delete": "Archive or delete",
+    "delete": "Delete",
     "share": "Share"
   },
   "age": {
@@ -68,5 +68,34 @@
     "loadFailed": "Couldn't load. Please try again.",
     "loading": "Loading…",
     "creating": "Making the link…"
+  },
+  "recentlyDeleted": {
+    "tab": "Recently deleted",
+    "searchPlaceholder": "Search recently deleted conversations…",
+    "hint": "Deleted conversations are kept for 30 days and can be restored until then; after that they are deleted permanently.",
+    "empty": "No recently deleted conversations",
+    "emptyHint": "Deleted conversations stay here for 30 days and can be restored.",
+    "noMatch": "No matching conversations",
+    "loading": "Loading…",
+    "restore": "Restore",
+    "deletePermanently": "Delete permanently",
+    "daysLeft_one": "Deleted permanently in {{count}} day",
+    "daysLeft_other": "Deleted permanently in {{count}} days",
+    "dueNow": "Being deleted permanently"
+  },
+  "deleteDialog": {
+    "title": "Delete conversation",
+    "titleMany_one": "Delete {{count}} conversation",
+    "titleMany_other": "Delete {{count}} conversations",
+    "confirm": "Delete “{{name}}”?",
+    "confirmMany_one": "Delete the {{count}} selected conversation?",
+    "confirmMany_other": "Delete the {{count}} selected conversations?",
+    "notice": "It moves to Recently deleted and is deleted permanently after 30 days; you can restore it until then.",
+    "delete": "Delete",
+    "cancel": "Cancel",
+    "permanentTitle": "Delete permanently",
+    "permanentConfirm": "Delete “{{name}}” permanently?",
+    "permanentNotice": "This can't be undone: the conversation and its files are deleted.",
+    "deletePermanently": "Delete permanently"
   }
 }

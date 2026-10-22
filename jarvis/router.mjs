@@ -67,6 +67,33 @@ export function log(level, msg, fields = {}) {
   process.stdout.write(JSON.stringify({ t: new Date().toISOString(), level, msg, ...fields }) + "\n");
 }
 
+/** Days a deleted conversation stays in Recently deleted (server/modules/providers/services/sessions.service.ts). */
+const RECENTLY_DELETED_DAYS = 30;
+
+/** Whether the person's schema holds a conversation deleted RECENTLY_DELETED_DAYS ago or more (false: no schema yet). */
+async function hasExpiredDeletions(email) {
+  if (!process.env.DATABASE_URL) return false;
+  const { default: pg } = await import("pg");
+  const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    const table = `"cc_${userKey(email)}".sessions`;
+    const { rows: exists } = await client.query("select to_regclass($1) as t", [table]);
+    if (!exists[0]?.t) return false;
+    const { rows } = await client.query(
+      `select 1 from ${table} where deleted_at is not null
+         and deleted_at <= to_char(now() at time zone 'utc' - make_interval(days => $1), 'YYYY-MM-DD HH24:MI:SS') limit 1`,
+      [RECENTLY_DELETED_DAYS],
+    );
+    return rows.length > 0;
+  } catch (e) {
+    if (e.code === "42703") return false; // schema not migrated yet (no deleted_at)
+    throw e;
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
 /** jarvis3's userKey: "u" + the first 24 hex characters of sha256(lowercased, trimmed email). */
 export function userKey(email) {
   return "u" + createHash("sha256").update(String(email).trim().toLowerCase()).digest("hex").slice(0, 24);
@@ -400,6 +427,11 @@ export class Router {
     this.childHeapMb = o.childHeapMb ?? Number(process.env.JARVIS_UI_CHILD_HEAP_MB || 256);
     this.killAfterMs = o.killAfterMs ?? 10_000;
     this.sweepMs = o.sweepMs ?? 60_000;
+    // Recently deleted (server/modules/jarvis/jarvis-purge.ts): a person's process purges their expired deletions; once
+    // a day this replica starts the process of each person it serves who has some and isn't using the app
+    this.purgeFirstMs = o.purgeFirstMs ?? 10 * 60_000;
+    this.purgeEveryMs = o.purgeEveryMs ?? 24 * 3600_000;
+    this.expiredCheck = o.expiredCheck ?? ((email) => hasExpiredDeletions(email));
     this.peersName = o.peers ?? process.env.JARVIS_UI_PEERS ?? "";
     this.selfIp = o.selfIp ?? process.env.POD_IP ?? "";
     this.port = o.port ?? Number(process.env.PORT || 8080);
@@ -439,6 +471,10 @@ export class Router {
     this.port = this.server.address().port;
     this.sweeper = setInterval(() => void this.sweep(), this.sweepMs);
     this.sweeper.unref();
+    this.purgeFirst = setTimeout(() => void this.purgeWake(), this.purgeFirstMs);
+    this.purgeFirst.unref();
+    this.purgeTimer = setInterval(() => void this.purgeWake(), this.purgeEveryMs);
+    this.purgeTimer.unref();
     if (this.peersName) {
       this.peerTimer = setInterval(() => void this.refreshPeers(), 5000);
       this.peerTimer.unref();
@@ -589,6 +625,22 @@ export class Router {
     for (const p of cands) {
       const running = await p.runningChats();
       if (running === 0) { await p.stop("evicted for another user"); return; }
+    }
+  }
+
+  /**
+   * Starts the process of every person this replica serves who has conversations past their 30 days in Recently
+   * deleted and no process: it purges them on start (jarvis-purge.ts) and stops again when idle, like any other.
+   */
+  async purgeWake() {
+    if (this.draining) return;
+    for (const email of this.users) {
+      if (this.procs.has(email) || this.ownerFor(email)) continue;
+      let expired = false;
+      try { expired = await this.expiredCheck(email); } catch (e) { log("warn", "purge check failed", { user: userKey(email), error: String(e.message || e) }); }
+      if (!expired) continue;
+      log("info", "starting a process to purge Recently deleted", { user: userKey(email) });
+      await this.#process(email).catch((e) => log("warn", "purge start failed", { user: userKey(email), error: String(e.message || e) }));
     }
   }
 
@@ -803,6 +855,8 @@ export class Router {
     this.server.close();
     this.server.closeAllConnections?.();
     clearInterval(this.sweeper);
+    clearTimeout(this.purgeFirst);
+    clearInterval(this.purgeTimer);
     clearInterval(this.peerTimer);
     log("info", "drained");
   }

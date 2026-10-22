@@ -106,6 +106,19 @@ type SessionDetails = {
 
 const MAX_CLOUDCLI_SESSION_NAME_WORDS = 4;
 
+/** Jarvis mode: days a deleted conversation stays in Recently deleted before it is deleted for good (as iOS Photos). */
+export const RECENTLY_DELETED_DAYS = 30;
+
+export type RecentlyDeletedSessionItem = {
+  sessionId: string;
+  sessionTitle: string;
+  /** ISO time it was deleted */
+  deletedAt: string;
+  /** ISO time it is deleted for good */
+  purgeAt: string;
+  lastActivity: string | null;
+};
+
 /** Tells the open tabs about a session change; a failed broadcast never fails the request that made the change. */
 async function announce(send: () => Promise<void>): Promise<void> {
   try {
@@ -732,6 +745,42 @@ export const sessionsService = {
   },
 
   /**
+   * Jarvis mode: Recently deleted, newest first, with when each one is purged (RECENTLY_DELETED_DAYS after it was
+   * deleted).
+   */
+  async listRecentlyDeletedSessions(): Promise<RecentlyDeletedSessionItem[]> {
+    const rows = await sessionsDb.getRecentlyDeletedSessions();
+    return rows.map((session) => {
+      const deletedAt = session.deleted_at ?? session.updated_at;
+      return {
+        sessionId: session.session_id,
+        sessionTitle: session.custom_name?.trim() || session.session_id,
+        deletedAt,
+        purgeAt: new Date(Date.parse(deletedAt) + RECENTLY_DELETED_DAYS * 86_400_000).toISOString(),
+        lastActivity: session.updated_at ?? session.created_at ?? null,
+      };
+    });
+  },
+
+  /**
+   * Jarvis mode: deletes for good every conversation in Recently deleted for RECENTLY_DELETED_DAYS (as a permanent
+   * delete does: transcripts, the row, the sandbox and the /workspace folder). Returns how many went.
+   */
+  async purgeExpiredDeletedSessions(): Promise<number> {
+    let purged = 0;
+    for (const sessionId of await sessionsDb.getSessionIdsDeletedBefore(RECENTLY_DELETED_DAYS)) {
+      try {
+        await this.deleteOrArchiveSessionById(sessionId, { force: true, deletedFromDisk: true });
+        purged += 1;
+      } catch (error) {
+        console.warn('[jarvis] purge of a deleted conversation failed', { sessionId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (purged) console.log('[jarvis] purged deleted conversations', { purged });
+    return purged;
+  },
+
+  /**
    * Returns archived sessions with enough project metadata for the sidebar to
    * group, filter, open, and restore them without a per-row follow-up query.
    */
@@ -775,13 +824,21 @@ export const sessionsService = {
       force?: boolean;
       deletedFromDisk?: boolean;
     } = {},
-  ): Promise<{ sessionId: string; action: 'archived' | 'deleted'; deletedFromDisk: boolean }> {
+  ): Promise<{ sessionId: string; action: 'archived' | 'recentlyDeleted' | 'deleted'; deletedFromDisk: boolean }> {
     const session = await sessionsDb.getSessionById(sessionId);
     if (!session) {
       throw new AppError(`Session "${sessionId}" was not found.`, {
         code: 'SESSION_NOT_FOUND',
         statusCode: 404,
       });
+    }
+
+    // Jarvis mode has no archive: a delete moves the conversation to Recently deleted, from where it can be restored
+    // or deleted for good (force), and is purged after RECENTLY_DELETED_DAYS. Its files stay until then.
+    if (!options.force && jarvisEnabled()) {
+      await sessionsDb.moveSessionToRecentlyDeleted(sessionId);
+      announceRemoved(sessionId, 'deleted');
+      return { sessionId, action: 'recentlyDeleted', deletedFromDisk: false };
     }
 
     if (!options.force) {
@@ -840,7 +897,8 @@ export const sessionsService = {
       });
     }
 
-    await sessionsDb.updateSessionIsArchived(sessionId, false);
+    if (jarvisEnabled()) await sessionsDb.restoreSessionFromRecentlyDeleted(sessionId);
+    else await sessionsDb.updateSessionIsArchived(sessionId, false);
     await announce(() => broadcastSessionUpserted(sessionId));
     return { sessionId, isArchived: false };
   },

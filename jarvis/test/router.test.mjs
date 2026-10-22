@@ -483,3 +483,16 @@ test("GET /api/jarvis/app-signin: redirects only to the configured app scheme, w
   assert.ok(viaCookie.headers.location.startsWith("pwashell-test://signed-in?state=abcdefghijklmnop#token="), "the scheme is never the caller's");
   assert.equal(r.procs.size, 0, "no CloudCLI process for the sign-in");
 });
+
+test("purgeWake starts the process of a person with expired Recently deleted conversations, and only theirs", async () => {
+  const checked = [];
+  const r = makeRouter({ expiredCheck: async (email) => (checked.push(email), email === BOB) });
+  await r.listen();
+  await get(r, "/", auth(ALICE)); // Alice is using the app: her process already purges by itself
+  assert.ok(r.procs.has(ALICE));
+  await r.purgeWake();
+  assert.ok(r.procs.has(BOB), "Bob's process was started to purge");
+  assert.ok(!r.procs.has(CAROL.toLowerCase()));
+  assert.deepEqual(checked.sort(), [BOB, CAROL.toLowerCase()].sort());
+  await r.drain();
+});

@@ -9,6 +9,7 @@ import { VersionUpgradeModal } from '@/modules/version-upgrade';
 import type { InstallMode, PendingSidebarDeletion, Project, ReleaseInfo, SettingsProject } from '@/shared/types';
 import { normalizeProjectForSettings } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import { ProjectCreationWizard } from '@/modules/project-creation-wizard';
+import { IS_JARVIS } from '@/shared/jarvis';
 
 type SidebarModalsProps = {
   projects: Project[];
@@ -44,6 +45,66 @@ const SettingsComponent = Settings as (props: TypedSettingsProps) => JSX.Element
 
 function TypedSettings(props: TypedSettingsProps) {
   return <SettingsComponent {...props} />;
+}
+
+/**
+ * The staff build's delete confirmation (it has no archive). From the conversation list a delete moves the
+ * conversation(s) to Recently deleted (purged after 30 days); from Recently deleted (`isArchived`) it deletes for good.
+ */
+function JarvisDeleteDialog({
+  pendingDeletion,
+  onCancel,
+  onConfirmSession,
+  onConfirmSessions,
+  t,
+}: {
+  pendingDeletion: Extract<PendingSidebarDeletion, { kind: 'session' | 'sessions' }>;
+  onCancel: () => void;
+  onConfirmSession: (hardDelete?: boolean) => void;
+  onConfirmSessions: (hardDelete?: boolean) => void;
+  t: TFunction;
+}) {
+  const permanent = pendingDeletion.kind === 'session' && pendingDeletion.isArchived;
+  const name = pendingDeletion.kind === 'session' ? pendingDeletion.sessionTitle || t('sessions.unnamed') : '';
+  const count = pendingDeletion.kind === 'sessions' ? pendingDeletion.sessionIds.length : 1;
+  const title = permanent
+    ? t('jarvis:deleteDialog.permanentTitle')
+    : pendingDeletion.kind === 'sessions'
+      ? t('jarvis:deleteDialog.titleMany', { count })
+      : t('jarvis:deleteDialog.title');
+  const question = permanent
+    ? t('jarvis:deleteDialog.permanentConfirm', { name })
+    : pendingDeletion.kind === 'sessions'
+      ? t('jarvis:deleteDialog.confirmMany', { count })
+      : t('jarvis:deleteDialog.confirm', { name });
+  const notice = permanent ? t('jarvis:deleteDialog.permanentNotice') : t('jarvis:deleteDialog.notice');
+  const confirm = () => (pendingDeletion.kind === 'sessions' ? onConfirmSessions(false) : onConfirmSession(permanent));
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="w-full max-w-md overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
+        <div className="p-6">
+          <div className="flex items-start gap-4">
+            <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30">
+              <Trash2 className="h-6 w-6 text-red-600 dark:text-red-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="mb-2 text-lg font-semibold text-foreground">{title}</h3>
+              <p className="break-words text-sm text-foreground">{question}</p>
+              <p className="mt-3 text-xs text-muted-foreground">{notice}</p>
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-col gap-2 border-t border-border bg-muted/30 p-4">
+          <Button variant="destructive" className="w-full bg-red-600 text-white hover:bg-red-700" onClick={confirm}>
+            {permanent ? t('jarvis:deleteDialog.deletePermanently') : t('jarvis:deleteDialog.delete')}
+          </Button>
+          <Button variant="ghost" className="w-full" onClick={onCancel}>
+            {t('jarvis:deleteDialog.cancel')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** Rendered by Sidebar to host its settings, new-project, delete-confirmation and version modals in one place. */
@@ -150,7 +211,19 @@ export default function SidebarModals({
           document.body,
         )}
 
-      {pendingDeletion?.kind === 'session' &&
+      {IS_JARVIS && (pendingDeletion?.kind === 'session' || pendingDeletion?.kind === 'sessions') &&
+        ReactDOM.createPortal(
+          <JarvisDeleteDialog
+            pendingDeletion={pendingDeletion}
+            onCancel={onCancelDeletion}
+            onConfirmSession={onConfirmDeleteSession}
+            onConfirmSessions={onConfirmDeleteSessions}
+            t={t}
+          />,
+          document.body,
+        )}
+
+      {!IS_JARVIS && pendingDeletion?.kind === 'session' &&
         ReactDOM.createPortal(
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
             <div className="w-full max-w-md overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
@@ -206,7 +279,7 @@ export default function SidebarModals({
           document.body,
         )}
 
-      {pendingDeletion?.kind === 'sessions' &&
+      {!IS_JARVIS && pendingDeletion?.kind === 'sessions' &&
         ReactDOM.createPortal(
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
             <div className="w-full max-w-md overflow-hidden rounded-xl border border-border bg-card shadow-2xl">

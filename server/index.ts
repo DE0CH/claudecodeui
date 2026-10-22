@@ -42,6 +42,7 @@ import { assetsRoutes } from './modules/assets/index.js';
 import { initializeDatabase, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './modules/notifications/index.js';
 import { bootstrapJarvis } from './modules/jarvis/jarvis-bootstrap.js';
+import { startRecentlyDeletedPurge } from './modules/jarvis/jarvis-purge.js';
 import { jarvisEnabled } from './modules/jarvis/jarvis-config.js';
 import { createJarvisFilesRouter } from './modules/jarvis/jarvis-files.routes.js';
 import { createJarvisSharesRouter } from './modules/jarvis/jarvis-shares.routes.js';
@@ -308,6 +309,8 @@ async function startServer() {
         // Jarvis mode: the process's one user and its one project, /workspace
         if (jarvisEnabled()) {
             await bootstrapJarvis();
+            // Recently deleted empties itself after 30 days
+            startRecentlyDeletedPurge();
         }
 
         // Configure Web Push (VAPID keys)

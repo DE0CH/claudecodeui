@@ -162,9 +162,10 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     if (!sessionName) {
       sessionName = nameMap.get(parsed.sessionId);
     }
-    // An app-created row keeps its name through the upsert, so the placeholder is replaced here
+    // An app-created row keeps its name through the upsert, so the placeholder is replaced here (provisionally: a
+    // title-model title or a rename is never replaced by Claude Code's own title)
     if (jarvisEnabled() && existingSession && existingSessionName === untitled && sessionName?.trim()) {
-      await sessionsDb.updateSessionCustomName(existingSession.session_id, normalizeSessionName(sessionName, untitled));
+      await sessionsDb.setProvisionalSessionName(existingSession.session_id, normalizeSessionName(sessionName, untitled));
     }
 
     return {
