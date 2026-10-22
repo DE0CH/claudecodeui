@@ -263,7 +263,7 @@ in `server/shared/types.ts`.**
 `history_truncated`, `task_notification`.
 
 **`GatewayEventKind` (`:204-208`) — produced by the gateway, no provider involved:**
-`chat_subscribed`, `session_upserted`, `loading_progress`, `protocol_error`.
+`chat_subscribed`, `session_upserted`, `session_removed`, `loading_progress`, `protocol_error`.
 
 `ServerEventKind` (`:217`) is their union, and its doc comment claims every server-to-client
 frame carries a `kind` from it. That is true of everything the *chat gateway* sends and not
@@ -289,7 +289,8 @@ Two kinds in those unions never appear where you would look for them:
 | `history_truncated` | `chat-websocket.service.ts:388-393` | `sessionStore.truncateAt` (`:116-124`) |
 | `chat_subscribed` | `chat-websocket.service.ts:485-492` | Authoritative processing state plus pending permissions (`:126-155`) |
 | `protocol_error` | `chat-websocket.service.ts:127` | Error row, spinner cleared |
-| `session_upserted` | `session-upsert-broadcast.service.ts:81-105` | `useProjectsState` — sidebar rows and alias folding |
+| `session_upserted` | `session-upsert-broadcast.service.ts` (sessions.service create/rename/restore/fork, the run registry on run start, provider id and complete, the watcher outside Jarvis mode) | `useProjectsState` — sidebar rows and alias folding; the Conversations list merges them (`liveRecentConversations.ts`) |
+| `session_removed` | `session-upsert-broadcast.service.ts` (sessions.service archive/delete; `{sessionId, action}`) | `useProjectsState` — drops the session everywhere, leaves it when open |
 | `loading_progress` | `projects-with-sessions-fetch.service.ts:164-175` | `useProjectsState` — project scan progress (`:720-736`) |
 
 ### The one exception
