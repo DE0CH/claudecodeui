@@ -44,7 +44,8 @@ const upload = multer({
 const attachmentUpload = multer({
   storage,
   limits: {
-    fileSize: 10 * 1024 * 1024,
+    // phone photos (48 MP JPEG/HEIC) can pass 10 MB; the composer's MAX_ATTACHMENT_SIZE matches
+    fileSize: 30 * 1024 * 1024,
     files: 10,
   },
 });
@@ -72,7 +73,7 @@ router.post('/images', (req, res) => {
 /**
  * Stores provider-neutral chat attachments. Files of any MIME type are
  * accepted because providers inspect them as data through their file-reading
- * tools; uploads are capped at 10 files and 10MB per file.
+ * tools; uploads are capped at 10 files and 30MB per file.
  */
 router.post('/files', (req, res) => {
   attachmentUpload.array('files', 10)(req, res, (err: unknown) => {

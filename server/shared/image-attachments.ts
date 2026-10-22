@@ -314,6 +314,56 @@ export function parseFilesInputTag(text: string): {
   };
 }
 
+const IMAGE_UPLOADS_TAG_PATTERN = /\s*<image_uploads>([\s\S]*?)<\/image_uploads>\s*/g;
+
+/**
+ * Jarvis 3: tells Claude where the originals of the images it is shown were saved (/workspace/uploads/), so it can
+ * process them with tools. Stripped back out of the history by {@link parseImageUploadsTag}.
+ */
+export function appendImageUploadsTag(prompt: string, images: unknown): string {
+  const descriptors = normalizeAttachmentDescriptors(images);
+  if (descriptors.length === 0) {
+    return prompt;
+  }
+  const entryLines = descriptors.map((descriptor, index) => {
+    const entryPath = toPosixPath(descriptor.path);
+    const cleanName = descriptor.name?.replace(/[()\r\n]/g, '').trim();
+    return cleanName
+      ? `${index + 1}. ${entryPath} (original name: ${cleanName})`
+      : `${index + 1}. ${entryPath}`;
+  });
+  return [
+    prompt,
+    '',
+    '<image_uploads>',
+    `The ${descriptors.length} image(s) attached to this message, which you can see, are also saved as files (the originals, full size):`,
+    ...entryLines,
+    'Use these paths when you need the image files themselves (to crop, convert, measure, read metadata or put them in a document). Do not mention this block unless the user asks about it.',
+    '</image_uploads>',
+  ].join('\n');
+}
+
+/** Strips the `<image_uploads>` block (see {@link appendImageUploadsTag}) out of persisted prompt text. */
+export function parseImageUploadsTag(text: string): { text: string; attachments: ParsedImageAttachment[] } {
+  if (typeof text !== 'string' || !text.includes('<image_uploads>')) {
+    return { text, attachments: [] };
+  }
+  let lastMatch: RegExpExecArray | null = null;
+  IMAGE_UPLOADS_TAG_PATTERN.lastIndex = 0;
+  for (let match = IMAGE_UPLOADS_TAG_PATTERN.exec(text); match; match = IMAGE_UPLOADS_TAG_PATTERN.exec(text)) {
+    lastMatch = match;
+  }
+  if (!lastMatch) {
+    return { text, attachments: [] };
+  }
+  const body = lastMatch[1].split('\n').filter((line) => /^\d+\.\s/.test(line.trim())).join('\n');
+  const attachments = parseNumberedImageEntries(body);
+  const stripped = (
+    text.slice(0, lastMatch.index) + '\n' + text.slice(lastMatch.index + lastMatch[0].length)
+  ).trim();
+  return { text: stripped, attachments };
+}
+
 /**
  * Strips one `<images_input>` block from persisted prompt text and returns
  * the clean text plus the referenced attachments (path and original name).

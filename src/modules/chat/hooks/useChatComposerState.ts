@@ -105,11 +105,13 @@ const createFakeSubmitEvent = () => {
 };
 
 const MAX_ATTACHMENT_COUNT = 10;
-const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+// Phone photos (48 MP JPEG/HEIC) can pass 10 MB; the server's /api/assets/files limit matches.
+const MAX_ATTACHMENT_SIZE_MB = 30;
+const MAX_ATTACHMENT_SIZE = MAX_ATTACHMENT_SIZE_MB * 1024 * 1024;
 
 const isImageAttachment = (attachment: ChatAttachment) => {
   if (attachment.mimeType?.startsWith('image/')) return true;
-  return /\.(gif|jpe?g|png|svg|webp)$/i.test(attachment.path || attachment.name || '');
+  return /\.(gif|jpe?g|png|svg|webp|heic|heif|avif|bmp|tiff?)$/i.test(attachment.path || attachment.name || '');
 };
 
 const uploadAttachmentFiles = async (files: File[]): Promise<unknown[]> => {
@@ -582,35 +584,26 @@ export function useChatComposerState({
     lastAutosizedInputRef.current = target.value;
   }, []);
 
+  // Files over the size limit are not attached; the composer lists them (fileErrors) until the next pick or send.
   const handleAttachmentFiles = useCallback((files: File[]) => {
+    const rejected = new Map<string, string>();
     const validFiles = files.filter((file) => {
-      try {
-        if (!file || typeof file !== 'object') {
-          console.warn('Invalid file object:', file);
-          return false;
-        }
-
-        if (file.size > MAX_ATTACHMENT_SIZE) {
-          const fileName = file.name || 'Unknown file';
-          setFileErrors((previous) => {
-            const next = new Map(previous);
-            next.set(fileName, 'File too large (max 10MB)');
-            return next;
-          });
-          return false;
-        }
-
-        return true;
-      } catch (error) {
-        console.error('Error validating file:', error, file);
+      if (!file || typeof file !== 'object') {
+        console.warn('Invalid file object:', file);
         return false;
       }
+      if (file.size > MAX_ATTACHMENT_SIZE) {
+        rejected.set(file.name || 'file', t('input.fileTooLarge', { name: file.name, max: MAX_ATTACHMENT_SIZE_MB }));
+        return false;
+      }
+      return true;
     });
 
+    setFileErrors(rejected);
     if (validFiles.length > 0) {
       setAttachedFiles((previous) => [...previous, ...validFiles].slice(0, MAX_ATTACHMENT_COUNT));
     }
-  }, []);
+  }, [t]);
 
   const handlePaste = useCallback(
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -802,7 +795,7 @@ export function useChatComposerState({
           console.error('Queued file upload failed:', error);
           addMessage({
             type: 'error',
-            content: `Failed to upload files: ${message}`,
+            content: t('input.uploadFailed', { message }),
             timestamp: new Date(),
           });
           return;
@@ -865,7 +858,7 @@ export function useChatComposerState({
           console.error('File upload failed:', error);
           addMessage({
             type: 'error',
-            content: `Failed to upload files: ${message}`,
+            content: t('input.uploadFailed', { message }),
             timestamp: new Date(),
           });
           return;

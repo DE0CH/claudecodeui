@@ -158,7 +158,12 @@
       "willSend": "Will send when this finishes",
       "edit": "Edit queued message",
       "delete": "Delete queued message"
-    }
+    },
+    "attachPhotosOrFiles": "Add photos or files",
+    "dropFiles": "Drop photos or files here",
+    "fileTooLarge": "{{name}} is too large (max {{max}} MB)",
+    "uploadFailed": "Could not upload the attachments: {{message}}",
+    "removeAttachment": "Remove {{name}}"
   },
   "composer": {
     "reasoning": "Reasoning",

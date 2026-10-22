@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FileIcon, XIcon } from 'lucide-react';
 
 import { ImageLightbox } from '@/modules/chat/transcript/ChatMessageImages';
@@ -21,14 +22,18 @@ const formatFileSize = (size: number) => {
  */
 const ComposerAttachment = ({ file, onRemove, error }: ComposerAttachmentProps) => {
   const [preview, setPreview] = useState<string | undefined>(undefined);
+  const { t } = useTranslation('chat');
   const [expanded, setExpanded] = useState(false);
-  const isImage = file.type.startsWith('image/');
+  // a format this browser can't draw (HEIC outside Safari) shows as a file chip; the server still converts it
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const isImage = file.type.startsWith('image/') && !previewFailed;
 
   useEffect(() => {
     if (!isImage) {
       setPreview(undefined);
       return;
     }
+    setPreviewFailed(false);
     const url = URL.createObjectURL(file);
     setPreview(url);
     return () => URL.revokeObjectURL(url);
@@ -40,11 +45,11 @@ const ComposerAttachment = ({ file, onRemove, error }: ComposerAttachmentProps) 
         <button
           type="button"
           onClick={() => preview && setExpanded(true)}
-          aria-label={`Expand ${file.name}`}
+          aria-label={t('misc.expandImage', { name: file.name })}
           className="block overflow-hidden rounded-xl border border-border/50 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/60"
         >
           {preview
-            ? <img src={preview} alt={file.name} className="h-20 w-20 cursor-zoom-in object-cover" />
+            ? <img src={preview} alt={file.name} onError={() => setPreviewFailed(true)} className="h-20 w-20 cursor-zoom-in object-cover" />
             : <div className="h-20 w-20 animate-pulse bg-muted" />}
         </button>
       ) : (
@@ -59,7 +64,7 @@ const ComposerAttachment = ({ file, onRemove, error }: ComposerAttachmentProps) 
         </div>
       )}
       {error && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl bg-red-500/50">
+        <div title={error} className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl bg-red-500/50">
           <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
@@ -69,7 +74,7 @@ const ComposerAttachment = ({ file, onRemove, error }: ComposerAttachmentProps) 
         type="button"
         onClick={onRemove}
         className="absolute -right-1.5 -top-1.5 rounded-full border border-border/40 bg-background/90 p-1 text-foreground shadow-sm backdrop-blur transition-opacity hover:bg-background focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
-        aria-label={`Remove ${file.name}`}
+        aria-label={t('input.removeAttachment', { name: file.name })}
       >
         <XIcon className="h-3 w-3" aria-hidden />
       </button>

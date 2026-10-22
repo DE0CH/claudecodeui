@@ -19,12 +19,14 @@ import path from 'path';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
-import { recordJarvisFailedTurn, stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
+import { recordJarvisFailedTurn } from '@/modules/jarvis/jarvis-conversations.js';
+import { prepareJarvisAttachments } from '@/modules/jarvis/jarvis-images.js';
 import { readableSandboxError } from '@/modules/jarvis/jarvis-errors.js';
 import { acquireSandbox, jarvisEnabled, SANDBOX_RESET_NOTE, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
 
 import {
   appendFilesInputTag,
+  appendImageUploadsTag,
   buildClaudeUserContent,
   normalizeImageDescriptors
 } from '@/shared/image-attachments.js';
@@ -848,10 +850,11 @@ export function createBackgroundWorkTracker() {
  * @param {Array} images - Image descriptors ({ path, name?, mimeType? })
  * @param {Array} files - Non-image attachment descriptors
  * @param {string} cwd - Project working directory attachment paths resolve against
+ * @param {Array} [savedImages] - Jarvis: where the originals of `images` were saved in /workspace
  * @returns {Promise<Array<Object>>} SDKUserMessage records for the turn
  */
-async function buildPromptMessages(command, images, files, cwd) {
-  const promptWithFiles = appendFilesInputTag(command, files);
+async function buildPromptMessages(command, images, files, cwd, savedImages) {
+  const promptWithFiles = appendImageUploadsTag(appendFilesInputTag(command, files), savedImages);
   const content = normalizeImageDescriptors(images).length === 0
     ? promptWithFiles
     : await buildClaudeUserContent(promptWithFiles, images, cwd);
@@ -1062,9 +1065,12 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // /workspace; the instance's instructions and MCP tools are the sandbox's managed settings, not this host's.
     let promptCommand = command;
     let promptFiles = options.files;
+    let promptImages = options.images;
+    let savedImages = [];
     if (jarvisEnabled()) {
-      // uploaded files are on this pod's side: put them in the conversation's /workspace for the sandbox
-      promptFiles = await stageAttachmentsInWorkspace(sessionId, options.files);
+      // uploads are on this pod's side: originals go into the conversation's /workspace/uploads for the sandbox,
+      // images also as a copy Claude can see (HEIC converted, large photos downscaled; jarvis-images.ts)
+      ({ images: promptImages, files: promptFiles, savedImages } = await prepareJarvisAttachments(sessionId, options.images, options.files));
       const sandbox = await acquireSandbox(sessionId);
       if (sandbox.reset) promptCommand = `${SANDBOX_RESET_NOTE}\n\n${command}`;
       sdkOptions.cwd = '/workspace';
@@ -1077,7 +1083,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // Every turn uses streaming input so stdin stays open past the turn's
     // `result`. The message list is reusable, but each query attempt needs its
     // own stream because an async generator cannot be replayed once consumed.
-    const promptMessages = await buildPromptMessages(promptCommand, options.images, promptFiles, options.cwd);
+    const promptMessages = await buildPromptMessages(promptCommand, promptImages, promptFiles, options.cwd, savedImages);
 
     sdkOptions.hooks = {
       Notification: [{

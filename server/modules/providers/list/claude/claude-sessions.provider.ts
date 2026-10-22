@@ -20,7 +20,7 @@ import type {
   WorkflowAgentProgress,
   WorkflowInfo,
 } from '@/shared/types.js';
-import { parseFilesInputTag } from '@/shared/image-attachments.js';
+import { parseFilesInputTag, parseImageUploadsTag } from '@/shared/image-attachments.js';
 import { prepareTranscriptMessages, truncateNestedOutput } from '@/shared/message-unification.js';
 import {
   createNormalizedMessage,
@@ -1407,7 +1407,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             }));
           } else if (part.type === 'text') {
             const text = part.text || '';
-            const parsedFiles = parseFilesInputTag(text);
+            const parsedFiles = parseFilesInputTag(parseImageUploadsTag(text).text);
             if (
               (parsedFiles.text || parsedFiles.attachments.length > 0)
               && !isInternalContent(parsedFiles.text)
@@ -1541,7 +1541,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           return messages;
         }
 
-        const parsedFiles = parseFilesInputTag(text);
+        const parsedFiles = parseFilesInputTag(parseImageUploadsTag(text).text);
         if (
           (parsedFiles.text || parsedFiles.attachments.length > 0)
           && !isInternalContent(parsedFiles.text)
