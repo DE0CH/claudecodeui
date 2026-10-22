@@ -18,6 +18,18 @@
 // passed on to the owner, so a person's tabs all reach the same process (a run's live stream exists only there).
 // If the owner can't be reached, the request is served here.
 //
+// Rollouts (zero-downtime): the replica set changes (a surge pod joins, an old one leaves), so the hash can name a
+// new owner while the person's process, and the chat it is running, still live on another replica. Before the owner
+// starts a process it asks every replica it has seen recently (the ready ones plus draining ones, which stay
+// reachable until they exit) whether one already holds that person's process (GET /__jarvis/peer/holds, authenticated
+// by a key derived from JARVIS_CC_TOKEN); if one does, and it is not draining or it has a chat running, the request
+// goes there (hop "2": served there, never passed on again). A replica that is not among the ready ones (draining, or
+// in its preStop pause) never counts itself as an owner, so it agrees with the ready replicas.
+// Draining (SIGTERM) keeps the listener open for those passed-on requests and keeps every WebSocket that carries a
+// running chat open: its own processes' tabs, and tabs it only forwards to another replica while that replica reports
+// a chat running for the person (each up to JARVIS_UI_DRAIN_SECONDS). Other forwarded tabs are closed at once and
+// reconnect through a ready replica to the process that has the run, where the page re-subscribes to it.
+//
 // No dependencies beyond Node's standard library.
 //
 // Environment (defaults in brackets):
@@ -36,7 +48,7 @@
 //   POD_IP                            this replica's address (with JARVIS_UI_PEERS)
 //   JARVIS_UID [1000]                 owner of folders the router makes when it runs as root
 //   passed to every process: DATABASE_URL, JWT_SECRET, JARVIS_WEB_URL, JARVIS_CC_TOKEN (plus the per-user contract env)
-import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto";
+import { createHash, createPublicKey, timingSafeEqual, verify as cryptoVerify } from "node:crypto";
 import { spawn as nodeSpawn } from "node:child_process";
 import { promises as dns } from "node:dns";
 import { readFileSync, realpathSync } from "node:fs";
@@ -48,6 +60,8 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOP = "x-jarvis-ui-hop";
+const PEER_AUTH = "x-jarvis-ui-peer";
+const PEER_PATH = "/__jarvis/peer/holds";
 
 export function log(level, msg, fields = {}) {
   process.stdout.write(JSON.stringify({ t: new Date().toISOString(), level, msg, ...fields }) + "\n");
@@ -216,7 +230,7 @@ function rejectUpgrade(socket, status, text) {
 /** Request headers for the user's process: hop-by-hop headers dropped, X-Jarvis-User set by us only. */
 function upstreamHeaders(req, email, extra = {}) {
   const h = { ...req.headers };
-  for (const k of ["x-jarvis-user", HOP, "proxy-connection", "keep-alive", "te", "trailer"]) delete h[k];
+  for (const k of ["x-jarvis-user", HOP, PEER_AUTH, "proxy-connection", "keep-alive", "te", "trailer"]) delete h[k];
   if (!req.headers.upgrade) delete h.connection;
   if (email) h["x-jarvis-user"] = email;
   return { ...h, ...extra };
@@ -398,6 +412,12 @@ export class Router {
     this.now = o.now ?? (() => Date.now());
     this.procs = new Map();  // email -> UserProcess
     this.peers = [];
+    this.seen = new Map();   // peer address -> when DNS last listed it (draining replicas stay reachable a while)
+    this.forwarded = new Set(); // WebSockets passed on to another replica: {socket, peer, key}
+    this.holderCache = new Map(); // email -> {peer, until}
+    this.holderTtlMs = o.holderTtlMs ?? 2000;
+    const peerSecret = o.peerSecret ?? this.ccToken;
+    this.peerAuth = peerSecret ? createHash("sha256").update(`jarvis-ui-peer|${peerSecret}`).digest("hex") : "";
     this.draining = false;
     this.server = http.createServer((req, res) => this.#onRequest(req, res));
     this.server.on("upgrade", (req, socket, head) => this.#onUpgrade(req, socket, head));
@@ -414,19 +434,19 @@ export class Router {
   forget(p) { if (this.procs.get(p.email) === p) this.procs.delete(p.email); }
 
   async listen() {
-    await this.#refreshPeers();
+    await this.refreshPeers();
     await new Promise((r) => this.server.listen(this.port, this.host, r));
     this.port = this.server.address().port;
     this.sweeper = setInterval(() => void this.sweep(), this.sweepMs);
     this.sweeper.unref();
     if (this.peersName) {
-      this.peerTimer = setInterval(() => void this.#refreshPeers(), 5000);
+      this.peerTimer = setInterval(() => void this.refreshPeers(), 5000);
       this.peerTimer.unref();
     }
     log("info", "router listening", { port: this.port, users: this.users.size, maxUsers: this.maxUsers, peers: this.peersName || null });
   }
 
-  async #refreshPeers() {
+  async refreshPeers() {
     if (!this.peersName) return;
     try {
       const ips = await this.resolve(this.peersName);
@@ -435,14 +455,105 @@ export class Router {
       // no ready replica (this one starting): serve locally
       this.peers = [];
     }
+    const now = this.now();
+    for (const ip of this.peers) this.seen.set(ip, now);
+    // a replica that left DNS may still be draining for up to drainMs (+ preStop)
+    for (const [ip, at] of this.seen) if (now - at > this.drainMs + 120_000) this.seen.delete(ip);
   }
 
-  /** The replica (address) that should serve `email`, or null for this one. */
+  /**
+   * The replica (address) that should serve `email` by the hash, or null for this one. A replica that is draining, or
+   * is missing from a non-empty list of ready replicas (its preStop pause, or not ready yet), never names itself, so
+   * it agrees with the ready ones.
+   */
   ownerFor(email) {
     if (!this.peersName || !this.selfIp) return null;
     const others = this.peers.filter((p) => p !== this.selfIp);
-    const o = ownerOf(userKey(email), this.draining ? others : [...others, this.selfIp]);
+    const selfOut = this.draining || (this.peers.length > 0 && !this.peers.includes(this.selfIp));
+    const o = ownerOf(userKey(email), selfOut ? others : [...others, this.selfIp]);
     return o && o !== this.selfIp ? o : null;
+  }
+
+  /** This replica's live (not stopping) process for a user key, if any. */
+  #procByKey(key) {
+    for (const p of this.procs.values()) if (p.key === key && !p.stopping && !p.exited) return p;
+    return null;
+  }
+
+  /** GET /__jarvis/peer/holds?key=<userKey> from another replica: {holds, running, draining}. */
+  async #peerHolds(req, res) {
+    const given = String(req.headers[PEER_AUTH] || "");
+    const ok = this.peerAuth && given.length === this.peerAuth.length && timingSafeEqual(Buffer.from(given), Buffer.from(this.peerAuth));
+    if (!ok) { res.writeHead(404); return res.end(); }
+    const key = new URL(req.url, "http://x").searchParams.get("key") || "";
+    const p = this.#procByKey(key);
+    const running = p ? await p.runningChats() : 0;
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify({ holds: !!p, running, draining: this.draining }));
+  }
+
+  /** Ask one replica about a user key; null when it can't be asked (a replica that refuses connections is forgotten). */
+  peerState(peer, key) {
+    if (!this.peerAuth) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const q = http.get({ host: peer, port: this.port, path: `${PEER_PATH}?key=${encodeURIComponent(key)}`, timeout: 2000,
+                          headers: { [PEER_AUTH]: this.peerAuth } }, (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => { if (body.length < 4096) body += c; });
+        res.on("end", () => {
+          if (res.statusCode !== 200) return resolve(null);
+          try { resolve(JSON.parse(body)); } catch { resolve(null); }
+        });
+      });
+      q.on("timeout", () => q.destroy(new Error("timeout")));
+      q.on("error", (e) => {
+        if (["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(e.code) && !this.peers.includes(peer)) this.seen.delete(peer);
+        resolve(null);
+      });
+    });
+  }
+
+  /**
+   * Another replica that already holds `email`'s process and should keep serving it: one with a chat running first,
+   * else one that is not draining. Cached for holderTtlMs.
+   */
+  async #holder(email) {
+    if (!this.peersName || !this.peerAuth) return null;
+    const hit = this.holderCache.get(email);
+    if (hit && hit.until > this.now()) return hit.peer;
+    const key = userKey(email);
+    const peers = [...new Set([...this.peers, ...this.seen.keys()])].filter((p) => p !== this.selfIp);
+    const states = await Promise.all(peers.map(async (peer) => ({ peer, s: await this.peerState(peer, key) })));
+    const held = states.filter(({ s }) => s?.holds);
+    const pick = held.find(({ s }) => s.running === null || s.running > 0) ?? held.find(({ s }) => !s.draining);
+    const peer = pick ? pick.peer : null;
+    this.holderCache.set(email, { peer, until: this.now() + this.holderTtlMs });
+    return peer;
+  }
+
+  /**
+   * Where a request for `email` goes: {peer, hop} to pass it on, or {local: true} to serve it here (starting the
+   * process if needed). Hop "1" = sent to the hash owner (it may pass it once more, to the replica holding the
+   * person's process); hop "2" = final.
+   */
+  async #route(req, email) {
+    const hop = String(req.headers[HOP] || "");
+    if (this.#procByKey(userKey(email))) return { local: true };
+    if (hop !== "2") {
+      if (!hop) {
+        const owner = this.ownerFor(email);
+        if (owner) return { peer: owner, hop: "1" };
+      }
+      const holder = await this.#holder(email);
+      if (holder) return { peer: holder, hop: "2" };
+    }
+    if (this.draining) {
+      // never start a process here: hand it to a ready replica, which serves it
+      const owner = this.ownerFor(email);
+      return owner ? { peer: owner, hop: "2" } : { local: true };
+    }
+    return { local: true };
   }
 
   async #identify(req) {
@@ -495,14 +606,15 @@ export class Router {
       res.writeHead(ok ? 200 : 503, { "content-type": "application/json", "cache-control": "no-store" });
       return res.end(JSON.stringify({ ok, draining: this.draining, processes: this.procs.size }));
     }
+    if (url.startsWith(PEER_PATH)) return this.#peerHolds(req, res);
     const who = await this.#identify(req);
     if (who.status === 401) return page(res, 401, "未登入", "請重新整理頁面登入。Not signed in: reload the page to sign in.");
     if (who.status === 403) return page(res, 403, "沒有權限", `${who.email} 沒有使用 YYC AI 的權限。This account is not allowed.`);
     if (url === "/ops" || url.startsWith("/ops/") || url.startsWith("/ops?")) return this.#ops(req, res, who.email);
     if (url === "/api/jarvis/me" || url.startsWith("/api/jarvis/me?")) return this.#me(req, res, who.email);
     if (url === "/api/jarvis/app-signin" || url.startsWith("/api/jarvis/app-signin?")) return this.#appSignin(req, res);
-    const owner = !req.headers[HOP] ? this.ownerFor(who.email) : null;
-    if (owner) return this.#forwardHttp(req, res, owner, who.email);
+    const route = await this.#route(req, who.email);
+    if (route.peer) return this.#forwardHttp(req, res, route.peer, route.hop, who.email);
     let p;
     try {
       p = await this.#process(who.email);
@@ -586,8 +698,8 @@ export class Router {
     up.end();
   }
 
-  #forwardHttp(req, res, owner, email) {
-    const up = http.request({ host: owner, port: this.port, method: req.method, path: req.url, headers: { ...upstreamHeaders(req, null), [HOP]: "1" } }, (ures) => {
+  #forwardHttp(req, res, owner, hop, email) {
+    const up = http.request({ host: owner, port: this.port, method: req.method, path: req.url, headers: { ...upstreamHeaders(req, null), [HOP]: hop } }, (ures) => {
       res.writeHead(ures.statusCode || 502, ures.statusMessage, responseHeaders(ures));
       ures.pipe(res);
     });
@@ -595,6 +707,7 @@ export class Router {
     up.on("error", (e) => {
       log("warn", "peer unreachable", { peer: owner, error: e.message });
       this.peers = this.peers.filter((x) => x !== owner);
+      this.holderCache.delete(email);
       if (!res.headersSent) { res.setHeader("retry-after", "1"); page(res, 503, "請重新整理", "請重新整理頁面。Reload the page."); }
       else res.destroy();
     });
@@ -605,10 +718,11 @@ export class Router {
     socket.on("error", () => {});
     const who = await this.#identify(req);
     if (who.status !== 200) return rejectUpgrade(socket, who.status, "not allowed\n");
-    const owner = !req.headers[HOP] ? this.ownerFor(who.email) : null;
+    const route = await this.#route(req, who.email);
+    const owner = route.peer ?? null;
     let target, p = null;
     if (owner) {
-      target = { host: owner, port: this.port, headers: { ...upstreamHeaders(req, null), [HOP]: "1" } };
+      target = { host: owner, port: this.port, headers: { ...upstreamHeaders(req, null), [HOP]: route.hop } };
     } else {
       try { p = await this.#process(who.email); } catch { return rejectUpgrade(socket, 503, "busy\n"); }
       target = { host: "127.0.0.1", port: p.port, headers: upstreamHeaders(req, who.email) };
@@ -628,6 +742,11 @@ export class Router {
         usock.on("data", () => p.touch());
         socket.on("data", () => p.touch());
         socket.on("close", () => { p.sockets.delete(socket); p.touch(); });
+      } else {
+        // passed on to another replica: kept while that replica runs a chat for this person when we drain
+        const f = { socket, peer: owner, key: userKey(who.email) };
+        this.forwarded.add(f);
+        socket.on("close", () => this.forwarded.delete(f));
       }
       socket.pipe(usock).pipe(socket);
       socket.on("close", () => usock.destroy());
@@ -641,7 +760,7 @@ export class Router {
       ures.pipe(socket);
     });
     up.on("error", (e) => {
-      if (owner) this.peers = this.peers.filter((x) => x !== owner);
+      if (owner) { this.peers = this.peers.filter((x) => x !== owner); this.holderCache.delete(who.email); }
       log("warn", "upgrade proxy error", { error: e.message, peer: owner });
       rejectUpgrade(socket, 502, "upstream error\n");
     });
@@ -649,30 +768,57 @@ export class Router {
   }
 
   /**
-   * Graceful stop (SIGTERM): readiness turns 503 and the listener closes (Kubernetes has taken the pod out of the
-   * Service during preStop), running chats get up to drainMs to finish, then every process is stopped.
+   * Graceful stop (SIGTERM): readiness turns 503 (Kubernetes has taken the pod out of the Services during preStop).
+   * The listener stays open for requests the other replicas pass on to a process held here. Running chats get up to
+   * drainMs to finish: this replica's own processes with a running chat, and WebSockets passed on to another replica
+   * while that replica reports a chat running for the person (other forwarded WebSockets are closed at once; the tab
+   * reconnects through a ready replica). Then every process stops and the listener closes.
    */
   async drain() {
     if (this.draining) return;
     this.draining = true;
-    log("info", "draining", { processes: this.procs.size });
-    this.server.close();
+    this.holderCache.clear();
+    log("info", "draining", { processes: this.procs.size, forwarded: this.forwarded.size });
     const deadline = this.now() + this.drainMs;
+    let first = true;
     while (this.now() < deadline) {
       let busy = 0;
       for (const p of this.procs.values()) {
         const r = await p.runningChats();
         if (r === null ? p.inflight > 0 : r > 0) busy++;
       }
-      if (!busy) break;
-      log("info", "waiting for running chats", { processes: busy });
+      const forwardedBusy = await this.#checkForwarded();
+      if (!busy && !forwardedBusy) break;
+      if (first || busy || forwardedBusy) log("info", "waiting for running chats", { processes: busy, forwarded: forwardedBusy });
+      first = false;
       await sleep(Math.min(5000, Math.max(50, deadline - this.now())));
     }
     await Promise.all([...this.procs.values()].map((p) => p.stop("shutdown")));
+    for (const f of this.forwarded) f.socket.destroy();
+    this.server.close();
     this.server.closeAllConnections?.();
     clearInterval(this.sweeper);
     clearInterval(this.peerTimer);
     log("info", "drained");
+  }
+
+  /** While draining: close forwarded WebSockets whose replica runs no chat for the person; count the others. */
+  async #checkForwarded() {
+    const groups = new Map();
+    for (const f of this.forwarded) {
+      if (f.socket.destroyed) { this.forwarded.delete(f); continue; }
+      const k = `${f.peer}|${f.key}`;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(f);
+    }
+    let busy = 0;
+    await Promise.all([...groups.values()].map(async (fs) => {
+      const s = await this.peerState(fs[0].peer, fs[0].key);
+      if (s?.holds && (s.running === null || s.running > 0)) { busy += fs.length; return; }
+      for (const f of fs) { f.socket.destroy(); this.forwarded.delete(f); }
+      log("info", "forwarded connection closed", { peer: fs[0].peer, user: fs[0].key, sockets: fs.length });
+    }));
+    return busy;
   }
 }
 

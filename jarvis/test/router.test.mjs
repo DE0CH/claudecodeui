@@ -253,6 +253,136 @@ test("a request for a user owned by the other replica is served there", async ()
   assert.ok(a.procs.has(email));
 });
 
+// --- rollouts: three replicas on 127.0.0.1-3 sharing a port, a mutable list of ready replicas ---
+async function freeTestPort() {
+  return new Promise((res) => { const s = net.createServer().listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); });
+}
+async function cluster(n) {
+  const port = await freeTestPort();
+  const ready = { list: ["127.0.0.1", "127.0.0.2"] };
+  const rs = [];
+  for (let i = 1; i <= n; i++) {
+    const ip = `127.0.0.${i}`;
+    rs.push(makeRouter({ host: ip, port, peers: "ui-peers", selfIp: ip, ccToken: "peer-test-token", resolve: async () => ready.list }));
+  }
+  for (const r of rs) await r.listen();
+  const refresh = async () => { for (const r of rs) if (!r.draining) await r.refreshPeers(); };
+  return { rs, ready, refresh };
+}
+/** A user (added to every router) for which `pick(ownerAmongTwo, ownerAmongThree)` holds. */
+function userWhere(rs, pick) {
+  for (let i = 0; i < 500; i++) {
+    const e = `roll${i}@yyc.hk`;
+    const k = userKey(e);
+    if (pick(ownerOf(k, ["127.0.0.1", "127.0.0.2"]), ownerOf(k, ["127.0.0.1", "127.0.0.2", "127.0.0.3"]))) {
+      for (const r of rs) r.users.add(e);
+      return e;
+    }
+  }
+  throw new Error("no such user");
+}
+function openWs(r, email) {
+  return new Promise((resolve, reject) => {
+    const s = net.connect(r.port, r.host);
+    s.on("error", reject);
+    s.write(`GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: test\r\ncf-access-jwt-assertion: ${jwt({ email })}\r\n\r\n`);
+    let data = "";
+    const onData = (d) => { data += d; if (data.includes("\r\n\r\n")) { s.off("data", onData); resolve({ s, head: data }); } };
+    s.on("data", onData);
+  });
+}
+async function echoes(s, text) {
+  return new Promise((resolve) => {
+    let got = "";
+    const t = setTimeout(() => { s.off("data", on); resolve(false); }, 2000);
+    const on = (d) => { got += d; if (got.includes(text)) { clearTimeout(t); s.off("data", on); resolve(true); } };
+    s.on("data", on);
+    s.write(text);
+  });
+}
+
+test("rollout surge: a new replica that becomes the hash owner sends the person to the replica holding their process", async () => {
+  const { rs: [a, b, c], ready, refresh } = await cluster(3);
+  const email = userWhere([a, b, c], (two, three) => two === "127.0.0.1" && three === "127.0.0.3");
+  const first = await get(b, "/x", auth(email));
+  assert.equal(first.status, 200);
+  assert.ok(a.procs.has(email));
+  setRunning(a, email, 1);
+  // the surge pod joins: by the hash, c owns the person now
+  ready.list = ["127.0.0.1", "127.0.0.2", "127.0.0.3"];
+  await refresh();
+  for (const r of [a, b, c]) {
+    const res = await get(r, "/x", auth(email));
+    assert.equal(res.status, 200);
+    assert.equal(res.json.pid, first.json.pid, "the same process serves every request");
+  }
+  assert.ok(!c.procs.has(email) && !b.procs.has(email));
+  const ws = await openWs(c, email);
+  assert.match(ws.head, /^HTTP\/1.1 101/);
+  assert.equal(a.procs.get(email).sockets.size, 1, "the WebSocket reaches the holder");
+  ws.s.destroy();
+  // the old owner drains (out of DNS): while the chat runs it keeps the process and serves passed-on requests
+  ready.list = ["127.0.0.2", "127.0.0.3"];
+  await refresh();
+  const drained = a.drain();
+  await new Promise((x) => setTimeout(x, 200));
+  const during = await get(b, "/x", auth(email));
+  assert.equal(during.json.pid, first.json.pid);
+  const ws2 = await openWs(b, email);
+  assert.ok(await echoes(ws2.s, "still-streaming"));
+  // the chat ends: a stops; the next request starts the process on the hash owner c
+  setRunning(a, email, 0);
+  await drained;
+  await new Promise((x) => setTimeout(x, 100));
+  let after = await get(b, "/x", auth(email));
+  if (after.status !== 200) after = await get(b, "/x", auth(email));
+  assert.equal(after.status, 200);
+  assert.notEqual(after.json.pid, first.json.pid);
+  assert.ok(c.procs.has(email));
+  ws2.s.destroy();
+});
+
+test("drain: a replica keeps WebSockets it forwards while the owner runs a chat for the person, closes the others", async () => {
+  const { rs: [a, b], refresh } = await cluster(2);
+  await refresh();
+  const busy = userWhere([a, b], (two) => two === "127.0.0.1");
+  let idle = null;
+  for (let i = 0; i < 500 && !idle; i++) if (`idle${i}@yyc.hk` && ownerOf(userKey(`idle${i}@yyc.hk`), ["127.0.0.1", "127.0.0.2"]) === "127.0.0.1") idle = `idle${i}@yyc.hk`;
+  a.users.add(idle); b.users.add(idle);
+  const w1 = await openWs(b, busy);
+  const w2 = await openWs(b, idle);
+  assert.ok(a.procs.has(busy) && a.procs.has(idle) && !b.procs.has(busy));
+  setRunning(a, busy, 1);
+  const closed2 = new Promise((r) => w2.s.on("close", r));
+  const closed1 = new Promise((r) => w1.s.on("close", () => r("closed")));
+  const drained = b.drain();
+  await closed2; // no chat running for it: closed at once, the tab reconnects through a ready replica
+  assert.equal(await Promise.race([closed1, new Promise((r) => setTimeout(() => r("open"), 1500))]), "open");
+  assert.ok(await echoes(w1.s, "turn-output"), "the running chat keeps streaming through the draining replica");
+  setRunning(a, busy, 0);
+  await drained;
+  assert.equal(await closed1, "closed");
+  assert.ok(!a.procs.get(busy)?.exited, "the owner's process is untouched");
+});
+
+test("a replica in its preStop pause (out of DNS, not yet draining) never counts itself as an owner", async () => {
+  const { rs: [a, b], ready, refresh } = await cluster(2);
+  const email = userWhere([a, b], (two) => two === "127.0.0.1");
+  ready.list = ["127.0.0.2"];
+  await refresh();
+  assert.equal(a.ownerFor(email), "127.0.0.2");
+  const res = await get(a, "/x", auth(email));
+  assert.equal(res.status, 200);
+  assert.ok(b.procs.has(email) && !a.procs.has(email));
+});
+
+test("the peer endpoint needs the peer key", async () => {
+  const { rs: [a] } = await cluster(1);
+  assert.equal((await get(a, "/__jarvis/peer/holds?key=u1")).status, 404);
+  assert.equal((await get(a, "/__jarvis/peer/holds?key=u1", { "x-jarvis-ui-peer": "nope" })).status, 404);
+  assert.deepEqual(await a.peerState("127.0.0.1", userKey(ALICE)), { holds: false, running: 0, draining: false });
+});
+
 test("the operator page: /ops/* goes to web's /internal/ops/* for admins only, with the token and X-Jarvis-User", async () => {
   const seen = [];
   const web = http.createServer((req, res) => {
