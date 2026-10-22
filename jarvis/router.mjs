@@ -506,9 +506,14 @@ export class Router {
           try { resolve(JSON.parse(body)); } catch { resolve(null); }
         });
       });
+      // a replica that has gone (its address answers nothing) must not cost every later lookup the full timeout
+      let connected = false;
+      q.on("socket", (sock) => sock.once("connect", () => { connected = true; }));
+      const connectTimer = setTimeout(() => { if (!connected) q.destroy(Object.assign(new Error("connect timeout"), { code: "ECONNTIMEOUT" })); }, 1000);
+      q.on("close", () => clearTimeout(connectTimer));
       q.on("timeout", () => q.destroy(new Error("timeout")));
       q.on("error", (e) => {
-        if (["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(e.code) && !this.peers.includes(peer)) this.seen.delete(peer);
+        if (["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ECONNTIMEOUT"].includes(e.code) && !this.peers.includes(peer)) this.seen.delete(peer);
         resolve(null);
       });
     });

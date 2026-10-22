@@ -381,6 +381,10 @@ test("the peer endpoint needs the peer key", async () => {
   assert.equal((await get(a, "/__jarvis/peer/holds?key=u1")).status, 404);
   assert.equal((await get(a, "/__jarvis/peer/holds?key=u1", { "x-jarvis-ui-peer": "nope" })).status, 404);
   assert.deepEqual(await a.peerState("127.0.0.1", userKey(ALICE)), { holds: false, running: 0, draining: false });
+  // a replica that has gone (not ready, nothing answers) is forgotten after one failed lookup
+  a.seen.set("127.0.0.9", Date.now());
+  assert.equal(await a.peerState("127.0.0.9", userKey(ALICE)), null);
+  assert.ok(!a.seen.has("127.0.0.9"));
 });
 
 test("the operator page: /ops/* goes to web's /internal/ops/* for admins only, with the token and X-Jarvis-User", async () => {
