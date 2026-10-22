@@ -237,6 +237,11 @@ export type GetSessionActivity = (sessionId: string) => SessionActivity | undefi
 /** Replaces the whole processing map with the server's view, used by the periodic running-sessions poll. */
 export type SyncProcessingSessions = (
   sessions: readonly SessionActivitySnapshot[],
+  /**
+   * When the poll was sent (client clock). A response that left before a turn's `complete` must not bring that
+   * turn's indicator back: a session whose response ended locally after this time keeps its local state.
+   */
+  opts?: { requestedAt?: number },
 ) => void;
 
 /** Reports whether one session is currently producing a response; false for one that only has background tasks running. */
@@ -575,6 +580,8 @@ export type NormalizedMessage = {
   tokens?: number;
   canInterrupt?: boolean;
   tokenBudget?: unknown;
+  /** Jarvis `status` frame (no `text`): the turn waits for its sandbox (`preparing`) or has it (`ready`). */
+  jarvisSandbox?: 'preparing' | 'ready';
   requestId?: string;
   input?: unknown;
   context?: unknown;

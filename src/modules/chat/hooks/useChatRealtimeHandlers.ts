@@ -7,7 +7,7 @@ import { playChatCompletionSound, playNotificationSound } from '@/shared/utils';
 import type { SessionStore } from '@/modules/chat/hooks/useSessionStore';
 import { normalizedToChatMessages } from '@/modules/chat/hooks/useChatMessages';
 import { collectRunningBackgroundTasks } from '@/modules/chat/utils/backgroundTasks';
-import { JARVIS_READY_STATUS } from '@/shared/jarvis';
+import { JARVIS_PREPARING_STATUS } from '@/shared/jarvis';
 
 const isActionablePermissionRequest = (request: { toolName?: unknown } | null | undefined): boolean => {
   return request?.toolName !== 'ExitPlanMode' && request?.toolName !== 'exit_plan_mode';
@@ -355,15 +355,26 @@ export function useChatRealtimeHandlers({
         }
 
         case 'status': {
+          if (msg.jarvisSandbox !== undefined) {
+            // the wait for the conversation's sandbox (no `text`): never shown as a status line
+            if (!sid) break;
+            const current = getSessionActivity?.(sid);
+            if (msg.jarvisSandbox === 'preparing') {
+              // a turn that already ended (a late or replayed frame) is not brought back
+              if (!current || current.background) break;
+              onSessionProcessing?.(sid, { statusText: JARVIS_PREPARING_STATUS, canInterrupt: false });
+            } else if (current && !current.background && current.statusText === JARVIS_PREPARING_STATUS) {
+              // ready: the usual indicator takes over; nothing is created for a turn that already ended
+              onSessionProcessing?.(sid, { statusText: null, canInterrupt: msg.canInterrupt !== false });
+            }
+            break;
+          }
           if (msg.text === 'token_budget' && msg.tokenBudget) {
             // The counter shows the viewed session's context; budgets from
             // other concurrently running sessions must not overwrite it.
             if (sid === activeViewSessionId) {
               setTokenBudget(msg.tokenBudget as Record<string, unknown>);
             }
-          } else if (msg.text === JARVIS_READY_STATUS && sid) {
-            // the sandbox is there: the wait's own indicator gives way to the usual one
-            onSessionProcessing?.(sid, { statusText: null, canInterrupt: msg.canInterrupt !== false });
           } else if (msg.text && sid) {
             onSessionProcessing?.(sid, {
               statusText: msg.text as string,

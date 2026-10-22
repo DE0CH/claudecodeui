@@ -62,6 +62,9 @@ export function useSessionProtection() {
   );
   const processingSessionsRef = useRef<SessionActivityMap>(processingSessions);
   processingSessionsRef.current = processingSessions;
+  // When each session's response last ended here (its `complete`, an abort, an idle ack), so a running-sessions poll
+  // answered before that cannot put the finished response back.
+  const responseEndedAtRef = useRef(new Map<string, number>());
 
   const markSessionProcessing = useCallback<MarkSessionProcessing>((sessionId, activity) => {
     if (!sessionId) {
@@ -119,6 +122,7 @@ export function useSessionProtection() {
         return prev;
       }
 
+      responseEndedAtRef.current.set(sessionId, Date.now());
       const updated = new Map(prev);
       updated.delete(sessionId);
       return updated;
@@ -128,6 +132,9 @@ export function useSessionProtection() {
   const markSessionBackground = useCallback<MarkSessionBackground>((sessionId, tasks) => {
     setProcessingSessions((prev) => {
       const existing = prev.get(sessionId);
+      if (existing && !existing.background) {
+        responseEndedAtRef.current.set(sessionId, Date.now());
+      }
       if (tasks.length === 0) {
         if (!existing) {
           return prev;
@@ -154,7 +161,7 @@ export function useSessionProtection() {
     });
   }, []);
 
-  const syncProcessingSessions = useCallback<SyncProcessingSessions>((sessions) => {
+  const syncProcessingSessions = useCallback<SyncProcessingSessions>((sessions, opts) => {
     const now = Date.now();
 
     setProcessingSessions((prev) => {
@@ -174,6 +181,20 @@ export function useSessionProtection() {
           typeof snapshot.startedAt === 'number' && Number.isFinite(snapshot.startedAt) && snapshot.startedAt > 0
             ? snapshot.startedAt
             : undefined;
+
+        // The poll left before this session's response ended here: its "still running" is stale, and putting the
+        // entry back would show the finished response as busy until the next poll.
+        const endedAt = responseEndedAtRef.current.get(sessionId);
+        if (
+          !snapshot.background
+          && opts?.requestedAt !== undefined
+          && endedAt !== undefined
+          && endedAt >= opts.requestedAt
+          && !(existing && !existing.background)
+        ) {
+          if (existing) updated.set(sessionId, existing);
+          continue;
+        }
 
         // A send dispatched moments ago may not be a run on the server yet,
         // so a poll that still lists only the session's background work must

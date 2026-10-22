@@ -86,3 +86,26 @@ test('one task entry in a shape the client does not read hides only itself', asy
   await waitFor(() => assert.ok(result.current.get('held-session')));
   assert.deepEqual(result.current.get('held-session')?.tasks?.map((task) => task.taskId), ['w1']);
 });
+
+test('a poll answered before a turn\'s complete does not bring the finished turn back', async () => {
+  // Seen live (2026-10-22): the poll's response left the server while the run was still running and arrived just
+  // after `complete`; the chip came back and counted on until the entry aged out of the grace window.
+  let answer: (value: unknown) => void = () => {};
+  runningSessions.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+  runningSessions.mockResolvedValue({ ok: true, json: async () => ({ data: { sessions: [] } }) });
+
+  const { SessionProtectionProvider, useProcessingSessions, useSessionProtectionActions } = await import('@/shared/context/SessionProtectionContext');
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(SessionProtectionProvider, null, children);
+  const { result } = renderHook(() => ({ map: useProcessingSessions(), ctx: useSessionProtectionActions() }), { wrapper });
+
+  await waitFor(() => assert.equal(runningSessions.mock.calls.length, 1));
+  result.current.ctx.markSessionProcessing('turn', { statusText: null, canInterrupt: true });
+  await waitFor(() => assert.ok(result.current.map.get('turn')));
+  result.current.ctx.markSessionBackground('turn', []);
+  await waitFor(() => assert.equal(result.current.map.get('turn'), undefined));
+
+  answer({ ok: true, json: async () => ({ data: { sessions: [{ sessionId: 'turn', provider: 'claude', startedAt: Date.now() - 4_000, lastSeq: 2 }] } }) });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(result.current.map.get('turn'), undefined);
+});

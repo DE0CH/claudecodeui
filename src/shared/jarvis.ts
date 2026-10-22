@@ -30,9 +30,9 @@ export const BRAND_NAME = IS_JARVIS ? PRODUCT_NAME : 'CloudCLI';
 export const BRAND_LOGO = IS_JARVIS ? '/icons/jarvis-logo.svg' : '/logo.svg';
 
 /**
- * `status` frames the Jarvis server sends while a turn waits for the conversation's sandbox (a host may be booting;
- * server/modules/jarvis/sandbox-process.ts `acquireSandboxReporting`): the first is shown as its own "preparing the
- * workspace" indicator, the second ends it (the turn then shows the usual thinking indicator).
+ * While a turn waits for the conversation's sandbox (a host may be booting), the Jarvis server sends `status` frames
+ * with `jarvisSandbox: 'preparing'`, then `'ready'`, and no `text` (server/modules/jarvis/sandbox-process.ts
+ * `acquireSandboxReporting`). The client keeps the waiting state as this internal `statusText`, which the activity
+ * indicator draws as its own "preparing the workspace" state and never as text.
  */
 export const JARVIS_PREPARING_STATUS = 'jarvis_preparing';
-export const JARVIS_READY_STATUS = 'jarvis_ready';

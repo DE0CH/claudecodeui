@@ -3,8 +3,6 @@ import test from 'node:test';
 
 import {
   acquireSandboxReporting,
-  JARVIS_PREPARING_STATUS,
-  JARVIS_READY_STATUS,
   type JarvisSandbox,
   type SandboxStatusFrame,
 } from '@/modules/jarvis/sandbox-process.js';
@@ -20,7 +18,7 @@ test('a sandbox that is there at once announces nothing (no flash of the prepari
   assert.deepEqual(frames, []);
 });
 
-test('a long wait is announced once as preparing (nothing to stop yet), then ready', async () => {
+test('a long wait is announced once as preparing (no `text`: an older client shows nothing) (nothing to stop yet), then ready', async () => {
   const frames: SandboxStatusFrame[] = [];
   const sb = await acquireSandboxReporting('c1', (f) => frames.push(f), {
     afterMs: 20,
@@ -32,8 +30,8 @@ test('a long wait is announced once as preparing (nothing to stop yet), then rea
   });
   assert.equal(sb, SANDBOX);
   assert.deepEqual(frames, [
-    { text: JARVIS_PREPARING_STATUS, canInterrupt: false },
-    { text: JARVIS_READY_STATUS, canInterrupt: true },
+    { jarvisSandbox: 'preparing', canInterrupt: false },
+    { jarvisSandbox: 'ready', canInterrupt: true },
   ]);
 });
 
@@ -49,7 +47,7 @@ test('a failed wait ends without ready (the turn reports the error), and a quick
     }),
     /hosts are full/,
   );
-  assert.deepEqual(frames, [{ text: JARVIS_PREPARING_STATUS, canInterrupt: false }]);
+  assert.deepEqual(frames, [{ jarvisSandbox: 'preparing', canInterrupt: false }]);
 
   const quick: SandboxStatusFrame[] = [];
   await assert.rejects(acquireSandboxReporting('c1', (f) => quick.push(f), { afterMs: 50, acquire: async () => { throw new Error('x'); } }));

@@ -1071,8 +1071,8 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       // images also as a copy Claude can see (HEIC converted, large photos downscaled; jarvis-images.ts)
       ({ images: promptImages, files: promptFiles, savedImages } = await prepareJarvisAttachments(sessionId, options.images, options.files));
       // a wait for the sandbox (a host booting) is its own state in the UI, not "thinking"
-      const sandbox = await acquireSandboxReporting(sessionId, ({ text, canInterrupt }) => {
-        ws.send(createNormalizedMessage({ kind: 'status', text, canInterrupt, sessionId, provider: 'claude' }));
+      const sandbox = await acquireSandboxReporting(sessionId, ({ jarvisSandbox, canInterrupt }) => {
+        ws.send(createNormalizedMessage({ kind: 'status', jarvisSandbox, canInterrupt, sessionId, provider: 'claude' }));
       });
       sdkOptions.cwd = '/workspace';
       delete sdkOptions.mcpServers;

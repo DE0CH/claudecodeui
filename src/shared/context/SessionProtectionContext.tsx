@@ -134,6 +134,7 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
 
   const refreshRunningSessions = useCallback(async () => {
     try {
+      const requestedAt = Date.now();
       const response = await api.runningSessions();
       if (!response.ok) {
         return;
@@ -159,6 +160,7 @@ export function SessionProtectionProvider({ children }: { children: ReactNode })
             };
           })
           .filter((session): session is NonNullable<typeof session> => Boolean(session)),
+        { requestedAt },
       );
     } catch (error) {
       console.error('[SessionProtection] Failed to sync running sessions:', error);

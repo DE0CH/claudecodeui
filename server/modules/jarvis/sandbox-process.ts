@@ -67,16 +67,15 @@ export async function acquireSandbox(conversationId: string): Promise<JarvisSand
 }
 
 /**
- * Status texts of the wait for the conversation's sandbox, sent to the client as `status` frames: the staff UI shows
- * `JARVIS_PREPARING_STATUS` as its own "preparing the workspace" indicator (not the thinking one), and
- * `JARVIS_READY_STATUS` ends it. Only a wait longer than `PREPARING_AFTER_MS` is announced, so a warm sandbox
- * (ready in well under a second) never flashes it.
+ * The wait for the conversation's sandbox, told to the client as `status` frames with `jarvisSandbox` and NO `text`:
+ * `preparing` (the staff UI shows its own "preparing the workspace" indicator, not the thinking one), then `ready`
+ * (back to the usual indicator). Without `text`, a client that doesn't know the field (a tab still running an
+ * earlier build) ignores the frames instead of showing a code. Only a wait longer than `PREPARING_AFTER_MS` is
+ * announced, so a warm sandbox (ready in well under a second) never flashes it.
  */
-export const JARVIS_PREPARING_STATUS = 'jarvis_preparing';
-export const JARVIS_READY_STATUS = 'jarvis_ready';
 export const PREPARING_AFTER_MS = 1_000;
 
-export type SandboxStatusFrame = { text: typeof JARVIS_PREPARING_STATUS | typeof JARVIS_READY_STATUS; canInterrupt: boolean };
+export type SandboxStatusFrame = { jarvisSandbox: 'preparing' | 'ready'; canInterrupt: boolean };
 
 /**
  * `acquireSandbox`, telling the client through `report` when it has to wait: `preparing` once the wait passes
@@ -91,12 +90,12 @@ export async function acquireSandboxReporting(
   let announced = false;
   const timer = setTimeout(() => {
     announced = true;
-    report({ text: JARVIS_PREPARING_STATUS, canInterrupt: false });
+    report({ jarvisSandbox: 'preparing', canInterrupt: false });
   }, afterMs);
   try {
     const sandbox = await acquire(conversationId);
     clearTimeout(timer);
-    if (announced) report({ text: JARVIS_READY_STATUS, canInterrupt: true });
+    if (announced) report({ jarvisSandbox: 'ready', canInterrupt: true });
     return sandbox;
   } finally {
     clearTimeout(timer);
