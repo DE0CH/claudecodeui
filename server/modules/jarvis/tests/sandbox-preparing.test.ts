@@ -9,7 +9,7 @@ import {
   type SandboxStatusFrame,
 } from '@/modules/jarvis/sandbox-process.js';
 
-const SANDBOX: JarvisSandbox = { id: 's1', url: 'http://10.200.0.2:7070', token: 't', headers: {}, reset: false };
+const SANDBOX: JarvisSandbox = { id: 's1', url: 'http://10.200.0.2:7070', token: 't', headers: {} };
 const after = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 test('a sandbox that is there at once announces nothing (no flash of the preparing state)', async () => {
