@@ -5,6 +5,7 @@ import { api } from '@/shared/api';
 import { IS_JARVIS } from '@/shared/jarvis';
 import { subscribeToUserPreferences } from '@/shared/userSettings';
 import { usePaletteOps } from '@/modules/command-palette';
+import { mergeLiveRecentConversations } from '@/modules/sidebar/utils/liveRecentConversations';
 import type { ArchivedProjectListItem, ArchivedSessionListItem, ConversationProjectResult, ConversationSearchResults, LLMProvider, Project, ProjectSession, ProjectSortOrder, RecentConversationListItem, SearchProgress, ActiveSidebarRename, PendingSidebarDeletion, SessionTitleSearchResult, SessionWithProvider, SidebarSearchMode, SidebarSessionSelection } from '@/shared/types';
 import {
   filterProjects,
@@ -41,6 +42,8 @@ type RecentConversationsApiPayload = {
   };
 };
 
+const NO_REMOVED_SESSIONS: ReadonlySet<string> = new Set();
+
 type UseSidebarControllerArgs = {
   projects: Project[];
   selectedProject: Project | null;
@@ -55,6 +58,8 @@ type UseSidebarControllerArgs = {
   onProjectSelect: (project: Project) => void;
   onSessionSelect: (session: ProjectSession) => void;
   onSessionDelete?: (sessionId: string) => void;
+  /** Sessions archived or deleted since the page loaded (here or in another tab); dropped from every list. */
+  removedSessionIds?: ReadonlySet<string>;
   onLoadMoreSessions?: (projectId: string) => Promise<void> | void;
   // `projectId` is the DB-assigned identifier; callbacks use that post-migration.
   onProjectDelete?: (projectId: string) => void;
@@ -76,6 +81,7 @@ export function useSidebarController({
   onProjectSelect,
   onSessionSelect,
   onSessionDelete,
+  removedSessionIds = NO_REMOVED_SESSIONS,
   onLoadMoreSessions,
   onProjectDelete,
   setCurrentProject,
@@ -335,40 +341,22 @@ export function useSidebarController({
     reloadRecentConversations();
   }, [debouncedSearchQuery, reloadRecentConversations, searchMode]);
 
-  // The Conversations list is only fetched when its tab opens, while `projects`
-  // is patched the moment a session is renamed from the workspace header. Fold
-  // those title changes into the rows already loaded, or a header rename would
-  // leave the highlighted conversation on its old name. The loaded rows are
-  // returned as-is when no session carries a different custom name, so
-  // unrelated `projects` updates do not re-render the list, and an empty
-  // summary never overwrites the id the server shows for an unnamed session.
-  const recentConversationsWithCurrentTitles = useMemo(() => {
-    if (recentConversations.length === 0) {
-      return recentConversations;
-    }
+  // The Conversations list is only fetched when its tab opens, while `projects` follows every change this tab sees
+  // (a conversation started here, `session_upserted` and `session_removed` deltas from the server). Fold those into
+  // the loaded rows, so a new conversation shows (highlighted) the moment its first message is sent, renames and
+  // deletes from another tab show without a reload, and the most recently active conversation is on top.
+  const liveRecentConversations = useMemo(
+    () => mergeLiveRecentConversations(recentConversations, projects, removedSessionIds, recentConversationsHasMore),
+    [projects, recentConversations, recentConversationsHasMore, removedSessionIds],
+  );
+  const recentConversationsWithCurrentTitles = liveRecentConversations.conversations;
 
-    // Trimmed, because that is how the server derives a row's `sessionTitle`.
-    const summaryBySessionId = new Map<string, string>();
-    for (const project of projects) {
-      for (const session of project.sessions ?? []) {
-        const summary = typeof session.summary === 'string' ? session.summary.trim() : '';
-        if (summary) {
-          summaryBySessionId.set(session.id, summary);
-        }
-      }
+  // A conversation archived in another tab belongs in this tab's archived list too.
+  useEffect(() => {
+    if (removedSessionIds.size > 0) {
+      void fetchArchivedSessions();
     }
-
-    let changed = false;
-    const next = recentConversations.map((conversation) => {
-      const summary = summaryBySessionId.get(conversation.sessionId);
-      if (summary === undefined || summary === conversation.sessionTitle) {
-        return conversation;
-      }
-      changed = true;
-      return { ...conversation, sessionTitle: summary };
-    });
-    return changed ? next : recentConversations;
-  }, [projects, recentConversations]);
+  }, [fetchArchivedSessions, removedSessionIds]);
 
   useEffect(() => {
     if (searchMode !== 'archived') {
@@ -1264,7 +1252,10 @@ export function useSidebarController({
     archivedSessionsCount: archivedProjects.length + archivedSessions.length,
     isArchivedSessionsLoading,
     recentConversations: recentConversationsWithCurrentTitles,
-    recentConversationsTotal,
+    recentConversationsTotal: Math.max(
+      0,
+      recentConversationsTotal + liveRecentConversations.added - liveRecentConversations.removed,
+    ),
     recentConversationsHasMore,
     isRecentConversationsLoading,
     isLoadingMoreRecentConversations,

@@ -14,10 +14,9 @@
  *   JARVIS_CONFIG [/etc/jarvis/config.json]  the instance config the router reads too: product.name,
  *                                    product.locale, defaultModel and its models[] label fill whatever the
  *                                    variables above leave unset (then "YYC AI", "en", "default")
- *   JARVIS_WATCH_INTERVAL_MS [5000]  how often the transcript folder is polled (JuiceFS has no inotify for writes
- *                                    made on other hosts)
  */
 import { readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 type InstanceConfig = {
@@ -50,6 +49,14 @@ export const JARVIS_WORKSPACE_PATH = '/workspace';
 /** Claude Code's transcript folder name for cwd /workspace (`~/.claude/projects/-workspace`). */
 export const JARVIS_PROJECT_DIR_NAME = '-workspace';
 
+/**
+ * Where Claude Code writes a conversation's transcript, as seen from this process: the sandbox runs it with cwd
+ * /workspace and ~/.claude on the user's JuiceFS folder, which is this process's ~/.claude.
+ */
+export function jarvisTranscriptPath(providerSessionId: string): string {
+  return path.join(os.homedir(), '.claude', 'projects', JARVIS_PROJECT_DIR_NAME, `${providerSessionId}.jsonl`);
+}
+
 export function jarvisEnabled(): boolean {
   return !!process.env.JARVIS_WEB_URL;
 }
@@ -78,11 +85,6 @@ export function jarvisModel(): { value: string; label: string } {
 
 export function jarvisJfsRoot(): string {
   return process.env.JARVIS_JFS_ROOT || '/jfs';
-}
-
-export function jarvisWatchIntervalMs(): number {
-  const n = Number(process.env.JARVIS_WATCH_INTERVAL_MS);
-  return Number.isFinite(n) && n >= 500 ? n : 5000;
 }
 
 /** Conversation ids are UUIDs (Jarvis 3 refuses anything else); nothing else may name a folder under ws/. */

@@ -7,21 +7,19 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
 import { broadcastSessionUpsertedBatch } from '@/modules/websocket/index.js';
 import type { LLMProvider } from '@/shared/types.js';
-import { JARVIS_PROJECT_DIR_NAME, jarvisEnabled, jarvisWatchIntervalMs } from '@/modules/jarvis/jarvis-config.js';
+import { jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
 
 type WatcherEventType = 'add' | 'change';
 
 /**
- * The transcript folders to watch. Upstream watched every provider's folder; this fork keeps only Claude. In Jarvis
- * mode only the one project's folder (`~/.claude/projects/-workspace`, on the user's JuiceFS folder) is watched, at
- * JARVIS_WATCH_INTERVAL_MS: the sandbox writes there from another host, so only polling sees its writes.
+ * The transcript folders to watch. Upstream watched every provider's folder; this fork keeps only Claude. Jarvis mode
+ * watches nothing (see initializeSessionsWatcher).
  */
 function providerWatchPaths(): Array<{ provider: LLMProvider; rootPath: string; interval: number }> {
-  const claudeProjects = path.join(os.homedir(), '.claude', 'projects');
   if (jarvisEnabled()) {
-    return [{ provider: 'claude', rootPath: path.join(claudeProjects, JARVIS_PROJECT_DIR_NAME), interval: jarvisWatchIntervalMs() }];
+    return [];
   }
-  return [{ provider: 'claude', rootPath: claudeProjects, interval: 6_000 }];
+  return [{ provider: 'claude', rootPath: path.join(os.homedir(), '.claude', 'projects'), interval: 6_000 }];
 }
 
 const WATCHER_IGNORED_PATTERNS = [
@@ -188,6 +186,10 @@ async function onUpdate(
 
 /**
  * Starts provider filesystem watchers and performs initial DB synchronization.
+ *
+ * Jarvis mode only does the initial synchronization (it repairs rows after a crash) and watches no folder: every
+ * conversation is created, run, renamed and deleted through this process, which announces each change itself
+ * (sessions.service, the chat run registry), so nothing has to be found by polling the transcripts on JuiceFS.
  */
 export async function initializeSessionsWatcher(): Promise<void> {
   console.log('Setting up session watchers');

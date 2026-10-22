@@ -5,7 +5,7 @@ import path from 'node:path';
 import { jarvisTurnsDb, projectsDb, sessionsDb, type JarvisFailedTurn } from '@/modules/database/index.js';
 import { JARVIS_WORKSPACE_PATH, jarvisEnabled, jarvisSessionName } from '@/modules/jarvis/jarvis-config.js';
 import { onConversationDeleted, onConversationForked } from '@/modules/jarvis/jarvis-conversations.js';
-import { broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
+import { broadcastSessionRemoved, broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { listBusyClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
 import { sessionHistoryCache } from '@/modules/providers/services/session-history-cache.service.js';
@@ -105,6 +105,23 @@ type SessionDetails = {
 };
 
 const MAX_CLOUDCLI_SESSION_NAME_WORDS = 4;
+
+/** Tells the open tabs about a session change; a failed broadcast never fails the request that made the change. */
+async function announce(send: () => Promise<void>): Promise<void> {
+  try {
+    await send();
+  } catch (error) {
+    console.error('[sessions] broadcast failed', { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+function announceRemoved(sessionId: string, action: 'archived' | 'deleted'): void {
+  try {
+    broadcastSessionRemoved(sessionId, action);
+  } catch (error) {
+    console.error('[sessions] broadcast failed', { error: error instanceof Error ? error.message : String(error) });
+  }
+}
 
 function buildCloudCliSessionName(initialMessage: string): string {
   // Jarvis mode (staff write Chinese, which has no spaces between words): the message's first characters, or a
@@ -312,6 +329,9 @@ export const sessionsService = {
     const sessionId = randomUUID();
     const sessionName = buildCloudCliSessionName(initialMessage);
     await sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, sessionName);
+    // Every open tab of this user lists the new conversation at once (the creating tab also adds it locally);
+    // the provider's own id only comes when Claude Code starts, which can be a minute away on a cold sandbox.
+    await announce(() => broadcastSessionUpserted(sessionId));
 
     return {
       sessionId,
@@ -763,6 +783,7 @@ export const sessionsService = {
 
     if (!options.force) {
       await sessionsDb.updateSessionIsArchived(sessionId, true);
+      announceRemoved(sessionId, 'archived');
       return {
         sessionId,
         action: 'archived',
@@ -794,6 +815,7 @@ export const sessionsService = {
         statusCode: 404,
       });
     }
+    announceRemoved(sessionId, 'deleted');
     await onConversationDeleted(sessionId);
 
     return {
@@ -816,6 +838,7 @@ export const sessionsService = {
     }
 
     await sessionsDb.updateSessionIsArchived(sessionId, false);
+    await announce(() => broadcastSessionUpserted(sessionId));
     return { sessionId, isArchived: false };
   },
 
@@ -832,6 +855,8 @@ export const sessionsService = {
     }
 
     await sessionsDb.updateSessionCustomName(sessionId, summary);
+    // Other tabs (and this one's conversation list) take the new name from the delta.
+    await announce(() => broadcastSessionUpserted(sessionId));
     return { sessionId, summary };
   },
 };

@@ -22,6 +22,7 @@ type SidebarProps = {
   onSessionSelect: (session: ProjectSession) => void;
   onNewSession: (project: Project) => void;
   onSessionDelete?: (sessionId: string) => void;
+  removedSessionIds?: ReadonlySet<string>;
   onLoadMoreSessions?: (projectId: string) => Promise<void> | void;
   // `projectId` is the DB identifier; the sidebar hands it back to the parent
   // when the delete flow completes.
@@ -51,6 +52,7 @@ function Sidebar({
   onSessionSelect,
   onNewSession,
   onSessionDelete,
+  removedSessionIds,
   onLoadMoreSessions,
   onProjectDelete,
   isLoading,
@@ -159,6 +161,7 @@ function Sidebar({
     onProjectSelect,
     onSessionSelect,
     onSessionDelete,
+    removedSessionIds,
     onLoadMoreSessions,
     onProjectDelete,
     setCurrentProject,

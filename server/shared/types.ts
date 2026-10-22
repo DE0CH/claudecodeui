@@ -242,6 +242,7 @@ export type MessageKind =
 export type GatewayEventKind =
   | 'chat_subscribed'
   | 'session_upserted'
+  | 'session_removed'
   | 'loading_progress'
   | 'protocol_error';
 
@@ -287,6 +288,17 @@ export type SessionUpsertedEvent = {
     lastActivity: string;
   };
   project: SessionUpsertedProject | null;
+  timestamp: string;
+};
+
+/**
+ * A session left the active lists (archived or deleted), sent to every open tab of the user so their sidebars drop
+ * it without a reload. `action` says which, so a client can refresh its archived list for an archive.
+ */
+export type SessionRemovedEvent = {
+  kind: 'session_removed';
+  sessionId: string;
+  action: 'archived' | 'deleted';
   timestamp: string;
 };
 

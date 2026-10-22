@@ -17,7 +17,7 @@ cd "$REPO"
 env -i PATH=$PATH HOME=$R/uihome VITE_IS_PLATFORM=true HOST=127.0.0.1 SERVER_PORT=13901 TZ=UTC \
   DATABASE_URL=postgres://claude:dev@127.0.0.1:5432/postgres DATABASE_SCHEMA=cc_e2e JWT_SECRET=e2e-secret \
   JARVIS_WEB_URL=http://127.0.0.1:17070 JARVIS_CC_TOKEN=cc-test-token JARVIS_CC_OWNER=staff@yyc.example \
-  JARVIS_JFS_ROOT=$R/jfs JARVIS_MODEL=claude-sonnet-5-5 JARVIS_MODEL_LABEL="Sonnet 5.5" JARVIS_LOCALE=${JARVIS_LOCALE:-en} JARVIS_WATCH_INTERVAL_MS=1000 \
+  JARVIS_JFS_ROOT=$R/jfs JARVIS_MODEL=claude-sonnet-5-5 JARVIS_MODEL_LABEL="Sonnet 5.5" JARVIS_LOCALE=${JARVIS_LOCALE:-en} \
   npx tsx --tsconfig server/tsconfig.json server/index.ts > $R/server.log 2>&1 & S=$!
 for i in $(seq 1 90); do curl -sf http://127.0.0.1:13901/health >/dev/null && break; sleep 1; done
 node $E/client.mjs http://127.0.0.1:13901 staff@yyc.example "${PROMPT:-Say hello}" > $R/client.log 2>&1

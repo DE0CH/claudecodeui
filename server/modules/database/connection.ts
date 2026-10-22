@@ -165,3 +165,57 @@ export async function dropSchema(): Promise<void> {
   const schema = resolveSchema();
   await getPool().query(`drop schema if exists ${schema} cascade`);
 }
+
+/**
+ * Postgres NOTIFY on `channel` (delivered to every LISTENing connection on this database, in any process). Runs on
+ * the pool, outside any transaction this call is made in, so it is sent at once.
+ */
+export async function notify(channel: string, payload: string): Promise<void> {
+  await getPool().query('select pg_notify($1, $2)', [channel, payload]);
+}
+
+/**
+ * LISTENs on `channel` on a connection of its own (a pooled one would be handed to other queries) and calls
+ * `onPayload` for each notification. A dropped connection is reopened after `retryMs`. Returns a stop function.
+ */
+export function listen(channel: string, onPayload: (payload: string) => void, retryMs = 5000): () => Promise<void> {
+  let client: pg.Client | null = null;
+  let stopped = false;
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  const quoted = `"${channel.replace(/"/g, '""')}"`;
+
+  const connect = async () => {
+    if (stopped) return;
+    const c = new pg.Client({ connectionString: resolveUrl() });
+    client = c;
+    const reopen = (why: string) => {
+      if (client !== c) return;
+      client = null;
+      void c.end().catch(() => {});
+      if (stopped) return;
+      console.warn('[database] listen connection lost, reopening', { channel, why });
+      retry = setTimeout(() => void connect(), retryMs);
+      retry.unref?.();
+    };
+    c.on('error', (e) => reopen(e.message));
+    c.on('end', () => reopen('ended'));
+    c.on('notification', (n) => {
+      if (n.channel === channel && typeof n.payload === 'string') onPayload(n.payload);
+    });
+    try {
+      await c.connect();
+      await c.query(`listen ${quoted}`);
+    } catch (e) {
+      reopen(e instanceof Error ? e.message : String(e));
+    }
+  };
+  void connect();
+
+  return async () => {
+    stopped = true;
+    if (retry) clearTimeout(retry);
+    const c = client;
+    client = null;
+    if (c) await c.end().catch(() => {});
+  };
+}

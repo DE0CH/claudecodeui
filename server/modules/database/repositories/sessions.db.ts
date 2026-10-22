@@ -231,7 +231,7 @@ export const sessionsDb = {
    * are adopted and the duplicate row is removed. Runs in a transaction so
    * the sidebar can never observe both rows at once.
    */
-  async assignProviderSessionId(sessionId: string, providerSessionId: string): Promise<void> {
+  async assignProviderSessionId(sessionId: string, providerSessionId: string, jsonlPath: string | null = null): Promise<void> {
 
     const merge = async () => await transaction(async () => {
       const duplicate = (await get(`SELECT ${SESSION_ROW_COLUMNS} FROM sessions
@@ -243,17 +243,18 @@ export const sessionsDb = {
         (await run('DELETE FROM sessions WHERE session_id = ?', [duplicate.session_id]));
         (await run(`UPDATE sessions SET
              provider_session_id = ?,
-             jsonl_path = COALESCE(jsonl_path, ?),
+             jsonl_path = COALESCE(jsonl_path, ?, ?),
              custom_name = COALESCE(custom_name, ?),
              updated_at = CURRENT_TIMESTAMP
-           WHERE session_id = ?`, [providerSessionId, duplicate.jsonl_path, duplicate.custom_name, sessionId]));
+           WHERE session_id = ?`, [providerSessionId, duplicate.jsonl_path, jsonlPath, duplicate.custom_name, sessionId]));
         return;
       }
 
       (await run(`UPDATE sessions SET
            provider_session_id = ?,
+           jsonl_path = COALESCE(?, jsonl_path),
            updated_at = CURRENT_TIMESTAMP
-         WHERE session_id = ?`, [providerSessionId, sessionId]));
+         WHERE session_id = ?`, [providerSessionId, jsonlPath, sessionId]));
     });
 
     await merge();
@@ -380,6 +381,13 @@ export const sessionsDb = {
     (await run(`UPDATE sessions
        SET effort = ?
        WHERE session_id = ?`, [effort, sessionId]));
+  },
+
+  /** Marks activity on a session now (a run started or finished), which orders the conversation lists. */
+  async touchSession(sessionId: string): Promise<void> {
+    (await run(`UPDATE sessions
+       SET updated_at = CURRENT_TIMESTAMP
+       WHERE session_id = ?`, [sessionId]));
   },
 
   async updateSessionCustomName(sessionId: string, customName: string): Promise<void> {

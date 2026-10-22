@@ -314,6 +314,22 @@ const upsertSessionIntoProject = (project: Project, event: SessionUpsertedEvent)
   return next;
 };
 
+/** True when an upsert reports activity newer than this client knew of (an unknown session counts once it has a transcript). */
+const upsertIsNewActivity = (projects: Project[], event: SessionUpsertedEvent): boolean => {
+  const aliasIds = getSessionAliasIds(event);
+  for (const project of projects) {
+    for (const session of project.sessions ?? []) {
+      if (!aliasIds.has(String(session.id))) {
+        continue;
+      }
+      const known = Date.parse(String(session.lastActivity ?? session.updated_at ?? ''));
+      const reported = Date.parse(String(event.session?.lastActivity ?? ''));
+      return !Number.isFinite(known) || (Number.isFinite(reported) && reported > known);
+    }
+  }
+  return Boolean(event.providerSessionId);
+};
+
 const projectFromRegistration = (project: Project): Project => ({
   projectId: project.projectId,
   path: project.path || project.fullPath,
@@ -393,6 +409,11 @@ export function useProjectsState({
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
   const [attentionSessionIds, setAttentionSessionIds] = useState<Set<string>>(new Set());
+  /**
+   * Sessions archived or deleted since this page loaded, here or in another tab (`session_removed`). The sidebar's
+   * Conversations list was fetched once and drops these rows itself; a session restored later leaves the set again.
+   */
+  const [removedSessionIds, setRemovedSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [activeTab, setActiveTab] = useState<AppTab>(readPersistedTab);
 
   useEffect(() => {
@@ -510,6 +531,32 @@ export function useProjectsState({
       return next;
     });
   }, []);
+
+  /**
+   * A session archived or deleted, here or in another tab (`session_removed`): it leaves every list, and the chat
+   * view when it is the one open.
+   */
+  const removeSessionLocally = useCallback((sessionIdToRemove: string) => {
+    clearSessionAttention(sessionIdToRemove);
+
+    if ((selectedSessionRef.current?.id ?? sessionIdRef.current) === sessionIdToRemove) {
+      setSelectedSession(null);
+      navigate('/');
+    }
+
+    setProjects((prevProjects) => {
+      const nextProjects = prevProjects.map((project) => removeSessionFromProject(project, sessionIdToRemove));
+      return nextProjects.every((project, index) => project === prevProjects[index]) ? prevProjects : nextProjects;
+    });
+    setRemovedSessionIds((previous) => {
+      if (previous.has(sessionIdToRemove)) {
+        return previous;
+      }
+      const next = new Set(previous);
+      next.add(sessionIdToRemove);
+      return next;
+    });
+  }, [clearSessionAttention, navigate]);
 
   const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
     // Claimed before the request starts and read again in `finally`, so the
@@ -760,6 +807,14 @@ export function useProjectsState({
         return;
       }
 
+      if (event.kind === 'session_removed') {
+        const removedId = typeof event.sessionId === 'string' ? event.sessionId : '';
+        if (removedId) {
+          removeSessionLocally(removedId);
+        }
+        return;
+      }
+
       const eventSessionId = typeof event.sessionId === 'string' && event.sessionId
         ? event.sessionId
         : null;
@@ -771,6 +826,7 @@ export function useProjectsState({
         && event.kind !== 'chat_subscribed'
         && event.kind !== 'loading_progress'
         && event.kind !== 'session_upserted'
+        && event.kind !== 'session_removed'
         && event.kind !== 'status'
         && event.kind !== 'stream_end'
         && event.kind !== 'permission_resolved'
@@ -792,14 +848,29 @@ export function useProjectsState({
       // The transcript of the currently viewed session changed on disk while
       // no run is active here (e.g. edited from another client or the CLI):
       // signal the chat view to reload its messages.
+      setRemovedSessionIds((previous) => {
+        if (!previous.has(upsert.sessionId)) {
+          return previous;
+        }
+        const next = new Set(previous);
+        next.delete(upsert.sessionId);
+        return next;
+      });
+
+      // A session with no provider id has no transcript yet (it was just created, here or in another tab): there
+      // are no messages on disk to reload, and reloading would race the first message being sent.
       const currentSelectedSession = selectedSessionRef.current;
       if (
         currentSelectedSession
         && upsert.sessionId === currentSelectedSession.id
         && !isSessionProcessing(upsert.sessionId)
       ) {
-        setExternalMessageUpdate((prev) => prev + 1);
-      } else {
+        if (upsert.providerSessionId) {
+          setExternalMessageUpdate((prev) => prev + 1);
+        }
+      } else if (upsertIsNewActivity(projectsRef.current, upsert)) {
+        // Only activity earns the attention dot: a rename, a restore or a conversation just created elsewhere
+        // (no transcript yet) is no news to look at.
         markSessionAttention(upsert.sessionId);
       }
 
@@ -884,7 +955,7 @@ export function useProjectsState({
     };
 
     return subscribe(handleEvent);
-  }, [isSessionProcessing, markSessionAttention, navigate, refreshProjectsSilently, sessionId, subscribe]);
+  }, [isSessionProcessing, markSessionAttention, navigate, refreshProjectsSilently, removeSessionLocally, sessionId, subscribe]);
 
   useEffect(() => {
     return () => {
@@ -1086,18 +1157,9 @@ export function useProjectsState({
 
   const handleSessionDelete = useCallback(
     (sessionIdToDelete: string) => {
-      clearSessionAttention(sessionIdToDelete);
-
-      if (selectedSession?.id === sessionIdToDelete) {
-        setSelectedSession(null);
-        navigate('/');
-      }
-
-      setProjects((prevProjects) =>
-        prevProjects.map((project) => removeSessionFromProject(project, sessionIdToDelete)),
-      );
+      removeSessionLocally(sessionIdToDelete);
     },
-    [clearSessionAttention, navigate, selectedSession?.id],
+    [removeSessionLocally],
   );
 
   const handleSidebarRefresh = useCallback(async () => {
@@ -1268,6 +1330,7 @@ export function useProjectsState({
       onSessionSelect: handleSessionSelect,
       onNewSession: handleNewSession,
       onSessionDelete: handleSessionDelete,
+      removedSessionIds,
       onLoadMoreSessions: loadMoreProjectSessions,
       onProjectDelete: handleProjectDelete,
       isLoading: isLoadingProjects,
@@ -1292,6 +1355,7 @@ export function useProjectsState({
       isMobile,
       loadingProgress,
       projects,
+      removedSessionIds,
       settingsInitialTab,
       selectedProject,
       selectedSession,

@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
-import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { listen, notify, projectsDb, resolveSchema, sessionsDb } from '@/modules/database/index.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
-import type { SessionUpsertedEvent } from '@/shared/types.js';
+import type { SessionRemovedEvent, SessionUpsertedEvent } from '@/shared/types.js';
 
 /**
  * The single producer of the `session_upserted` delta.
@@ -63,9 +64,68 @@ async function buildSessionUpsertedEvent(
   };
 }
 
+/**
+ * The same user's tabs can be attached to two CloudCLI processes for a while (the router moved the person to another
+ * replica during a rollout while old sockets stay on the old one). Every session-list frame is therefore also
+ * published with Postgres NOTIFY on a channel of the user's schema, and each process passes on frames another
+ * process published to its own sockets. Off unless started (Jarvis mode starts it with the server).
+ */
+const RELAY_ORIGIN = randomUUID();
+const RELAY_MAX_PAYLOAD = 7900; // Postgres caps a notification at 8000 bytes
+let relayChannel: string | null = null;
+let stopRelay: (() => Promise<void>) | null = null;
+
+export function startSessionListRelay(): void {
+  if (stopRelay) {
+    return;
+  }
+  const channel = `cloudcli_sessions_${resolveSchema()}`;
+  relayChannel = channel;
+  stopRelay = listen(channel, (payload) => {
+    try {
+      const message = JSON.parse(payload) as { origin?: string; frame?: string };
+      if (message.origin !== RELAY_ORIGIN && typeof message.frame === 'string') {
+        sendToLocalClients([message.frame]);
+      }
+    } catch {
+      // not ours
+    }
+  });
+}
+
+export async function stopSessionListRelay(): Promise<void> {
+  const stop = stopRelay;
+  stopRelay = null;
+  relayChannel = null;
+  await stop?.();
+}
+
+function sendToLocalClients(payloads: string[]): void {
+  connectedClients.forEach((client) => {
+    if (client.readyState === WS_OPEN_STATE) {
+      for (const payload of payloads) {
+        client.send(payload);
+      }
+    }
+  });
+}
+
 function sendToConnectedClients(payloads: string[]): void {
   if (payloads.length === 0) {
     return;
+  }
+
+  const channel = relayChannel;
+  if (channel) {
+    for (const frame of payloads) {
+      const message = JSON.stringify({ origin: RELAY_ORIGIN, frame });
+      if (Buffer.byteLength(message) > RELAY_MAX_PAYLOAD) {
+        continue;
+      }
+      void notify(channel, message).catch((error: unknown) => {
+        console.error('[sessions] relay notify failed', { error: error instanceof Error ? error.message : String(error) });
+      });
+    }
   }
 
   connectedClients.forEach((client) => {
@@ -102,6 +162,12 @@ export async function broadcastSessionUpsertedBatch(
   }
 
   sendToConnectedClients(payloads);
+}
+
+/** Announces that a session was archived or deleted, so every open tab drops it from its lists. */
+export function broadcastSessionRemoved(sessionId: string, action: SessionRemovedEvent['action']): void {
+  const event: SessionRemovedEvent = { kind: 'session_removed', sessionId, action, timestamp: new Date().toISOString() };
+  sendToConnectedClients([JSON.stringify(event)]);
 }
 
 /** @internal Exported for the broadcast tests, which assert the payload shape directly. */

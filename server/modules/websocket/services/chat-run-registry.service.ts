@@ -1,6 +1,7 @@
 import { sessionsDb } from '@/modules/database/index.js';
 import { ChatSessionWriter } from '@/modules/websocket/services/chat-session-writer.service.js';
 import { broadcastSessionUpserted } from '@/modules/websocket/services/session-upsert-broadcast.service.js';
+import { jarvisEnabled, jarvisTranscriptPath } from '@/modules/jarvis/jarvis-config.js';
 import type {
   LLMProvider,
   NormalizedMessage,
@@ -118,6 +119,7 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
   };
 
   if (message.kind === 'complete') {
+    void noteSessionActivity(run.appSessionId);
     // The provider may report its own id here; the frontend only ever knows
     // the app id, so the "actual" id is by definition the app id as well.
     outbound.actualSessionId = run.appSessionId;
@@ -151,7 +153,10 @@ async function recordProviderSessionId(run: ChatRun, providerSessionId: string):
   run.providerSessionId = providerSessionId;
 
   try {
-    await sessionsDb.assignProviderSessionId(run.appSessionId, providerSessionId);
+    // Jarvis mode: the transcript's place is known from the id (the sandbox writes it on the user's JuiceFS
+    // folder), so the row is complete without waiting for a scan of the transcript folder.
+    const jsonlPath = jarvisEnabled() && run.provider === 'claude' ? jarvisTranscriptPath(providerSessionId) : null;
+    await sessionsDb.assignProviderSessionId(run.appSessionId, providerSessionId, jsonlPath);
     void broadcastSessionUpserted(run.appSessionId).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[ChatRunRegistry] Failed to broadcast canonical session mapping', {
@@ -166,6 +171,23 @@ async function recordProviderSessionId(run: ChatRun, providerSessionId: string):
       appSessionId: run.appSessionId,
       providerSessionId,
       error: message,
+    });
+  }
+}
+
+/**
+ * A run started or finished: the session's activity time moves to now and every open tab is told, so the
+ * conversation lists put it on top at once. This process runs the chat, so it knows first; nothing has to
+ * discover it from the transcript files.
+ */
+async function noteSessionActivity(appSessionId: string): Promise<void> {
+  try {
+    await sessionsDb.touchSession(appSessionId);
+    await broadcastSessionUpserted(appSessionId);
+  } catch (error) {
+    console.error('[ChatRunRegistry] Failed to announce session activity', {
+      appSessionId,
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 }
@@ -230,6 +252,7 @@ export const chatRunRegistry = {
     });
 
     runs.set(input.appSessionId, run);
+    void noteSessionActivity(input.appSessionId);
     return run;
   },
 
