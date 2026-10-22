@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { forkSession } from '@anthropic-ai/claude-agent-sdk';
 import express from 'express';
 
 import { closeConnection, initializeDatabase, run, sessionsDb } from '@/modules/database/index.js';
@@ -78,10 +77,6 @@ const deps = (running = false) => ({
   history: async () => HISTORY,
   isRunning: () => running,
   announce: async () => {},
-  forkTranscript: async (sessionId: string, dir: string, title: string) => {
-    const { sessionId: forked } = await forkSession(sessionId, { dir, title });
-    return forked!;
-  },
 });
 
 const HISTORY = [
@@ -209,11 +204,12 @@ test('share, view as another user, download only sent files and uploads, continu
     assert.equal(await readFile(path.join(os.homedir(), '.claude', 'projects', '-workspace', row.provider_session_id!, 'subagents', 'agent-x.jsonl'), 'utf8'), '{}\n');
     assert.equal(await readFile(path.join(jfs, 'ws', mine, 'report.pdf'), 'utf8'), '%PDF-1.4 report');
     assert.equal(await readFile(path.join(jfs, 'ws', mine, 'make.py'), 'utf8'), 'print(1)');
-    // only the new transcript is left in the viewer's projects (the temporary copy is gone)
-    assert.deepEqual(
-      (await readdir(path.join(os.homedir(), '.claude', 'projects'))).sort(),
-      ['-workspace'],
-    );
+    // exactly one conversation in the viewer's list, and its message chain intact
+    assert.deepEqual((await sessionsDb.getAllSessions()).map((s) => s.session_id), [mine]);
+    const rows = text.trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(rows[0].parentUuid, null);
+    for (let i = 1; i < rows.length; i++) assert.equal(rows[i].parentUuid, rows[i - 1].uuid);
+    assert.ok(!text.includes('a0000000-0000-4000-8000-00000000000'), 'message ids are new');
 
     // the owner stops sharing: the link is gone for everyone and the snapshot deleted; the continued one stays
     await as(OWNER);

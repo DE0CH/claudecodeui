@@ -66,6 +66,7 @@
     "continueFailed": "未能繼續對話，請再試。",
     "gone": "此連結已失效。",
     "loadFailed": "未能載入，請再試。",
-    "loading": "載入中…"
+    "loading": "載入中…",
+    "creating": "正在建立連結…"
   }
 }

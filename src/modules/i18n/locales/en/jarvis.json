@@ -66,6 +66,7 @@
     "continueFailed": "Couldn't continue. Please try again.",
     "gone": "This link is no longer available.",
     "loadFailed": "Couldn't load. Please try again.",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "creating": "Making the link…"
   }
 }

@@ -189,25 +189,17 @@ type ShareDeps = {
   isRunning: (sessionId: string) => boolean;
   /** Tells this user's open tabs about a new conversation. */
   announce: (sessionId: string) => Promise<void>;
-  /** Copies a Claude Code transcript into a new session (new ids); returns the new session id. */
-  forkTranscript: (sessionId: string, dir: string, title: string) => Promise<string>;
 };
 
 async function defaultDeps(): Promise<ShareDeps> {
-  const [{ sessionsService }, { chatRunRegistry, broadcastSessionUpserted }, { forkSession }] = await Promise.all([
+  const [{ sessionsService }, { chatRunRegistry, broadcastSessionUpserted }] = await Promise.all([
     import('@/modules/providers/index.js'),
     import('@/modules/websocket/index.js'),
-    import('@anthropic-ai/claude-agent-sdk'),
   ]);
   return {
     history: async (sessionId) => ((await sessionsService.fetchHistory(sessionId)) as { messages: unknown[] }).messages ?? [],
     isRunning: (sessionId) => chatRunRegistry.isProcessing(sessionId),
     announce: (sessionId) => broadcastSessionUpserted(sessionId),
-    forkTranscript: async (sessionId, dir, title) => {
-      const { sessionId: forked } = await forkSession(sessionId, { dir, title });
-      if (!forked) throw new Error('no session id from the fork');
-      return forked;
-    },
   };
 }
 
@@ -366,6 +358,42 @@ export async function shareFileRoot(id: string, rel: string): Promise<string> {
   return path.join(row.dir, 'ws');
 }
 
+const UUID_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * A Claude Code transcript under a new session id: every session id in it becomes `newSessionId`, every row's own
+ * uuid a fresh one (parentUuid and every other reference follow, as they name the same uuids), and `forkedFrom`
+ * records are dropped, so nothing names the original. Also returns the rewrite for the session folder's files.
+ */
+export function transcriptUnderNewIds(text: string, newSessionId: string): { text: string; rewrite: (s: string) => string } {
+  const map = new Map<string, string>();
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const o = JSON.parse(line);
+      if (typeof o?.sessionId === 'string' && isConversationId(o.sessionId)) map.set(o.sessionId.toLowerCase(), newSessionId);
+      if (typeof o?.uuid === 'string' && isConversationId(o.uuid) && !map.has(o.uuid.toLowerCase())) map.set(o.uuid.toLowerCase(), randomUUID());
+    } catch {
+      /* not a row */
+    }
+  }
+  const rewrite = (s: string) => s.replace(UUID_G, (m) => map.get(m.toLowerCase()) ?? m);
+  const out = text
+    .split('\n')
+    .map((line) => {
+      if (!line.trim()) return line;
+      try {
+        const o = JSON.parse(line);
+        delete o.forkedFrom;
+        return rewrite(JSON.stringify(o));
+      } catch {
+        return rewrite(line);
+      }
+    })
+    .join('\n');
+  return { text: out, rewrite };
+}
+
 /**
  * "Continue conversation": a new conversation of the viewer's (this process's user) from the snapshot, at the top of
  * their list with the same title. Returns its id.
@@ -381,70 +409,45 @@ export async function continueShare(id: string, deps?: ShareDeps): Promise<{ ses
     throw new ShareError(404, 'SHARE_NOT_FOUND', 'This link is no longer available.');
   }
 
-  // The fork runs on a copy in a private project folder (so the transcript watcher never sees the copy as a
-  // conversation of its own), under a temporary id; the result moves into /workspace's folder.
-  const temp = randomUUID();
-  const tempCwd = `/jarvis-share-${temp}`;
-  const tempProject = path.join(os.homedir(), '.claude', 'projects', tempCwd.replace(/[^a-zA-Z0-9]/g, '-'));
-  const target = projectsDir();
+  const forked = randomUUID();
   const conversation = randomUUID();
+  const { text, rewrite } = transcriptUnderNewIds(transcript, forked);
+  const target = projectsDir();
+  const jsonlPath = path.join(target, `${forked}.jsonl`);
+  // the row first: the transcript watcher then finds the new file already mapped (never a second conversation)
+  await sessionsDb.createForkedSession({
+    sessionId: conversation,
+    provider: 'claude',
+    projectPath: JARVIS_WORKSPACE_PATH,
+    customName: row.title,
+    providerSessionId: forked,
+    jsonlPath,
+    forkedFromSessionId: null,
+    model: jarvisModel().value,
+    effort: null,
+  });
   try {
-    await mkdir(tempProject, { recursive: true, mode: 0o700 });
-    // every session id in the snapshot (the original's) becomes the temporary one, so its own records still match
-    const ids = new Set<string>();
-    for (const line of transcript.split('\n')) {
-      try {
-        const sid = JSON.parse(line)?.sessionId;
-        if (isConversationId(sid)) ids.add(sid);
-      } catch {
-        /* not a row */
-      }
-    }
-    let copy = transcript;
-    for (const sid of ids) copy = copy.split(sid).join(temp);
-    await writeFile(path.join(tempProject, `${temp}.jsonl`), copy, { mode: 0o600 });
-    const forked = await d.forkTranscript(temp, tempCwd, row.title);
-
-    // no parent: the copy's records name only the new session
-    const forkedText = await readFile(path.join(tempProject, `${forked}.jsonl`), 'utf8');
-    const cleaned = forkedText
-      .split('\n')
-      .map((line) => {
-        if (!line.trim()) return line;
-        try {
-          const o = JSON.parse(line);
-          delete o.forkedFrom;
-          return JSON.stringify(o).split(temp).join(forked);
-        } catch {
-          return line;
-        }
-      })
-      .join('\n');
     await mkdir(target, { recursive: true, mode: 0o700 });
     const sessionFolder = path.join(row.dir, 'session');
     if (await exists(sessionFolder)) {
-      await cp(sessionFolder, path.join(target, forked), { recursive: true, verbatimSymlinks: true });
+      const to = path.join(target, forked);
+      await cp(sessionFolder, to, { recursive: true, verbatimSymlinks: true });
+      for (const rel of await listFiles(to, '')) {
+        if (!/\.(jsonl|json)$/.test(rel)) continue;
+        const f = path.join(to, rel);
+        await writeFile(f, rewrite(await readFile(f, 'utf8')), { mode: 0o600 });
+      }
     }
-    const jsonlPath = path.join(target, `${forked}.jsonl`);
-    await writeFile(jsonlPath, cleaned, { mode: 0o600 });
-
+    await writeFile(jsonlPath, text, { mode: 0o600 });
     const files = path.join(row.dir, 'ws');
     if (await exists(files)) {
       await cp(files, conversationWorkspaceDir(conversation), { recursive: true, verbatimSymlinks: true, force: true });
     }
-    await sessionsDb.createForkedSession({
-      sessionId: conversation,
-      provider: 'claude',
-      projectPath: JARVIS_WORKSPACE_PATH,
-      customName: row.title,
-      providerSessionId: forked,
-      jsonlPath,
-      forkedFromSessionId: null,
-      model: jarvisModel().value,
-      effort: null,
-    });
-  } finally {
-    await rm(tempProject, { recursive: true, force: true }).catch(() => {});
+  } catch (error) {
+    await sessionsDb.deleteSessionById(conversation).catch(() => {});
+    await rm(jsonlPath, { force: true }).catch(() => {});
+    await rm(path.join(target, forked), { recursive: true, force: true }).catch(() => {});
+    throw error;
   }
   await d.announce(conversation).catch(() => {});
   return { sessionId: conversation };

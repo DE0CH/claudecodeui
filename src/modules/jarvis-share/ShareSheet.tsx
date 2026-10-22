@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Check, Copy, Link2, Share, X } from 'lucide-react';
+import { Check, Copy, Link2, Loader2, Share, X } from 'lucide-react';
 
 import { api } from '@/shared/api';
 import { PRODUCT_NAME } from '@/shared/jarvis';
@@ -135,8 +135,8 @@ export default function ShareSheet({ sessionId, title, onClose }: ShareSheetProp
             disabled={busy}
             className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
           >
-            {note?.ok ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            {note?.ok ? t('share.linkCopied') : t('share.copyLink')}
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : note?.ok ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            {busy ? t('share.creating') : note?.ok ? t('share.linkCopied') : t('share.copyLink')}
           </button>
           {canNativeShare() && (
             <button
