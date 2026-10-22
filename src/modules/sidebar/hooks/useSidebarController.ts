@@ -883,6 +883,9 @@ export function useSidebarController({
 
     const { sessionId } = pendingDeletion;
     setPendingDeletion(null);
+    // Recently deleted: the row goes at once (deleting for good releases the sandbox and removes the files first, a
+    // few seconds); a failure brings it back with the refetch below
+    if (hardDelete) setDeletedSessions((previous) => previous.filter((session) => session.sessionId !== sessionId));
 
     try {
       const response = await api.deleteSession(sessionId, hardDelete);
@@ -906,10 +909,12 @@ export function useSidebarController({
           status: response.status,
           error: errorText,
         });
+        void fetchArchivedSessions();
         alert(t('messages.deleteSessionFailed'));
       }
     } catch (error) {
       console.error('[Sidebar] Error deleting session:', error);
+      void fetchArchivedSessions();
       alert(t('messages.deleteSessionError'));
     }
   }, [fetchArchivedSessions, onSessionDelete, pendingDeletion, t]);
@@ -1141,6 +1146,7 @@ export function useSidebarController({
   }, [fetchArchivedSessions, onRefresh, t]);
 
   const restoreArchivedSession = useCallback(async (sessionId: string) => {
+    setDeletedSessions((previous) => previous.filter((session) => session.sessionId !== sessionId));
     try {
       const response = await api.restoreSession(sessionId);
       if (!response.ok) {
@@ -1149,6 +1155,7 @@ export function useSidebarController({
           status: response.status,
           error: errorText,
         });
+        void fetchArchivedSessions();
         alert(t('messages.restoreSessionFailed', 'Failed to restore session. Please try again.'));
         return;
       }
@@ -1159,6 +1166,7 @@ export function useSidebarController({
       ]);
     } catch (error) {
       console.error('[Sidebar] Error restoring session:', error);
+      void fetchArchivedSessions();
       alert(t('messages.restoreSessionError', 'Error restoring session. Please try again.'));
     }
   }, [fetchArchivedSessions, onRefresh, t]);

@@ -923,6 +923,16 @@ export function useProjectsState({
         return mergeProjectSelectionMetadata(previousProject, upsert.project);
       });
 
+      // The open conversation's new name (a title, a rename in another tab) reaches the workspace header too.
+      const upsertSummary = typeof upsert.session?.summary === 'string' ? upsert.session.summary.trim() : '';
+      if (upsertSummary) {
+        setSelectedSession((previousSession) => (
+          previousSession?.id === upsert.sessionId && previousSession.summary !== upsertSummary
+            ? { ...previousSession, summary: upsertSummary }
+            : previousSession
+        ));
+      }
+
       const aliasedSelectedSessionId =
         typeof upsert.providerSessionId === 'string' && upsert.providerSessionId !== upsert.sessionId
           ? upsert.providerSessionId
