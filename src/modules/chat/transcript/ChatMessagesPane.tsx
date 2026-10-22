@@ -209,7 +209,8 @@ function ChatMessagesPane({
               onLoadAll={loadAllMessages}
             />
           </div>
-          <div className="pointer-events-auto">
+          {/* The staff build has no conversation download (Deyao, 2026-10-22). */}
+          {!IS_JARVIS && <div className="pointer-events-auto">
             <ChatExportMenu
               messages={chatMessages}
               sessionTitle={selectedSession?.summary || selectedSession?.title}
@@ -218,7 +219,7 @@ function ChatMessagesPane({
               createDiff={createDiff}
               onLoadFullTranscript={onLoadFullTranscript}
             />
-          </div>
+          </div>}
         </div>
       )}
       <div className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">

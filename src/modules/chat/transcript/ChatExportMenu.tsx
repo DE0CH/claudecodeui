@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { Braces, Download, FileCode2, FileText, Loader2 } from 'lucide-react';
 
 import { ActionMenu } from '@/shared/ui';
-import { IS_JARVIS } from '@/shared/jarvis';
 import type { ChatMessage, DiffLine, LLMProvider, Project } from '@/shared/types';
 import {
   downloadTranscriptExport,
@@ -26,14 +25,11 @@ type ChatExportMenuProps = {
   onLoadFullTranscript?: () => Promise<ChatMessage[]>;
 };
 
-const ALL_FORMATS: Array<{ id: TranscriptExportFormat; icon: typeof FileText; labelKey: string; descriptionKey: string }> = [
+const FORMATS: Array<{ id: TranscriptExportFormat; icon: typeof FileText; labelKey: string; descriptionKey: string }> = [
   { id: 'html', icon: FileCode2, labelKey: 'export.html.label', descriptionKey: 'export.html.description' },
   { id: 'markdown', icon: FileText, labelKey: 'export.markdown.label', descriptionKey: 'export.markdown.description' },
   { id: 'json', icon: Braces, labelKey: 'export.json.label', descriptionKey: 'export.json.description' },
 ];
-
-// The staff build offers Markdown only (Deyao, 2026-10-22: no HTML or JSON download).
-const FORMATS = IS_JARVIS ? ALL_FORMATS.filter((format) => format.id === 'markdown') : ALL_FORMATS;
 
 /**
  * Rendered by chat's ChatMessagesPane header so the open conversation can be
