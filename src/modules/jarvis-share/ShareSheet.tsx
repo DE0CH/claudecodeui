@@ -113,7 +113,7 @@ export default function ShareSheet({ sessionId, title, onClose }: ShareSheetProp
         aria-modal="true"
         aria-labelledby="jarvis-share-title"
         style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
-        className="w-full max-w-md rounded-t-2xl border border-border/60 bg-background p-4 shadow-2xl sm:rounded-2xl sm:p-5"
+        className="max-h-[85dvh] w-full max-w-md overflow-y-auto overscroll-contain rounded-t-2xl border border-border/60 bg-background p-4 shadow-2xl sm:rounded-2xl sm:p-5"
         data-testid="share-sheet"
       >
         <div className="mb-2 flex items-center justify-between gap-2">
