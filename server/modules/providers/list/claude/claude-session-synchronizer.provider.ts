@@ -11,6 +11,7 @@ import {
   readFileTimestamps,
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
+import { stripLegacySandboxResetNote } from '@/modules/jarvis/jarvis-history.js';
 import { JARVIS_PROJECT_DIR_NAME, JARVIS_WORKSPACE_PATH, jarvisEnabled, jarvisUntitledName } from '@/modules/jarvis/jarvis-config.js';
 
 type ParsedSession = {
@@ -226,7 +227,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
             foundAiTitle = title;
           }
         } else if (eventType === 'last-prompt') {
-          const prompt = typeof data.lastPrompt === 'string' ? data.lastPrompt : undefined;
+          const prompt = typeof data.lastPrompt === 'string' ? stripLegacySandboxResetNote(data.lastPrompt) : undefined;
           if (prompt?.trim()) {
             foundLastPrompt = prompt;
           }

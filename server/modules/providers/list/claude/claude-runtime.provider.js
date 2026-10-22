@@ -22,7 +22,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { recordJarvisFailedTurn } from '@/modules/jarvis/jarvis-conversations.js';
 import { prepareJarvisAttachments } from '@/modules/jarvis/jarvis-images.js';
 import { readableSandboxError } from '@/modules/jarvis/jarvis-errors.js';
-import { acquireSandbox, jarvisEnabled, SANDBOX_RESET_NOTE, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
+import { acquireSandbox, jarvisEnabled, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
 
 import {
   appendFilesInputTag,
@@ -1063,7 +1063,6 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
 
     // Jarvis 3 (docs/CLAUDE-CODE.md in DE0CH/jarvis3): Claude Code runs in the conversation's sandbox, with its
     // /workspace; the instance's instructions and MCP tools are the sandbox's managed settings, not this host's.
-    let promptCommand = command;
     let promptFiles = options.files;
     let promptImages = options.images;
     let savedImages = [];
@@ -1072,7 +1071,6 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       // images also as a copy Claude can see (HEIC converted, large photos downscaled; jarvis-images.ts)
       ({ images: promptImages, files: promptFiles, savedImages } = await prepareJarvisAttachments(sessionId, options.images, options.files));
       const sandbox = await acquireSandbox(sessionId);
-      if (sandbox.reset) promptCommand = `${SANDBOX_RESET_NOTE}\n\n${command}`;
       sdkOptions.cwd = '/workspace';
       delete sdkOptions.mcpServers;
       // the instance's model is the sandbox's ANTHROPIC_MODEL (egress allows only the instance's models)
@@ -1083,7 +1081,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // Every turn uses streaming input so stdin stays open past the turn's
     // `result`. The message list is reusable, but each query attempt needs its
     // own stream because an async generator cannot be replayed once consumed.
-    const promptMessages = await buildPromptMessages(promptCommand, promptImages, promptFiles, options.cwd, savedImages);
+    const promptMessages = await buildPromptMessages(command, promptImages, promptFiles, options.cwd, savedImages);
 
     sdkOptions.hooks = {
       Notification: [{

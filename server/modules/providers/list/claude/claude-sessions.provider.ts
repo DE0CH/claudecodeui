@@ -5,6 +5,7 @@ import readline from 'node:readline';
 
 import { jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
 import { readableClaudeApiError } from '@/modules/jarvis/jarvis-errors.js';
+import { stripLegacySandboxResetNote } from '@/modules/jarvis/jarvis-history.js';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type {
   AnyRecord,
@@ -1407,7 +1408,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             }));
           } else if (part.type === 'text') {
             const text = part.text || '';
-            const parsedFiles = parseFilesInputTag(parseImageUploadsTag(text).text);
+            const parsedFiles = parseFilesInputTag(parseImageUploadsTag(stripLegacySandboxResetNote(text)).text);
             if (
               (parsedFiles.text || parsedFiles.attachments.length > 0)
               && !isInternalContent(parsedFiles.text)
@@ -1436,6 +1437,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             .filter((part: AnyRecord) => part.type === 'text')
             .map((part: AnyRecord) => part.text)
             .filter(Boolean)
+            .map((part: string) => stripLegacySandboxResetNote(part))
             .join('\n');
           if (textParts && !isInternalContent(textParts)) {
             messages.push(createNormalizedMessage({
@@ -1541,7 +1543,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           return messages;
         }
 
-        const parsedFiles = parseFilesInputTag(parseImageUploadsTag(text).text);
+        const parsedFiles = parseFilesInputTag(parseImageUploadsTag(stripLegacySandboxResetNote(text)).text);
         if (
           (parsedFiles.text || parsedFiles.attachments.length > 0)
           && !isInternalContent(parsedFiles.text)

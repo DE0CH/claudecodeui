@@ -24,15 +24,11 @@ const TOUCH_EVERY_MS = 60_000;
 /** The only variables of the SDK's environment that go into the sandbox (the rest are this pod's). */
 const FORWARDED_ENV = /^(CLAUDE_CODE_ENTRYPOINT|CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS|MAX_THINKING_TOKENS|CLAUDE_CODE_MAX_OUTPUT_TOKENS)$/;
 
-export const SANDBOX_RESET_NOTE =
-  '[System note: your sandbox was reset since the last message: /workspace and this conversation are as they were; installed packages, running processes and files outside /workspace are gone.]';
-
 export interface JarvisSandbox {
   id: string;
   url: string;
   token: string;
   headers: Record<string, string>;
-  reset: boolean;
 }
 
 export { jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';

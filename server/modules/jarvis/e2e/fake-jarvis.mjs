@@ -25,7 +25,7 @@ const server = http.createServer((req, res) => {
       if (process.env.FAKE_SANDBOX_FAIL) { res.writeHead(Number(process.env.FAKE_SANDBOX_FAIL), { 'content-type': 'application/json' }); res.end('{"error":"no capacity"}'); return; }
       conversation = b.conversation;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ id: 'sbx-local-1', url: `http://127.0.0.1:${port}`, token: AGENT_TOKEN, headers: {}, reset: false }));
+      res.end(JSON.stringify({ id: 'sbx-local-1', url: `http://127.0.0.1:${port}`, token: AGENT_TOKEN, headers: {} }));
       return;
     }
     res.setHeader('content-type', 'application/json');

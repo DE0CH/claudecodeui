@@ -7,6 +7,7 @@ import { rgPath } from '@vscode/ripgrep';
 
 import { isClaudeNonTurnMessageRow, stripAnsiSequences } from '@/shared/utils.js';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
+import { stripLegacySandboxResetNote } from '@/modules/jarvis/jarvis-history.js';
 
 type AnyRecord = Record<string, any>;
 type SearchableProvider = 'claude' | 'codex';
@@ -430,7 +431,7 @@ function extractClaudeSearchableMessage(entry: AnyRecord): ClaudeSearchableMessa
   }
 
   if (typeof entry.message.content === 'string') {
-    const content = String(entry.message.content);
+    const content = stripLegacySandboxResetNote(String(entry.message.content));
 
     if (entry.isCompactSummary === true && content.trim()) {
       return {
@@ -471,7 +472,7 @@ function extractClaudeSearchableMessage(entry: AnyRecord): ClaudeSearchableMessa
     };
   }
 
-  const text = extractClaudeText(entry.message.content);
+  const text = stripLegacySandboxResetNote(extractClaudeText(entry.message.content));
   if (!text) {
     return null;
   }
