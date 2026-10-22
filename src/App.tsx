@@ -123,6 +123,8 @@ export default function App() {
                     <Routes>
                       <Route path="/" element={<ProjectWorkspaceRoute />} />
                       <Route path="/session/:sessionId" element={<ProjectWorkspaceRoute />} />
+                      {/* Staff build: a shared conversation, read-only (jarvis-share/SharedConversationView) */}
+                      <Route path="/s/:shareId" element={<ProjectWorkspaceRoute />} />
                     </Routes>
                   </Router>
                 </ProtectedRoute>

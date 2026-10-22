@@ -10,9 +10,14 @@ import { createContext, useContext } from 'react';
  * workspace. Null outside a session (an exported document, a bare render),
  * where there is nothing to fetch from.
  */
-export const TranscriptSessionContext = createContext<{ sessionId: string | null }>({ sessionId: null });
+export const TranscriptSessionContext = createContext<{ sessionId: string | null; shareId?: string | null }>({ sessionId: null });
 
 /** The app session id the transcript belongs to, or null outside a session. */
 export function useTranscriptSessionId(): string | null {
   return useContext(TranscriptSessionContext).sessionId;
+}
+
+/** The share link the transcript is shown from (the read-only shared page), or null in a conversation of one's own. */
+export function useTranscriptShareId(): string | null {
+  return useContext(TranscriptSessionContext).shareId ?? null;
 }

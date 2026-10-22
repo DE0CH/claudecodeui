@@ -44,6 +44,7 @@ import { configureWebPush } from './modules/notifications/index.js';
 import { bootstrapJarvis } from './modules/jarvis/jarvis-bootstrap.js';
 import { jarvisEnabled } from './modules/jarvis/jarvis-config.js';
 import { createJarvisFilesRouter } from './modules/jarvis/jarvis-files.routes.js';
+import { createJarvisSharesRouter } from './modules/jarvis/jarvis-shares.routes.js';
 import { jarvisApiGuard } from './modules/jarvis/jarvis-guard.js';
 import { createJarvisWarmRouter } from './modules/jarvis/jarvis-warm.routes.js';
 
@@ -125,6 +126,8 @@ if (jarvisEnabled()) {
     app.use('/api/jarvis', authenticateToken, createJarvisFilesRouter());
     // typing in the composer warms a sandbox host (jarvis-warm.routes.ts)
     app.use('/api/jarvis', authenticateToken, createJarvisWarmRouter());
+    // shared conversations: share, view, continue, stop sharing (jarvis-shares.routes.ts)
+    app.use('/api/jarvis', authenticateToken, createJarvisSharesRouter());
 }
 
 // Authentication routes (public)

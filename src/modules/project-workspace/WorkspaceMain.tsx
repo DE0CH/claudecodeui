@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, type Dispatch, type SetStateAction, useState } from 'react';
+import { useParams } from 'react-router-dom';
 
 import { ChatInterface } from '@/modules/chat';
 import { FileTree } from '@/modules/file-tree';
@@ -16,7 +17,9 @@ import WorkspaceHeader from '@/modules/project-workspace/WorkspaceHeader';
 import WorkspaceStateView from '@/modules/project-workspace/WorkspaceStateView';
 import WorkspaceErrorBoundary from '@/modules/project-workspace/WorkspaceErrorBoundary';
 import JarvisWorkspaceHeader from '@/modules/project-workspace/JarvisWorkspaceHeader';
+import MobileMenuButton from '@/modules/project-workspace/MobileMenuButton';
 import { JarvisFilesPanel, toWorkspaceRelativePath } from '@/modules/jarvis-files';
+import { SharedConversationView } from '@/modules/jarvis-share';
 import { IS_JARVIS, JARVIS_WORKSPACE_PATH } from '@/shared/jarvis';
 
 type WorkspaceMainProps = {
@@ -63,6 +66,8 @@ function WorkspaceMain({
   onRenameSession,
 }: WorkspaceMainProps) {
   const preferences = useUiPreferences();
+  // /s/<id>: a conversation someone shared (staff build only)
+  const { shareId } = useParams<{ shareId?: string }>();
   const { showRawParameters, showThinking, sendByCtrlEnter } = preferences;
 
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
@@ -155,6 +160,19 @@ function WorkspaceMain({
 
   if (!selectedProject) {
     return <WorkspaceStateView mode="empty" isMobile={isMobile} onMenuClick={onMenuClick} />;
+  }
+
+  if (IS_JARVIS && shareId) {
+    return (
+      <WorkspaceErrorBoundary showDetails>
+        <SharedConversationView
+          shareId={shareId}
+          menuButton={isMobile ? <MobileMenuButton onMenuClick={onMenuClick} /> : null}
+          // a full load, so the conversation list (fetched once per load) shows the new conversation at the top
+          onContinued={(sessionId) => window.location.assign(`/session/${encodeURIComponent(sessionId)}`)}
+        />
+      </WorkspaceErrorBoundary>
+    );
   }
 
   if (IS_JARVIS) {

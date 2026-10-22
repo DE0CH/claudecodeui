@@ -34,7 +34,8 @@
     "options": "對話選項",
     "optionsFor": "「{{name}}」的選項",
     "rename": "重新命名",
-    "delete": "封存或刪除"
+    "delete": "封存或刪除",
+    "share": "分享"
   },
   "age": {
     "justNow": "剛剛",
@@ -45,5 +46,26 @@
   "sent": {
     "sending": "傳送中…",
     "open": "開啟 {{name}}"
+  },
+  "share": {
+    "button": "分享",
+    "title": "分享",
+    "lead": "已登入 {{product}} 的同事可以查看這段對話（只讀）",
+    "copyLink": "複製連結",
+    "linkCopied": "已複製連結",
+    "shareLink": "分享連結",
+    "copyLinkFailed": "未能建立連結，請再試。",
+    "nothingToShare": "暫時未有可分享的內容。",
+    "sharedLinks": "已分享的連結",
+    "stopSharing": "停止分享",
+    "copy": "複製",
+    "copied": "已複製",
+    "close": "關閉",
+    "sharedBy": "{{owner}} 分享的對話（只讀）",
+    "continueConversation": "繼續對話",
+    "continueFailed": "未能繼續對話，請再試。",
+    "gone": "此連結已失效。",
+    "loadFailed": "未能載入，請再試。",
+    "loading": "載入中…"
   }
 }

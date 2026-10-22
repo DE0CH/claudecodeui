@@ -9,10 +9,12 @@ import path from 'node:path';
 import { jarvisTurnsDb } from '@/modules/database/index.js';
 import { conversationWorkspaceDir, isConversationId, jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
 import { releaseSandbox } from '@/modules/jarvis/sandbox-process.js';
+import { revokeSharesOf } from '@/modules/jarvis/jarvis-shares.js';
 
 type Deps = {
   release: (conversationId: string) => Promise<void>;
   removeDir: (dir: string) => Promise<void>;
+  revokeShares?: (conversationId: string) => Promise<void>;
 };
 
 /**
@@ -40,14 +42,16 @@ async function removeWorkspaceDir(dir: string): Promise<void> {
 const defaultDeps: Deps = {
   release: releaseSandbox,
   removeDir: removeWorkspaceDir,
+  revokeShares: revokeSharesOf,
 };
 
 /**
- * After a session row was deleted: release its sandbox, then delete its files. Failures are logged, not thrown: the
+ * After a session row was deleted: its share links stop working, then its sandbox is released and its files deleted. Failures are logged, not thrown: the
  * conversation is already gone for the user, and the control plane releases idle sandboxes on its own.
  */
 export async function onConversationDeleted(sessionId: string, deps: Deps = defaultDeps): Promise<void> {
   if (!jarvisEnabled() || !isConversationId(sessionId)) return;
+  await deps.revokeShares?.(sessionId);
   try {
     await deps.release(sessionId);
   } catch (error) {

@@ -6,6 +6,7 @@ import { cn } from '@/shared/utils';
 import { JARVIS_WORKSPACE_PATH } from '@/shared/jarvis';
 import { fileName, formatFileSize, previewKind } from '@/modules/jarvis-files/filePreview';
 import { readSendUserFileInput, sentFilesOf } from '@/modules/jarvis-files/sentFiles';
+import { useTranscriptShareId } from '@/modules/chat/context/TranscriptSessionContext';
 
 type SentFileCardsProps = {
   sessionId: string | null;
@@ -22,6 +23,11 @@ type SentFileCardsProps = {
  */
 export default function SentFileCards({ sessionId, toolInput, toolResult, onOpen }: SentFileCardsProps) {
   const { t } = useTranslation('jarvis');
+  // on a shared page the bytes come from the share's snapshot, not the owner's conversation
+  const shareId = useTranscriptShareId();
+  const rawUrl = (filePath: string, options?: { inline?: boolean }) =>
+    shareId ? api.jarvis.shareFileRawUrl(shareId, filePath, options) : sessionId ? api.jarvis.sessionFileRawUrl(sessionId, filePath, options) : '';
+  const canLoad = Boolean(shareId || sessionId);
   const input = readSendUserFileInput(toolInput);
   const files = sentFilesOf(input, toolResult?.toolUseResult);
   const pending = !toolResult;
@@ -38,8 +44,8 @@ export default function SentFileCards({ sessionId, toolInput, toolResult, onOpen
         {files.map((file) => {
           const name = fileName(file.path);
           const kind = previewKind(file.path, file.size ?? 0);
-          const showPreview = !pending && sessionId && input.display !== 'attach' && (kind === 'image' || kind === 'pdf');
-          const inlineUrl = sessionId ? api.jarvis.sessionFileRawUrl(sessionId, file.path, { inline: true }) : '';
+          const showPreview = !pending && canLoad && input.display !== 'attach' && (kind === 'image' || kind === 'pdf');
+          const inlineUrl = rawUrl(file.path, { inline: true });
           const Icon = kind === 'image' ? FileImage : kind === 'pdf' || kind === 'text' ? FileText : File;
           const open = () => onOpen?.(`${JARVIS_WORKSPACE_PATH}/${file.path}`);
           return (
@@ -84,9 +90,9 @@ export default function SentFileCards({ sessionId, toolInput, toolResult, onOpen
                 <span className="flex-shrink-0 text-xs text-muted-foreground">
                   {pending ? t('sent.sending') : file.size !== null ? formatFileSize(file.size) : ''}
                 </span>
-                {!pending && sessionId && (
+                {!pending && canLoad && (
                   <a
-                    href={api.jarvis.sessionFileRawUrl(sessionId, file.path)}
+                    href={rawUrl(file.path)}
                     download={name}
                     className="-mr-1 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                     aria-label={t('files.downloadNamed', { name })}

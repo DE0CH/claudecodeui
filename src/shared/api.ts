@@ -598,6 +598,14 @@ export const api = {
     // {firstName}: the Access identity's first name for the empty chat's greeting; answered by the router
     // (jarvis/router.mjs), never by the CloudCLI server.
     me: () => get('/api/jarvis/me'),
+    // Shared conversations (server/modules/jarvis/jarvis-shares.routes.ts): each create freezes a new link.
+    createShare: (sessionId: string) => post(`/api/jarvis/sessions/${encodeURIComponent(sessionId)}/shares`, {}),
+    shares: (sessionId: string) => get(`/api/jarvis/sessions/${encodeURIComponent(sessionId)}/shares`),
+    revokeShare: (shareId: string) => del(`/api/jarvis/shares/${encodeURIComponent(shareId)}`),
+    share: (shareId: string) => get(`/api/jarvis/shares/${encodeURIComponent(shareId)}`),
+    continueShare: (shareId: string) => post(`/api/jarvis/shares/${encodeURIComponent(shareId)}/continue`, {}),
+    shareFileRawUrl: (shareId: string, filePath: string, { inline = false }: { inline?: boolean } = {}) =>
+      `/api/jarvis/shares/${encodeURIComponent(shareId)}/files/raw${query({ path: filePath, inline: inline ? 1 : null })}`,
   },
 
   browserUse: {

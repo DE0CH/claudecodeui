@@ -1,6 +1,8 @@
-import { FolderOpen, SquarePen } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { FolderOpen, Share, SquarePen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { ShareSheet } from '@/modules/jarvis-share';
 import type { Project, ProjectSession } from '@/shared/types';
 import { useProjectCommandState } from '@/modules/project-workspace/context/ProjectsStateContext';
 import MobileMenuButton from '@/modules/project-workspace/MobileMenuButton';
@@ -18,7 +20,7 @@ type JarvisWorkspaceHeaderProps = {
 
 /**
  * The staff build's header (WorkspaceMain renders it instead of WorkspaceHeader): the conversation's
- * title and connection status, a Files button in place of the Shell / Files / Git / Tasks tabs, and on a
+ * title and connection status, a Share button (the share sheet), a Files button in place of the Shell / Files / Git / Tasks tabs, and on a
  * phone a new-chat button.
  */
 export default function JarvisWorkspaceHeader({
@@ -31,6 +33,8 @@ export default function JarvisWorkspaceHeader({
 }: JarvisWorkspaceHeaderProps) {
   const { t } = useTranslation('jarvis');
   const { handleNewSession } = useProjectCommandState();
+  const [sharing, setSharing] = useState(false);
+  const closeShare = useCallback(() => setSharing(false), []);
 
   return (
     <header className="pwa-header-safe flex-shrink-0 border-b border-border/60 bg-background/95 px-3 py-1.5 backdrop-blur-sm sm:px-4 sm:py-2">
@@ -44,6 +48,18 @@ export default function JarvisWorkspaceHeader({
           onRenameSession={onRenameSession}
         />
         <WorkspaceConnectionStatus />
+        {selectedSession && (
+          <button
+            type="button"
+            onClick={() => setSharing(true)}
+            className="flex h-9 flex-shrink-0 items-center gap-1.5 rounded-lg border border-border/70 px-2.5 text-sm font-medium text-foreground hover:bg-accent sm:px-3"
+            aria-label={t('share.button')}
+            title={t('share.button')}
+          >
+            <Share className="h-4 w-4" />
+            <span className="hidden sm:inline">{t('share.button')}</span>
+          </button>
+        )}
         {selectedSession && (
           <button
             type="button"
@@ -67,6 +83,13 @@ export default function JarvisWorkspaceHeader({
           </button>
         )}
       </div>
+      {sharing && selectedSession && (
+        <ShareSheet
+          sessionId={selectedSession.id}
+          title={selectedSession.summary || selectedSession.title}
+          onClose={closeShare}
+        />
+      )}
     </header>
   );
 }

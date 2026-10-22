@@ -193,7 +193,8 @@ export const sessionsDb = {
     customName: string | null;
     providerSessionId: string;
     jsonlPath: string;
-    forkedFromSessionId: string;
+    /** Null for a conversation continued from a share: it names no parent. */
+    forkedFromSessionId: string | null;
     model: string | null;
     effort: string | null;
   }): Promise<string> {

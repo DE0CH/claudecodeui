@@ -34,7 +34,8 @@
     "options": "Conversation options",
     "optionsFor": "Options for {{name}}",
     "rename": "Rename",
-    "delete": "Archive or delete"
+    "delete": "Archive or delete",
+    "share": "Share"
   },
   "age": {
     "justNow": "now",
@@ -45,5 +46,26 @@
   "sent": {
     "sending": "Sending…",
     "open": "Open {{name}}"
+  },
+  "share": {
+    "button": "Share",
+    "title": "Share",
+    "lead": "Colleagues signed in to {{product}} can view this conversation (read-only)",
+    "copyLink": "Copy link",
+    "linkCopied": "Link copied",
+    "shareLink": "Share link",
+    "copyLinkFailed": "Couldn't make the link. Please try again.",
+    "nothingToShare": "There's nothing to share yet.",
+    "sharedLinks": "Shared links",
+    "stopSharing": "Stop sharing",
+    "copy": "Copy",
+    "copied": "Copied",
+    "close": "Close",
+    "sharedBy": "Shared by {{owner}} (read-only)",
+    "continueConversation": "Continue conversation",
+    "continueFailed": "Couldn't continue. Please try again.",
+    "gone": "This link is no longer available.",
+    "loadFailed": "Couldn't load. Please try again.",
+    "loading": "Loading…"
   }
 }

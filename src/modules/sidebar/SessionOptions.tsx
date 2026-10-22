@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { Check, Edit2, GitBranch, MoreHorizontal, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Check, Edit2, GitBranch, MoreHorizontal, Share, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { ActionMenu } from '@/shared/ui';
@@ -9,6 +9,7 @@ import { useSessionForkingProviders } from '@/shared/hooks/useProviderCapabiliti
 import { useProviderSessionIdCopy } from '@/modules/sidebar/hooks/useProviderSessionIdCopy';
 import { PROVIDER_LABELS } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import { IS_JARVIS } from '@/shared/jarvis';
+import { ShareSheet } from '@/modules/jarvis-share';
 
 type SessionOptionsProps = {
   sessionId: string;
@@ -64,6 +65,9 @@ export default function SessionOptions({
   t,
 }: SessionOptionsProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // Staff build: 「分享」 opens the conversation's share sheet (the header has the same button)
+  const [sharing, setSharing] = useState(false);
+  const closeShare = useCallback(() => setSharing(false), []);
   const providerLabel = PROVIDER_LABELS[provider];
   const { copyState, copyLabel, setOptionsOpen, handleCopyAction, isCopyPending, CopyStateIcon } =
     useProviderSessionIdCopy(sessionId, providerLabel);
@@ -167,6 +171,12 @@ export default function SessionOptions({
               icon: Edit2,
               onSelect: () => onStartEditingSession(projectId, sessionId, sessionName),
             }] : []),
+            ...(IS_JARVIS ? [{
+              key: 'share',
+              label: t('jarvis:sessionMenu.share'),
+              icon: Share,
+              onSelect: () => setSharing(true),
+            }] : []),
             // Staff build: no provider session ids to copy, and no forking (a fork would not carry
             // the conversation's workspace files).
             ...(IS_JARVIS ? [] : [{
@@ -196,6 +206,7 @@ export default function SessionOptions({
           ]}
         />
       )}
+      {sharing && <ShareSheet sessionId={sessionId} title={sessionName} onClose={closeShare} />}
     </div>
   );
 }
