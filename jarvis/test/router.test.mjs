@@ -9,7 +9,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { AccessVerifier, Router, ownerOf, pickFirstName, userKey } from "../router.mjs";
+import { AccessVerifier, Router, TeamsVerifier, ownerOf, pickFirstName, userKey } from "../router.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE = path.join(HERE, "fake-cloudcli.mjs");
@@ -495,4 +495,22 @@ test("purgeWake starts the process of a person with expired Recently deleted con
   assert.ok(!r.procs.has(CAROL.toLowerCase()));
   assert.deepEqual(checked.sort(), [BOB, CAROL.toLowerCase()].sort());
   await r.drain();
+});
+
+test("two Access teams (access.also, a move to another Cloudflare account): each token is checked against its own issuer's team", async () => {
+  const NEW = "new.cloudflareaccess.com";
+  const fetched = [];
+  const mk = (t) => new AccessVerifier({ ...t, fetchImpl: async (url) => { fetched.push(url); return { ok: true, json: async () => JWKS }; } });
+  const v = new TeamsVerifier([mk({ teamDomain: TEAM, audience: AUD }), mk({ teamDomain: NEW, audience: "aud-new" })]);
+  assert.equal(await v.email(jwt({ email: ALICE })), ALICE);
+  assert.equal(await v.email(jwt({ email: ALICE, iss: `https://${NEW}`, aud: ["aud-new"] })), ALICE);
+  await assert.rejects(v.email(jwt({ email: ALICE, iss: `https://${NEW}`, aud: [AUD] })), /bad audience/);
+  await assert.rejects(v.email(jwt({ email: ALICE, aud: ["aud-new"] })), /bad audience/);
+  await assert.rejects(v.email(jwt({ email: ALICE, iss: "https://evil.cloudflareaccess.com" })), /bad issuer/);
+  await assert.rejects(v.email("garbage"), /bad issuer/);
+  assert.ok(fetched.includes(`https://${NEW}/cdn-cgi/access/certs`));
+  // the Router builds it from config access.also
+  const r = new Router({ config: { access: { teamDomain: TEAM, audience: AUD, also: [{ teamDomain: NEW, audience: "aud-new" }] }, users: [ALICE] }, jwks: JWKS });
+  assert.ok(r.verifier instanceof TeamsVerifier);
+  assert.equal(await r.verifier.email(jwt({ email: ALICE, iss: `https://${NEW}`, aud: ["aud-new"] })), ALICE);
 });

@@ -34,7 +34,8 @@
 //
 // Environment (defaults in brackets):
 //   PORT [8080]                       listen port (all interfaces)
-//   JARVIS_CONFIG [/etc/jarvis/config.json]   instance config: access.teamDomain, access.audience, users, admins
+//   JARVIS_CONFIG [/etc/jarvis/config.json]   instance config: access.teamDomain, access.audience (and access.also:
+//                                             more {teamDomain, audience}), users, admins
 //                                     (access.jwksFile: a local JWKS instead of the team's, for tests only)
 //   JARVIS_UI_SERVER [<repo>/dist-server/server/index.js]   the CloudCLI server entry
 //   JARVIS_UI_HOME_ROOT [/var/lib/cloudcli/home]   per-user HOME folders (HOME/.claude -> $JARVIS_JFS_ROOT/users/<key>/claude)
@@ -115,6 +116,7 @@ const b64url = (s) => Buffer.from(s, "base64url");
  */
 export class AccessVerifier {
   #issuer; #audience; #jwks; #keys = new Map(); #names = new Map(); #fetchedAt = 0; #lastTry = 0; #fetch; #now;
+  get issuer() { return this.#issuer; }
   constructor({ teamDomain, audience, jwks, fetchImpl, now }) {
     if (!teamDomain || !audience) throw new Error("access.teamDomain and access.audience are required");
     this.#issuer = `https://${teamDomain}`;
@@ -206,6 +208,29 @@ export class AccessVerifier {
     if (typeof p.exp !== "number" || p.exp + 5 < now) throw new Error("expired");
     if (typeof p.nbf === "number" && p.nbf - 5 > now) throw new Error("not yet valid");
     return p;
+  }
+}
+
+/**
+ * Several Access teams at once (config access.also: [{teamDomain, audience}], e.g. while an instance moves to another
+ * Cloudflare account): the token's issuer picks the team's AccessVerifier, which checks everything else; an issuer
+ * that is none of them is refused.
+ */
+export class TeamsVerifier {
+  #by = new Map();
+  constructor(verifiers) {
+    for (const v of verifiers) this.#by.set(v.issuer, v);
+  }
+  #pick(token) {
+    let iss = "";
+    try { iss = JSON.parse(b64url(String(token).split(".")[1] ?? "").toString("utf8")).iss ?? ""; } catch { /* malformed */ }
+    const v = this.#by.get(iss);
+    if (!v) throw new Error("bad issuer");
+    return v;
+  }
+  async email(token) { return this.#pick(token).email(token); }
+  async firstName(token, email) {
+    try { return await this.#pick(token).firstName(token, email); } catch { return null; }
   }
 }
 
@@ -412,7 +437,10 @@ export class Router {
     this.config = o.config ?? JSON.parse(readFileSync(cfgPath, "utf8"));
     const a = this.config.access ?? {};
     const jwks = o.jwks ?? (a.jwksFile ? JSON.parse(readFileSync(a.jwksFile, "utf8")) : undefined);
-    this.verifier = o.verifier ?? new AccessVerifier({ teamDomain: a.teamDomain, audience: a.audience, jwks });
+    const also = Array.isArray(a.also) ? a.also : [];
+    this.verifier = o.verifier ?? (also.length
+      ? new TeamsVerifier([{ teamDomain: a.teamDomain, audience: a.audience }, ...also].map((t) => new AccessVerifier({ ...t, jwks })))
+      : new AccessVerifier({ teamDomain: a.teamDomain, audience: a.audience, jwks }));
     this.users = new Set((this.config.users ?? []).map((u) => String(u).trim().toLowerCase()));
     this.admins = new Set((this.config.admins ?? []).map((u) => String(u).trim().toLowerCase()));
     this.webUrl = o.webUrl ?? process.env.JARVIS_WEB_URL ?? "";
