@@ -15,6 +15,7 @@
     "notStarted": "Files appear here once the conversation has started.",
     "noPreview": "This type of file can't be previewed. Download it to open it."
   },
+  "logout": "Sign out",
   "about": {
     "title": "About",
     "licence": "{{product}} is free software, licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). You can get its complete source code here:",

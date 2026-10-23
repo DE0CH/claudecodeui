@@ -1,4 +1,4 @@
-import { Settings, ArrowUpCircle, Bug, AlertTriangle } from 'lucide-react';
+import { Settings, ArrowUpCircle, Bug, AlertTriangle, LogOut } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { IS_PLATFORM } from '@/shared/utils';
@@ -9,6 +9,9 @@ const GITHUB_ISSUES_URL = 'https://github.com/siteboon/claudecodeui/issues/new';
 const GITHUB_REPO_URL = 'https://github.com/siteboon/claudecodeui';
 
 const DISCORD_INVITE_URL = 'https://discord.gg/buxwujPNRE';
+
+// Staff build: Cloudflare Access ends the session and shows its sign-in again.
+const ACCESS_LOGOUT_URL = '/cdn-cgi/access/logout';
 
 function DiscordIcon({ className }: { className?: string }) {
   return (
@@ -149,6 +152,19 @@ export default function SidebarFooter({
         </button>
       </div>
 
+      {/* Desktop logout (staff build) */}
+      {IS_JARVIS && (
+        <div className="hidden px-2 pb-1.5 md:block">
+          <a
+            href={ACCESS_LOGOUT_URL}
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            <span className="text-sm">{t('jarvis:logout')}</span>
+          </a>
+        </div>
+      )}
+
       {/* Desktop version brand line (OSS mode only) */}
       {!IS_PLATFORM && (
         <div className="hidden px-3 py-2 text-center md:block">
@@ -208,6 +224,21 @@ export default function SidebarFooter({
           <span className="text-sm font-normal text-foreground">{t('actions.settings')}</span>
         </button>
       </div>
+
+      {/* Mobile logout (staff build) */}
+      {IS_JARVIS && (
+        <div className="px-3 pb-1 pt-1 md:hidden">
+          <a
+            href={ACCESS_LOGOUT_URL}
+            className="flex h-10 w-full items-center gap-3 rounded-xl bg-muted/40 px-3.5 transition-all hover:bg-muted/60 active:scale-[0.98]"
+          >
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-background/80">
+              <LogOut className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <span className="text-sm font-normal text-foreground">{t('jarvis:logout')}</span>
+          </a>
+        </div>
+      )}
 
       {/* Staff build: AGPL-3.0 §13, the source stays one tap away. */}
       {IS_JARVIS && (
