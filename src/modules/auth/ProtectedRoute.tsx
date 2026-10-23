@@ -7,6 +7,7 @@ import { Onboarding } from '@/modules/onboarding';
 import AuthLoadingScreen from '@/modules/auth/AuthLoadingScreen';
 import LoginForm from '@/modules/auth/LoginForm';
 import SetupForm from '@/modules/auth/SetupForm';
+import { JarvisHealthGate } from '@/modules/jarvis-health';
 
 type ProtectedRouteProps = {
   children: ReactNode;
@@ -15,6 +16,12 @@ type ProtectedRouteProps = {
 /** Used by App to gate the routed application behind setup, login and onboarding. */
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { user, isLoading, needsSetup, hasCompletedOnboarding, refreshOnboardingStatus } = useAuth();
+
+  if (IS_JARVIS) {
+    // The router in front does sign-in; the gate shows why the app can't work (signed out, not allowed, server
+    // unreachable) instead of an endless loading screen or an empty list
+    return <JarvisHealthGate loading={<AuthLoadingScreen />}>{isLoading ? <AuthLoadingScreen /> : children}</JarvisHealthGate>;
+  }
 
   if (isLoading) {
     return <AuthLoadingScreen />;

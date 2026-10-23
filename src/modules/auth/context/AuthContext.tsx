@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { ReactNode } from 'react';
 
 import { IS_PLATFORM } from '@/shared/utils';
+import { IS_JARVIS } from '@/shared/jarvis';
 import { api, readApiErrorMessage } from '@/shared/api';
 import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT, getAuthTokenRefreshDelay, isValidRefreshedToken, storeAuthToken } from '@/shared/authToken';
 import { hydrateChatDrafts, resetChatDrafts } from '@/shared/chatDrafts';
@@ -243,6 +244,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (IS_PLATFORM) {
       setUser({ username: 'platform-user' });
       setNeedsSetup(false);
+      if (IS_JARVIS) {
+        // staff never onboard; JarvisHealthGate checks the server (with a timeout) instead
+        setIsLoading(false);
+        return;
+      }
       void checkOnboardingStatus().finally(() => {
         setIsLoading(false);
       });

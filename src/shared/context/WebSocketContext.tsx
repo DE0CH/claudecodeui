@@ -3,6 +3,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAuth } from '@/modules/auth';
 import { IS_PLATFORM } from '@/shared/utils';
 import { expireAuthSession, isAuthTokenExpired } from '@/shared/authToken';
+import { IS_JARVIS } from '@/shared/jarvis';
+import { probeJarvis, reportJarvisProblem, SOCKET_GRACE_MS } from '@/modules/jarvis-health';
 import type { ServerEvent } from '@/shared/types';
 
 
@@ -184,6 +186,16 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       setConnectionStatus('connecting');
     };
   }, [connect, isAuthLoading, user]); // reconnect after authentication or token refresh
+
+  // Jarvis: a socket that hasn't connected for SOCKET_GRACE_MS (it keeps retrying every 3 s) is reported, with the
+  // router's own answer deciding which screen: signed out, not allowed, or the server unreachable
+  useEffect(() => {
+    if (!IS_JARVIS || connectionStatus === 'connected') return undefined;
+    const t = window.setTimeout(() => {
+      void probeJarvis().then((p) => reportJarvisProblem(p ?? 'unreachable'));
+    }, SOCKET_GRACE_MS);
+    return () => window.clearTimeout(t);
+  }, [connectionStatus]);
 
   const sendMessage = useCallback((message: unknown) => {
     const socket = wsRef.current;

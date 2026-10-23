@@ -4,6 +4,8 @@ import {
   storeAuthToken,
 } from '@/shared/authToken';
 import { IS_PLATFORM } from '@/shared/utils';
+import { IS_JARVIS } from '@/shared/jarvis';
+import { classify, reportJarvisProblem } from '@/modules/jarvis-health';
 import { readVoiceConfig, voiceConfigHeaders } from '@/shared/voiceConfig';
 
 // Headers are a plain record rather than the full `HeadersInit` union so the
@@ -38,11 +40,18 @@ export const authenticatedFetch = (
     // a stale X-Refreshed-Token overwrote the current token with an expired one
     // on every start, which then got discarded as expired.
     cache: 'no-store',
+    // Jarvis: Access answers an expired sign-in with a redirect to its login page; followed, that is a cross-origin
+    // request the browser refuses (a bare network error). Kept as an opaque redirect, the gate can name it.
+    ...(IS_JARVIS ? { redirect: 'manual' as const } : {}),
     headers: {
       ...defaultHeaders,
       ...options.headers,
     },
   }).then((response) => {
+    if (IS_JARVIS) {
+      const problem = classify(response);
+      if (problem === 'signed-out' || problem === 'forbidden') reportJarvisProblem(problem);
+    }
     const refreshedToken = response.headers.get('X-Refreshed-Token');
     if (refreshedToken) {
       storeAuthToken(refreshedToken);
