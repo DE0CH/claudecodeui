@@ -3,19 +3,20 @@
  * the sandbox by CLAUDE_CODE_ATTACHMENTS_BY_PATH=1, DE0CH/jarvis3 docs/CLAUDE-CODE.md "Sent files"). Claude calls it
  * with paths in its /workspace; the conversation's transcript (the session's .jsonl) holds the call and its result,
  * so it is the record: no table of our own. Only calls whose result came back without an error count, and only paths
- * inside /workspace (the sandbox's cwd) — anything else the tool may have accepted is not reachable here.
+ * inside the files root (jarvis-config.ts conversationFilesRoot: /workspace, the sandbox's cwd; in local mode the
+ * home folder) — anything else the tool may have accepted is not reachable here.
  */
 import { createReadStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 
-import { JARVIS_PROJECT_DIR_NAME, JARVIS_WORKSPACE_PATH } from '@/modules/jarvis/jarvis-config.js';
+import { jarvisLocal, jarvisProjectDirName, jarvisWorkspacePath } from '@/modules/jarvis/jarvis-config.js';
 
 export const SEND_USER_FILE_TOOL = 'SendUserFile';
 
 export type SentFileRecord = {
-  /** Relative to the conversation's /workspace, forward slashes. */
+  /** Relative to the files root, forward slashes. */
   path: string;
   /** When the tool's result was written (ISO 8601). */
   sentAt: string;
@@ -23,15 +24,20 @@ export type SentFileRecord = {
 };
 
 /**
- * A path the tool was given or reported (absolute under /workspace, or relative to the cwd /workspace) as a
- * workspace-relative path, or null when it is outside /workspace or not a plain path.
+ * A path the tool was given or reported (absolute under the files root `root`, or relative to Claude Code's cwd) as
+ * a root-relative path, or null when it is outside the root or not a plain path. Defaults: /workspace for both (local
+ * mode: the home folder and the workspace).
  */
-export function sentPathToWorkspaceRelative(value: unknown): string | null {
+export function sentPathToWorkspaceRelative(
+  value: unknown,
+  root: string = jarvisLocal() ? os.homedir() : '/workspace',
+  cwd: string = jarvisWorkspacePath(),
+): string | null {
   if (typeof value !== 'string') return null;
   let p = value.trim().replace(/\\/g, '/');
   if (!p || p.includes('\0') || p.length > 4096) return null;
   if (p.startsWith('file://')) p = p.slice('file://'.length);
-  const root = JARVIS_WORKSPACE_PATH;
+  if (!p.startsWith('/') && cwd !== root) p = path.posix.join(cwd, p);
   if (p.startsWith('/')) {
     if (!p.startsWith(`${root}/`)) return null;
     p = p.slice(root.length + 1);
@@ -41,10 +47,10 @@ export function sentPathToWorkspaceRelative(value: unknown): string | null {
   return normalized;
 }
 
-/** The transcript of a session row: its recorded .jsonl, else where Claude Code writes /workspace sessions. */
+/** The transcript of a session row: its recorded .jsonl, else where Claude Code writes the workspace's sessions. */
 export function transcriptPathFor(row: { session_id: string; provider_session_id: string | null; jsonl_path: string | null }): string {
   if (row.jsonl_path) return row.jsonl_path;
-  return path.join(os.homedir(), '.claude', 'projects', JARVIS_PROJECT_DIR_NAME, `${row.provider_session_id || row.session_id}.jsonl`);
+  return path.join(os.homedir(), '.claude', 'projects', jarvisProjectDirName(), `${row.provider_session_id || row.session_id}.jsonl`);
 }
 
 type PendingCall = { files: unknown; caption?: string };

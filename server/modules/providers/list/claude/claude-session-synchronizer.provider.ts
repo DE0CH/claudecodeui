@@ -12,7 +12,7 @@ import {
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
 import { stripLegacySandboxResetNote } from '@/modules/jarvis/jarvis-history.js';
-import { JARVIS_PROJECT_DIR_NAME, JARVIS_WORKSPACE_PATH, jarvisEnabled, jarvisUntitledName } from '@/modules/jarvis/jarvis-config.js';
+import { jarvisProjectDirName, jarvisWorkspacePath, jarvisEnabled, jarvisUntitledName } from '@/modules/jarvis/jarvis-config.js';
 
 type ParsedSession = {
   sessionId: string;
@@ -51,7 +51,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
     const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
     // Jarvis mode: only the one project's transcripts (cwd /workspace in every sandbox)
     const projectsRoot = jarvisEnabled()
-      ? path.join(this.claudeHome, 'projects', JARVIS_PROJECT_DIR_NAME)
+      ? path.join(this.claudeHome, 'projects', jarvisProjectDirName())
       : path.join(this.claudeHome, 'projects');
     const files = await findFilesRecursivelyCreatedAfter(
       projectsRoot,
@@ -130,7 +130,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
       if (!sessionId || !projectPath) {
         return null;
       }
-      if (jarvisEnabled() && projectPath !== JARVIS_WORKSPACE_PATH) {
+      if (jarvisEnabled() && projectPath !== jarvisWorkspacePath()) {
         return null;
       }
 

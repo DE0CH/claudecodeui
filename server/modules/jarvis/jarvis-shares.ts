@@ -29,8 +29,8 @@ import { all, get, run, sessionsDb } from '@/modules/database/index.js';
 import {
   conversationWorkspaceDir,
   isConversationId,
-  JARVIS_PROJECT_DIR_NAME,
-  JARVIS_WORKSPACE_PATH,
+  jarvisProjectDirName,
+  jarvisWorkspacePath,
   jarvisJfsRoot,
   jarvisModel,
   jarvisOwner,
@@ -124,7 +124,7 @@ function shareDir(owner: string, id: string): string {
 
 /** Claude Code's transcript folder for /workspace in this process's HOME (HOME/.claude is the user's JuiceFS folder). */
 function projectsDir(): string {
-  return path.join(os.homedir(), '.claude', 'projects', JARVIS_PROJECT_DIR_NAME);
+  return path.join(os.homedir(), '.claude', 'projects', jarvisProjectDirName());
 }
 
 async function exists(p: string): Promise<boolean> {
@@ -418,7 +418,7 @@ export async function continueShare(id: string, deps?: ShareDeps): Promise<{ ses
   await sessionsDb.createForkedSession({
     sessionId: conversation,
     provider: 'claude',
-    projectPath: JARVIS_WORKSPACE_PATH,
+    projectPath: jarvisWorkspacePath(),
     customName: row.title,
     providerSessionId: forked,
     jsonlPath,

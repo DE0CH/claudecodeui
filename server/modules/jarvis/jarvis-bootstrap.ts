@@ -6,7 +6,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { projectsDb, userDb } from '@/modules/database/index.js';
-import { JARVIS_WORKSPACE_PATH, jarvisOwner, jarvisProductName } from '@/modules/jarvis/jarvis-config.js';
+import { jarvisWorkspacePath, jarvisOwner, jarvisProductName } from '@/modules/jarvis/jarvis-config.js';
 
 /**
  * Creates the owner's user row on first start. A different user already in this schema means the router pointed
@@ -35,14 +35,14 @@ export async function ensureJarvisUser(): Promise<{ id: number; username: string
 /** The one project, /workspace, active and named after the product. */
 export async function ensureJarvisProject(): Promise<void> {
   const name = jarvisProductName();
-  await projectsDb.createProjectPath(JARVIS_WORKSPACE_PATH, name);
-  const project = await projectsDb.getProjectPath(JARVIS_WORKSPACE_PATH);
+  await projectsDb.createProjectPath(jarvisWorkspacePath(), name);
+  const project = await projectsDb.getProjectPath(jarvisWorkspacePath());
   if (!project) throw new Error('could not create the /workspace project');
   if (project.custom_project_name !== name) {
-    await projectsDb.updateCustomProjectName(JARVIS_WORKSPACE_PATH, name);
+    await projectsDb.updateCustomProjectName(jarvisWorkspacePath(), name);
   }
   if (Number(project.isArchived) === 1) {
-    await projectsDb.updateProjectIsArchived(JARVIS_WORKSPACE_PATH, false);
+    await projectsDb.updateProjectIsArchived(jarvisWorkspacePath(), false);
   }
 }
 

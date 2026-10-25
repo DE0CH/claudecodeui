@@ -6,7 +6,8 @@
  *   GET /api/jarvis/sessions/:sessionId/files/raw?path=REL  → the bytes, as an attachment;
  *                                                             `inline=1` shows images and PDFs in the page
  *
- * The folder is $JARVIS_JFS_ROOT/ws/<sessionId> on the shared JuiceFS volume, written by the conversation's sandbox.
+ * The folder is $JARVIS_JFS_ROOT/ws/<sessionId> on the shared JuiceFS volume, written by the conversation's sandbox
+ * (local mode: the home folder; jarvis-config.ts conversationFilesRoot).
  * Read-only. Only sessions of this process's user exist here (the session row must be in its database). The listing
  * holds only what Claude sent (jarvis-sent-files.ts), never the scripts and scratch files around it; a download may
  * name any file of the workspace (the chat links to files too). The sandbox can put symlinks in its /workspace that
@@ -21,7 +22,7 @@ import express, { type Request, type Response } from 'express';
 import mime from 'mime-types';
 
 import { sessionsDb } from '@/modules/database/index.js';
-import { conversationWorkspaceDir, isConversationId } from '@/modules/jarvis/jarvis-config.js';
+import { conversationFilesRoot, isConversationId } from '@/modules/jarvis/jarvis-config.js';
 import { readSentFiles, transcriptPathFor } from '@/modules/jarvis/jarvis-sent-files.js';
 
 export type SentWorkspaceFile = { path: string; size: number; mtime: string; sentAt: string; caption?: string };
@@ -44,7 +45,7 @@ function sendError(res: Response, error: unknown): void {
 async function sessionFor(sessionId: string) {
   const row = isConversationId(sessionId) ? await sessionsDb.getSessionById(sessionId) : null;
   if (!row) throw new FilesError(404, 'SESSION_NOT_FOUND', 'This conversation was not found.');
-  return { row, root: conversationWorkspaceDir(sessionId) };
+  return { row, root: conversationFilesRoot(sessionId).dir };
 }
 
 /**

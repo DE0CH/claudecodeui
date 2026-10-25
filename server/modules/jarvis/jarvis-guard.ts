@@ -2,18 +2,20 @@
  * Jarvis mode request gate, mounted on /api before every route.
  *
  * 1. Every request must come through the router as this process's user: the router sets `X-Jarvis-User` to the
- *    Access-verified email (and strips any client-sent copy), so a missing or different value is refused.
+ *    Access-verified email (and strips any client-sent copy), so a missing or different value is refused. Local mode
+ *    has no router: the server listens on loopback and Cloudflare Access in front of the session's origin is the gate.
  * 2. Routes that make no sense for staff on a hosted instance answer 404 with a short reason: local sign-in and
  *    registration, provider model/skill/MCP editing (the sandbox's managed settings decide those), creating, cloning,
  *    renaming, deleting, archiving or restoring projects (there is one, /workspace), the archive (a delete goes to
  *    Recently deleted instead), API keys and stored credentials, git config, and
- *    self-update. Chat, sessions, search, drafts, preferences, notifications and scheduled messages stay.
+ *    self-update. Chat, sessions, search, drafts, preferences, notifications and scheduled messages stay. Local mode
+ *    also has no share links (they live in the sandbox instance's shared volume).
  */
 import type { IncomingHttpHeaders } from 'node:http';
 
 import type { NextFunction, Request, Response } from 'express';
 
-import { jarvisEnabled, jarvisOwner } from '@/modules/jarvis/jarvis-config.js';
+import { jarvisEnabled, jarvisLocal, jarvisOwner } from '@/modules/jarvis/jarvis-config.js';
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*';
 
@@ -46,14 +48,22 @@ const UNAVAILABLE: Array<[Method, RegExp]> = [
   ['*', /^\/system\/update\/?$/],
 ];
 
+/** [method, path under /api] pairs that do not exist in local mode, on top of UNAVAILABLE. */
+const UNAVAILABLE_LOCAL: Array<[Method, RegExp]> = [
+  ['*', /^\/jarvis\/sessions\/[^/]+\/shares(\/.*)?$/],
+  ['*', /^\/jarvis\/shares(\/.*)?$/],
+];
+
 /** True when the route is not offered in Jarvis mode (exported for tests). */
 export function isUnavailableInJarvis(method: string, apiPath: string): boolean {
   const m = method.toUpperCase();
-  return UNAVAILABLE.some(([want, pattern]) => (want === '*' || want === m) && pattern.test(apiPath));
+  const rules = jarvisLocal() ? [...UNAVAILABLE, ...UNAVAILABLE_LOCAL] : UNAVAILABLE;
+  return rules.some(([want, pattern]) => (want === '*' || want === m) && pattern.test(apiPath));
 }
 
-/** True when the request names this process's user in X-Jarvis-User (set only by the router). */
+/** True when the request names this process's user in X-Jarvis-User (set only by the router); always in local mode. */
 export function jarvisCallerMatches(headers: IncomingHttpHeaders): boolean {
+  if (jarvisLocal()) return true;
   const owner = jarvisOwner();
   const raw = headers['x-jarvis-user'];
   const value = (Array.isArray(raw) ? raw[0] : raw)?.trim().toLowerCase();

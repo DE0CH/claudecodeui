@@ -1,0 +1,56 @@
+# The Jarvis 4 runtime bundle (jarvis/runtime-bundle.sh) on every push to main: published on release
+# `de0ch-<first 12 characters of the commit>` as `cloudcli-runtime-linux-x64.tar.gz`, then DE0CH/jarvis4 is asked to pin
+# it (its .github/workflows/fork-pin.yml -> session-image/cloudcli-runtime.json, by sha256), so the next session image
+# runs this commit in every `cloudcli` session. YYC AI's image is jarvis-image.yml; one push updates both.
+name: jarvis4-runtime
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jarvis4-runtime
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    # Ubuntu 24.04 = the session image's OS (native modules link against its glibc)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.3
+      - name: Local-mode tests
+        run: |
+          set -euo pipefail
+          # the server's tests need Postgres (connection.ts TEST_URL)
+          sudo apt-get install -y -q postgresql >/dev/null
+          sudo systemctl start postgresql
+          sudo -u postgres psql -q -c "CREATE USER claude WITH SUPERUSER PASSWORD 'dev'"
+          HUSKY=0 ELECTRON_SKIP_BINARY_DOWNLOAD=1 PUPPETEER_SKIP_DOWNLOAD=1 npm ci
+          npx tsx --tsconfig server/tsconfig.json --test server/modules/jarvis/tests/*.test.ts
+      - name: Bundle
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          bash jarvis/runtime-bundle.sh "$RUNNER_TEMP/out"
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="de0ch-${GITHUB_SHA::12}"
+          gh release create "$tag" "$RUNNER_TEMP/out/cloudcli-runtime-linux-x64.tar.gz" --target "$GITHUB_SHA" \
+            --title "$tag" --notes "Jarvis 4 runtime bundle from $GITHUB_SHA" --prerelease
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+      - name: Pin in jarvis4
+        # JARVIS4_DISPATCH_TOKEN: fine-grained PAT jarvis4-dispatch-cloudcli, Actions write on DE0CH/jarvis4 only
+        env:
+          GH_TOKEN: ${{ secrets.JARVIS4_DISPATCH_TOKEN }}
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/cloudcli-runtime-linux-x64.tar.gz"
+          gh workflow run fork-pin.yml -R DE0CH/jarvis4 --ref main -f name=cloudcli -f "url=$url" -f "sha=$GITHUB_SHA"

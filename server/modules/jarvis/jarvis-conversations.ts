@@ -1,13 +1,14 @@
 /**
  * What a conversation's lifecycle means outside this process in Jarvis mode: deleting a session lets Jarvis 3 drop
  * its sandbox (/internal/cc/release) and removes the conversation's /workspace folder ($JARVIS_JFS_ROOT/ws/<id>);
- * forking one gives the fork a copy of the files, since every conversation has its own /workspace.
+ * forking one gives the fork a copy of the files, since every conversation has its own /workspace. Local mode has
+ * neither (no sandboxes; every conversation shares the machine's folders, which are never copied or removed).
  */
 import { copyFile, cp, mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { jarvisTurnsDb } from '@/modules/database/index.js';
-import { conversationWorkspaceDir, isConversationId, jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
+import { conversationUploads, conversationWorkspaceDir, isConversationId, jarvisEnabled, jarvisLocal } from '@/modules/jarvis/jarvis-config.js';
 import { releaseSandbox } from '@/modules/jarvis/sandbox-process.js';
 import { revokeSharesOf } from '@/modules/jarvis/jarvis-shares.js';
 
@@ -50,7 +51,7 @@ const defaultDeps: Deps = {
  * conversation is already gone for the user, and the control plane releases idle sandboxes on its own.
  */
 export async function onConversationDeleted(sessionId: string, deps: Deps = defaultDeps): Promise<void> {
-  if (!jarvisEnabled() || !isConversationId(sessionId)) return;
+  if (!jarvisEnabled() || jarvisLocal() || !isConversationId(sessionId)) return;
   await deps.revokeShares?.(sessionId);
   try {
     await deps.release(sessionId);
@@ -66,7 +67,7 @@ export async function onConversationDeleted(sessionId: string, deps: Deps = defa
 
 /** After a fork: the new conversation starts with a copy of the source's /workspace (when it has one). */
 export async function onConversationForked(sourceSessionId: string, forkSessionId: string): Promise<void> {
-  if (!jarvisEnabled() || !isConversationId(sourceSessionId) || !isConversationId(forkSessionId)) return;
+  if (!jarvisEnabled() || jarvisLocal() || !isConversationId(sourceSessionId) || !isConversationId(forkSessionId)) return;
   const from = conversationWorkspaceDir(sourceSessionId);
   const to = conversationWorkspaceDir(forkSessionId);
   try {
@@ -86,12 +87,13 @@ type AttachmentDescriptor = { path: string; name?: string; mimeType?: string; si
 
 /**
  * Non-image chat attachments as the sandbox sees them: each uploaded file is copied into the conversation's
- * /workspace/uploads/ (on JuiceFS, so the sandbox and the file panel see it), and its descriptor points there.
+ * /workspace/uploads/ (on JuiceFS, so the sandbox and the file panel see it; local mode: ~/uploads), and its
+ * descriptor points there.
  * Images need no copy: they go into the prompt itself. A file that cannot be copied keeps its descriptor.
  */
 export async function stageAttachmentsInWorkspace(sessionId: string, files: unknown): Promise<unknown> {
   if (!jarvisEnabled() || !isConversationId(sessionId) || !Array.isArray(files) || files.length === 0) return files;
-  const uploads = path.join(conversationWorkspaceDir(sessionId), 'uploads');
+  const { dir: uploads, claudePath } = conversationUploads(sessionId);
   const used = new Set<string>();
   const staged: unknown[] = [];
   for (const file of files as AttachmentDescriptor[]) {
@@ -110,7 +112,7 @@ export async function stageAttachmentsInWorkspace(sessionId: string, files: unkn
       used.add(name);
       await mkdir(uploads, { recursive: true });
       await copyFile(file.path, path.join(uploads, name));
-      staged.push({ ...file, path: `/workspace/uploads/${name}`, name: file.name ?? original });
+      staged.push({ ...file, path: `${claudePath}/${name}`, name: file.name ?? original });
     } catch (error) {
       console.warn('[jarvis] could not copy an attachment into the workspace', { sessionId, error: error instanceof Error ? error.message : error });
       staged.push(file);

@@ -43,7 +43,8 @@ import { initializeDatabase, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './modules/notifications/index.js';
 import { bootstrapJarvis } from './modules/jarvis/jarvis-bootstrap.js';
 import { startRecentlyDeletedPurge } from './modules/jarvis/jarvis-purge.js';
-import { jarvisEnabled } from './modules/jarvis/jarvis-config.js';
+import { jarvisEnabled, jarvisLocal, jarvisOwnerFirstName } from './modules/jarvis/jarvis-config.js';
+import { createJarvisLocalRouter } from './modules/jarvis/jarvis-local.routes.js';
 import { createJarvisFilesRouter } from './modules/jarvis/jarvis-files.routes.js';
 import { createJarvisSharesRouter } from './modules/jarvis/jarvis-shares.routes.js';
 import { jarvisApiGuard } from './modules/jarvis/jarvis-guard.js';
@@ -129,6 +130,12 @@ if (jarvisEnabled()) {
     app.use('/api/jarvis', authenticateToken, createJarvisWarmRouter());
     // shared conversations: share, view, continue, stop sharing (jarvis-shares.routes.ts)
     app.use('/api/jarvis', authenticateToken, createJarvisSharesRouter());
+    // the greeting's name: the router answers this in sandbox mode (from the Access identity); local mode here
+    if (jarvisLocal()) {
+        app.get('/api/jarvis/me', (req, res) => res.json({ firstName: jarvisOwnerFirstName() }));
+        // the Jarvis 4 harness's main-conversation status and prompt delivery (jarvis-local.routes.ts)
+        app.use('/api/jarvis', authenticateToken, createJarvisLocalRouter(providerRuntimeService));
+    }
 }
 
 // Authentication routes (public)
@@ -251,7 +258,8 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
 });
 
 const SERVER_PORT = Number.parseInt(process.env.SERVER_PORT || '3001', 10);
-const HOST = process.env.HOST || '0.0.0.0';
+// Local Jarvis mode (a Jarvis 4 session) listens on loopback only: Cloudflare Access in front of the tunnel is the gate.
+const HOST = process.env.HOST || ((process.env.JARVIS_LOCAL_WORKSPACE || '').trim() ? '127.0.0.1' : '0.0.0.0');
 const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 const LOCAL_SERVER_MARKER_PATH = path.join(os.homedir(), '.cloudcli', 'local-server.json');

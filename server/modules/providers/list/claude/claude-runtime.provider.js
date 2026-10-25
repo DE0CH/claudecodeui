@@ -23,6 +23,7 @@ import { recordJarvisFailedTurn } from '@/modules/jarvis/jarvis-conversations.js
 import { prepareJarvisAttachments } from '@/modules/jarvis/jarvis-images.js';
 import { readableSandboxError } from '@/modules/jarvis/jarvis-errors.js';
 import { acquireSandboxReporting, jarvisEnabled, SandboxWaitCancelled, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
+import { jarvisLocal, jarvisLocalPermissionMode, jarvisModel, jarvisWorkspacePath } from '@/modules/jarvis/jarvis-config.js';
 import { sessionsDb } from '@/modules/database/index.js';
 import { titleConversation } from '@/modules/jarvis/jarvis-title.js';
 
@@ -1070,7 +1071,17 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     let promptFiles = options.files;
     let promptImages = options.images;
     let savedImages = [];
-    if (jarvisEnabled()) {
+    if (jarvisLocal()) {
+      // local mode (a Jarvis 4 session): Claude Code runs here, in the session's workspace, with the machine's own
+      // settings, MCP servers and Claude login, in the session's permission mode (not the client's); uploads are
+      // saved to ~/uploads, images also as a model-ready copy (jarvis-images.ts). The session has its own title.
+      ({ images: promptImages, files: promptFiles, savedImages } = await prepareJarvisAttachments(sessionId, options.images, options.files));
+      sdkOptions.cwd = jarvisWorkspacePath();
+      sdkOptions.permissionMode = jarvisLocalPermissionMode();
+      if (sdkOptions.permissionMode === 'bypassPermissions') sdkOptions.allowDangerouslySkipPermissions = true;
+      // the session's model (JARVIS_MODEL), whatever the client named
+      sdkOptions.model = jarvisModel().value;
+    } else if (jarvisEnabled()) {
       // uploads are on this pod's side: originals go into the conversation's /workspace/uploads for the sandbox,
       // images also as a copy Claude can see (HEIC converted, large photos downscaled; jarvis-images.ts)
       ({ images: promptImages, files: promptFiles, savedImages } = await prepareJarvisAttachments(sessionId, options.images, options.files));
@@ -1468,8 +1479,9 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
 
     // Check if Claude CLI is installed for a clearer error message
     const installed = await context.isProviderInstalled();
-    // Jarvis mode: the sandbox's failures in words staff can act on (the full error is logged above)
-    const errorContent = jarvisEnabled()
+    // Jarvis mode: the sandbox's failures in words staff can act on (the full error is logged above); local mode has
+    // no sandbox, so the error as it is
+    const errorContent = jarvisEnabled() && !jarvisLocal()
       ? readableSandboxError(error)
       : !installed
         ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'

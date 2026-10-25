@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import sharp from 'sharp';
 
+import { conversationUploads } from '@/modules/jarvis/jarvis-config.js';
 import { stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
 import { getGlobalImageAssetsDir, type ChatAttachmentDescriptor } from '@/shared/image-attachments.js';
 
@@ -129,8 +130,8 @@ export async function prepareJarvisAttachments(sessionId: string, images: unknow
     const saved = stagedImages[i];
     try {
       out.images.push(await prepareModelImage(original));
-      // only a copy that made it into /workspace is worth naming (the sandbox can't see this pod's paths)
-      if (saved?.path?.startsWith('/workspace/')) out.savedImages.push(saved);
+      // only a copy that made it into the uploads folder is worth naming (the sandbox can't see this pod's paths)
+      if (saved?.path?.startsWith(`${conversationUploads(sessionId).claudePath}/`)) out.savedImages.push(saved);
     } catch (error) {
       console.warn('[jarvis] image could not be prepared for the model; sent as a file', {
         sessionId, name: original.name, error: error instanceof Error ? error.message : error,
