@@ -5,6 +5,7 @@ import { WebSocket, WebSocketServer, type VerifyClientCallbackSync } from 'ws';
 import { handleChatConnection } from '@/modules/websocket/services/chat-websocket.service.js';
 import { verifyWebSocketClient } from '@/modules/websocket/services/websocket-auth.service.js';
 import { handleDesktopNotificationsConnection } from '@/modules/notifications/index.js';
+import { handlePaseoConnection } from '@/modules/paseo/index.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 
 type WebSocketServerDependencies = {
@@ -103,6 +104,12 @@ export function createWebSocketServer(
 
     if (pathname === '/ws') {
       handleChatConnection(ws, incomingRequest, dependencies.chat);
+      return;
+    }
+
+    // The Paseo web app (DE0CH/claudecodeui docs/paseo-ui.md) speaks Paseo's protocol on its own path
+    if (pathname === '/paseo-ws') {
+      handlePaseoConnection(ws, incomingRequest, dependencies.chat);
       return;
     }
 
