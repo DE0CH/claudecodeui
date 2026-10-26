@@ -130,9 +130,10 @@ if (jarvisEnabled()) {
     app.use('/api/jarvis', authenticateToken, createJarvisWarmRouter());
     // shared conversations: share, view, continue, stop sharing (jarvis-shares.routes.ts)
     app.use('/api/jarvis', authenticateToken, createJarvisSharesRouter());
-    // the greeting's name: the router answers this in sandbox mode (from the Access identity); local mode here
+    // the greeting's name: the router answers this in sandbox mode (from the Access identity); local mode here, where
+    // there is no sharing (the UI leaves its menu items out)
     if (jarvisLocal()) {
-        app.get('/api/jarvis/me', (req, res) => res.json({ firstName: jarvisOwnerFirstName() }));
+        app.get('/api/jarvis/me', (req, res) => res.json({ firstName: jarvisOwnerFirstName(), sharing: false }));
         // the Jarvis 4 harness's main-conversation status and prompt delivery (jarvis-local.routes.ts)
         app.use('/api/jarvis', authenticateToken, createJarvisLocalRouter(providerRuntimeService));
     }

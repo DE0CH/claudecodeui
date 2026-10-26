@@ -185,6 +185,10 @@ class PaseoConnection {
       case 'audio_played':
         return;
 
+      case 'subscription.release.request':
+        this.reply('subscription.release.response', { requestId, subscriptionId: String(message.subscriptionId ?? '') });
+        return;
+
       case 'session.events.set_subscription.request':
         this.reply('session.events.set_subscription.response', { requestId, subscriptionId: randomUUID() });
         return;
@@ -367,7 +371,8 @@ class PaseoConnection {
       case 'cancel_agent_request': {
         const agentId = String(message.agentId ?? '');
         paseoHub.abort(agentId);
-        this.reply('cancel_agent_response', { requestId, agentId, error: null });
+        const row = await paseoHub.getSession(agentId);
+        this.reply('cancel_agent_response', { requestId, agentId, agent: row ? this.agentSnapshot(row) : null, error: null });
         return;
       }
 
@@ -450,10 +455,12 @@ class PaseoConnection {
             archivedAt: error ? null : nowIso(),
             error,
           });
+        } else if (error) {
+          this.reply('rpc_error', { requestId, requestType: type, error, code: 'failed' });
         } else if (type === 'archive_agent_request') {
-          this.reply('archive_agent_response', { requestId, agentId: sessionId, archivedAt: error ? null : nowIso(), error });
+          this.reply('agent_archived', { requestId, agentId: sessionId, archivedAt: nowIso() });
         } else {
-          this.reply('delete_agent_response', { requestId, agentId: sessionId, error });
+          this.reply('agent_deleted', { requestId, agentId: sessionId });
         }
         return;
       }

@@ -6,7 +6,7 @@ name: paseo-ui
 on:
   push:
     branches: [main]
-    paths: ["paseo/**", ".github/workflows/paseo-ui.yml"]
+    paths: ["paseo/**", "server/modules/paseo/**", ".github/workflows/paseo-ui.yml"]
   workflow_dispatch:
 
 permissions:
@@ -37,3 +37,9 @@ jobs:
       - name: Protocol endpoint tests
         working-directory: paseo/packages/protocol
         run: npx vitest run src/daemon-endpoints.test.ts
+      # The bridge's tests parse its replies with paseo/packages/protocol's schemas
+      - name: Bridge tests
+        working-directory: .
+        run: |
+          HUSKY=0 ELECTRON_SKIP_BINARY_DOWNLOAD=1 PUPPETEER_SKIP_DOWNLOAD=1 npm ci
+          npx tsx --tsconfig server/tsconfig.json --test server/modules/paseo/tests/*.test.ts
