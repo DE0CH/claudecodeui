@@ -4,17 +4,28 @@
 FROM node:22.23.3-bookworm AS build
 WORKDIR /app
 ENV HUSKY=0 ELECTRON_SKIP_BINARY_DOWNLOAD=1 PUPPETEER_SKIP_DOWNLOAD=1 npm_config_fund=false npm_config_audit=false
-# The YYC AI staff build (src/shared/jarvis.ts): chat-only UI, platform mode, no login.
-ENV VITE_JARVIS=true
 COPY package.json package-lock.json ./
 COPY scripts ./scripts
 RUN npm ci
+# The browser UI is the Paseo web app (docs/paseo-ui.md): its own npm workspace, installed from its manifests first so
+# the install is cached while only sources change
+COPY paseo/package.json paseo/package-lock.json ./paseo/
+COPY paseo/scripts ./paseo/scripts
+COPY paseo/patches ./paseo/patches
+COPY paseo/packages/app/package.json ./paseo/packages/app/
+COPY paseo/packages/client/package.json ./paseo/packages/client/
+COPY paseo/packages/expo-two-way-audio/package.json ./paseo/packages/expo-two-way-audio/
+COPY paseo/packages/highlight/package.json ./paseo/packages/highlight/
+COPY paseo/packages/plugin/package.json ./paseo/packages/plugin/
+COPY paseo/packages/protocol/package.json ./paseo/packages/protocol/
+COPY paseo/packages/relay/package.json ./paseo/packages/relay/
+RUN npm --prefix paseo ci
 COPY . .
 RUN npm run build \
  && node --test jarvis/test/router.test.mjs \
  && npm prune --omit=dev \
  && npm cache clean --force \
- && rm -rf src electron docker plugins redirect-package .github dist-server.old dist-server.next \
+ && rm -rf paseo electron docker plugins redirect-package .github dist-server.old dist-server.next \
       node_modules/.cache
 
 FROM node:22.23.3-bookworm-slim

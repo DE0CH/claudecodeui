@@ -6,3 +6,5 @@ dist-server.next
 dist-server.old
 .desktop-build
 *.log
+**/node_modules
+paseo/packages/*/dist

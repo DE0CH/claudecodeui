@@ -4,7 +4,7 @@
 # session-image/cloudcli-runtime.json, not baked into the session image (Fly refuses images over 8 GB unpacked).
 #
 #   node/      Node 22.23.3 (the version the YYC AI image runs)
-#   app/       this fork built in Jarvis mode (VITE_JARVIS=true: chat-only UI), production node_modules only
+#   app/       this fork built (the Paseo web app as its UI, docs/paseo-ui.md), production node_modules only
 #   postgres/  a portable PostgreSQL 18 (@embedded-postgres/linux-x64: initdb, pg_ctl, postgres + their libraries);
 #              the fork keeps its state in Postgres and the session image has none
 #
@@ -22,14 +22,15 @@ curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64
 mv "$B/node-v$NODE_VERSION-linux-x64" "$B/node"
 
 mkdir -p "$B/app"
-tar -C "$SRC" --exclude=./node_modules --exclude=./dist --exclude=./dist-server --exclude=./.git -cf - . | tar -C "$B/app" -xf -
+tar -C "$SRC" --exclude=./node_modules --exclude=./paseo/node_modules --exclude='./paseo/packages/*/node_modules' --exclude='./paseo/packages/*/dist' --exclude=./dist --exclude=./dist-server --exclude=./.git -cf - . | tar -C "$B/app" -xf -
 cd "$B/app"
 export PATH="$B/node/bin:$PATH"
 npm ci
-VITE_JARVIS=true npm run build
+npm --prefix paseo ci
+npm run build
 npm prune --omit=dev
 npm cache clean --force
-rm -rf src electron docker plugins redirect-package .github dist-server.old dist-server.next node_modules/.cache
+rm -rf paseo electron docker plugins redirect-package .github dist-server.old dist-server.next node_modules/.cache
 # Size: the Agent SDK's own Claude Code binaries (the harness runs the session image's `claude`, CLAUDE_CLI_PATH) and
 # Codex's (only Claude runs here): ~830 MB together
 rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-* node_modules/@openai/codex-linux-*

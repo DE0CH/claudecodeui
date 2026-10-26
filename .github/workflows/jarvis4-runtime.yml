@@ -20,7 +20,7 @@ jobs:
   bundle:
     # Ubuntu 24.04 = the session image's OS (native modules link against its glibc)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

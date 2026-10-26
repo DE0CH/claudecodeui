@@ -43,7 +43,7 @@ import { initializeDatabase, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './modules/notifications/index.js';
 import { bootstrapJarvis } from './modules/jarvis/jarvis-bootstrap.js';
 import { startRecentlyDeletedPurge } from './modules/jarvis/jarvis-purge.js';
-import { jarvisEnabled, jarvisLocal, jarvisOwnerFirstName } from './modules/jarvis/jarvis-config.js';
+import { jarvisEnabled, jarvisLocal, jarvisOwnerFirstName, jarvisProductName } from './modules/jarvis/jarvis-config.js';
 import { createJarvisLocalRouter } from './modules/jarvis/jarvis-local.routes.js';
 import { createJarvisFilesRouter } from './modules/jarvis/jarvis-files.routes.js';
 import { createJarvisSharesRouter } from './modules/jarvis/jarvis-shares.routes.js';
@@ -188,6 +188,8 @@ app.use(express.static(path.join(APP_ROOT, 'public')));
 // Static files served after API routes
 // Add cache control: HTML files should not be cached, but assets can be cached
 app.use(express.static(path.join(APP_ROOT, 'dist'), {
+    // "/" goes to the catch-all below, which writes the product name into the page
+    index: false,
     setHeaders: (res, filePath) => {
         if (filePath.endsWith('.html')) {
             // Prevent HTML caching to avoid service worker issues after builds
@@ -208,7 +210,19 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
 // Chat uploads live under /api/assets (server/modules/assets), which stores
 // images and general files in the global ~/.cloudcli/assets folder.
 
-// Serve React app for all other routes (excluding static files)
+/**
+ * The Paseo web app's page (docs/paseo-ui.md) is built once with "YYC AI" in its title; a Jarvis instance names
+ * its own product (jarvis-config.ts jarvisProductName).
+ */
+function withProductName(html: string): string {
+    if (!jarvisEnabled()) return html;
+    const name = jarvisProductName().replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+    return html
+        .replace(/<title>[^<]*<\/title>/, `<title>${name}</title>`)
+        .replace(/(<meta name="apple-mobile-web-app-title" content=")[^"]*(")/, `$1${name}$2`);
+}
+
+// Serve the browser UI for all other routes (excluding static files)
 app.get('*', (req, res) => {
     // Skip requests for static assets (files with extensions)
     if (path.extname(req.path)) {
@@ -225,7 +239,7 @@ app.get('*', (req, res) => {
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
-        res.sendFile(indexPath);
+        res.type('html').send(withProductName(fs.readFileSync(indexPath, 'utf8')));
     } else {
         // In development, redirect to Vite dev server only if dist doesn't exist
         const redirectHost = getConnectableHost(req.hostname);
