@@ -1,0 +1,39 @@
+# The staff UI (paseo/, docs/paseo-ui.md): typecheck and the tests of what this fork changed in the Paseo app, on
+# every push touching it. The image build (jarvis-image.yml) compiles it again; this is where its tests run. Paseo's
+# whole suite is not run here (upstream runs it; most of it covers parts this UI does not use).
+name: paseo-ui
+
+on:
+  push:
+    branches: [main]
+    paths: ["paseo/**", ".github/workflows/paseo-ui.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: paseo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.3
+      - run: npm ci
+      - run: npm run build:app-deps
+      - name: Typecheck the app
+        run: npx tsgo --noEmit -p packages/app/tsconfig.json
+      - name: Tests of the changed areas
+        working-directory: paseo/packages/app
+        run: >
+          npx vitest run --project unit
+          src/i18n src/provider-selection src/sidebar-nav src/hooks/use-settings/storage.test.ts
+          src/tool-calls src/agent-stream/turn-collapse src/composer/actions.test.ts
+      - name: Protocol endpoint tests
+        working-directory: paseo/packages/protocol
+        run: npx vitest run src/daemon-endpoints.test.ts

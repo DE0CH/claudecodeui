@@ -4,7 +4,7 @@
 fast reply from re-rendering the transcript on every token. The socket itself is
 [the websocket layer](./01-websocket-transport.md); which session id a frame carries is
 [conversation handoff](./03-conversation-handoff.md); how a tool frame becomes a card is
-[tool views](./06-tool-view.md).*
+tool views (the former React client).*
 
 ## In one paragraph
 
@@ -57,7 +57,7 @@ it.
    keeps `realtimeMessages` and `serverMessages` in separate arrays and computes `merged`
    from them. `complete` triggers a REST refresh of the persisted tail; the live copy of
    the reply survives until the persisted copy demonstrably supersedes it. Details in
-   [the message store](./04-message-store-and-lazy-loading.md).
+   the message store (the former React client).
 8. **The delta buffer belongs to the chat pane, not to a session.** There is one
    `accumulatedStreamRef` and one `streamTimerRef` for the whole `ChatInterface`. Two
    sessions streaming at once share them. This is a real limitation, not a subtlety —
@@ -443,7 +443,7 @@ question rendered twice in another.
 - **A streaming reply does not re-trigger auto-scroll.** The follow effect depends on
   `chatMessages.length`, and an in-place rewrite does not change it. Within one streamed
   block the browser pins the pane; the next row that arrives re-follows. See
-  [scrolling](./05-scrolling.md).
+  scrolling (the former React client).
 - **The 100 ms flush publishes the whole reply, not the delta.** Anyone optimising this
   into an incremental append has to also handle the case where a flush is skipped, which
   is exactly what the current design makes impossible to get wrong.
@@ -494,6 +494,6 @@ question rendered twice in another.
 | Session-switch cleanup in `useChatSessionState` | `resetStreamingState` is the only thing that unwinds a shared buffer mid-stream. Removing that call re-introduces cross-session text bleed. |
 
 Related: [the websocket layer](./01-websocket-transport.md) for the transport and the replay
-contract, [the message store](./04-message-store-and-lazy-loading.md) for what happens to
-a row after `appendRealtime`, [tool views](./06-tool-view.md) for how a paired
+contract, the message store (the former React client) for what happens to
+a row after `appendRealtime`, tool views (the former React client) for how a paired
 `tool_use` becomes a card, and [the index](./README.md) for the rest of the set.

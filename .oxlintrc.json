@@ -10,7 +10,6 @@
   // The alias names avoid oxlint's reserved plugin names ("import", "import-x", "react", ...).
   "jsPlugins": [
     { "name": "importx", "specifier": "eslint-plugin-import-x" },
-    { "name": "tailwind", "specifier": "eslint-plugin-tailwindcss" },
     { "name": "boundaries", "specifier": "eslint-plugin-boundaries" }
   ],
 
@@ -180,12 +179,7 @@
             "groups": ["builtin", "external", "internal", "parent", "sibling", "index"],
             "newlines-between": "always"
           }
-        ],
-
-        // --- Tailwind CSS ---
-        "tailwind/classnames-order": "warn",
-        "tailwind/no-contradicting-classname": "warn",
-        "tailwind/no-unnecessary-arbitrary-value": "warn"
+        ]
       }
     },
     {

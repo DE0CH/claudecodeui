@@ -1,9 +1,11 @@
 # Chat runtime architecture
 
-*How a message gets from the composer to a provider CLI and back onto the screen.*
+*How a message gets from a client to a provider CLI and back.*
 
-Six documents covering the websocket transport, the realtime stream, conversation
-handoff, the message store and lazy loading, scrolling, and tool views.
+Three documents covering the websocket transport, the realtime stream and conversation handoff, as CloudCLI's own
+clients see them (the iOS and Jarvis 4 Chat apps use this `/ws` protocol). The browser UI is the Paseo web app, which
+reaches the same runs through a bridge: [the Paseo UI](../paseo-ui.md). Where these documents name files under
+`src/`, they describe the React client this fork had before; the server side is current.
 
 These subsystems are hard to read from the source alone, because in every case the
 behaviour lives in the *interaction between files* rather than in any one of them. Each
@@ -46,12 +48,9 @@ one of those two paths disagreeing with the other.
 | 1 | [WebSocket transport](./01-websocket-transport.md) | The pipe everything rides on. Read first — the frame tables below are its vocabulary. |
 | 2 | [The realtime stream](./02-realtime-stream.md) | One run's full journey, from provider output to a rendered reply. The heart of the system. |
 | 3 | [Conversation handoff](./03-conversation-handoff.md) | Which ids exist, and the four points where a conversation changes hands. Answers "why does this conversation have two ids". |
-| 4 | [The message store and lazy loading](./04-message-store-and-lazy-loading.md) | Where messages live in the client, and how a huge transcript loads without freezing the tab. |
-| 5 | [Scrolling](./05-scrolling.md) | Where the view sits, and why five different pieces of code move it. |
-| 6 | [Tool views](./06-tool-view.md) | How a tool call becomes UI. Last, because it needs the message model from 2 and 4. |
 
 **In a hurry?** Read 1 and 2.
-**Debugging something a user can see?** Start at 5 or 6.
+**Debugging something a user sees in the browser?** Start at [the Paseo UI](../paseo-ui.md).
 **Chasing a duplicated or vanishing message?** Start at 3, then 4.
 
 ---
@@ -155,12 +154,9 @@ unrelated to the change that caused them.
 
 | Symptom | Start here |
 | --- | --- |
-| Message appears twice, or vanishes on refresh | [3](./03-conversation-handoff.md), then [4](./04-message-store-and-lazy-loading.md) |
+| Message appears twice, or vanishes on refresh | [3](./03-conversation-handoff.md) |
 | Spinner never stops | [2](./02-realtime-stream.md) — look for the terminal `complete` |
 | A second tab froze mid-run | [1](./01-websocket-transport.md) — writer fan-out and replay |
-| Transcript opens part-way up, or jumps while reading | [5](./05-scrolling.md) |
-| Old messages never load, or loading is slow | [4](./04-message-store-and-lazy-loading.md) |
-| A tool renders wrong, or a group collapses oddly | [6](./06-tool-view.md) |
 | Nothing arrives at all after a network blip | [1](./01-websocket-transport.md) — reconnect and `lastSeq` |
 
 ---

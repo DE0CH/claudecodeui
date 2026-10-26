@@ -217,7 +217,7 @@ holds a provider-native id.
 | Re-render | `notify(sessionId)` bumps the tick only when the written session is the active one, so A's background frames cost no renders |
 | Live subscription | The `chat.subscribe` effect in `useChatSessionState.ts` fires for B with B's `lastSeq`. A is never unsubscribed — there is no `chat.unsubscribe` frame, and the only server-side audience state is each run's connection set |
 | History | If B's slot has a `fetchedAt` and the session key matches, nothing is refetched; only `isStale` (`STALE_THRESHOLD_MS = 30_000`) may trigger a bounded tail refresh. Otherwise `fetchFromServer` loads the newest `SESSION_MESSAGES_PAGE_SIZE = 20` rows |
-| Scroll and pagination | Reset in the same load effect and by the scroll effects; see [scrolling](./05-scrolling.md) |
+| Scroll and pagination | Reset in the same load effect and by the scroll effects; see scrolling (the former React client) |
 | Streaming buffer | `resetStreamingState()` clears `streamTimerRef` and `accumulatedStreamRef`. These are per-`ChatInterface`, not per-slot |
 
 A background run therefore keeps accumulating. Frames for A arrive on the same socket,
@@ -305,7 +305,7 @@ session, at most one trailing request, and a session that cannot refresh right n
 hidden, or no longer the viewed session) stays marked dirty until `flushPending` runs on
 activation. The fetch itself is `refreshLatestSlotFromServer`, which pulls the newest 20 rows
 and stitches them onto the cached suffix, bridging with extra requests for turns bigger than
-one page. See [the message store](./04-message-store-and-lazy-loading.md).
+one page. See the message store (the former React client).
 
 ## Editing an already-sent message
 
@@ -512,5 +512,5 @@ conversation takes.
 | `handleChatEditSend` | Both provider shapes — `resolveEditAnchor` for Claude, `rewindSession` for Codex — and that a refused run never rewinds |
 | `session-upsert-broadcast.service.ts` | The sidebar reducer's alias dedupe and empty-summary guard in `useProjectsState.ts`. It is the only builder; keep it that way |
 | The busy map's shape | `useBusySessionIdSet`'s membership-key memo (sidebar re-render cost), `busySessionIds.test.tsx`, and the 5 s running-sessions reconciliation |
-| `useSessionStore` slot fields | [the message store doc](./04-message-store-and-lazy-loading.md), `recomputeMergedIfNeeded`'s reference-equality cache, and the pagination helpers |
+| `useSessionStore` slot fields | the message store doc (the former React client), `recomputeMergedIfNeeded`'s reference-equality cache, and the pagination helpers |
 | Anything that would make a session id mutable | Nothing should need this. A mutable id breaks slots, `lastSeqRef`, the busy map, the run registry key and the URL at once |
