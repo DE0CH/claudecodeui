@@ -11,8 +11,12 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
+import { ensureImageAssetsDir } from '@/modules/assets/index.js';
 import { sessionsDb } from '@/modules/database/index.js';
-import { jarvisModel, jarvisProductName, jarvisWorkspacePath } from '@/modules/jarvis/index.js';
+import { jarvisModel, jarvisProductName, jarvisWorkspacePath, sentPathToWorkspaceRelative } from '@/modules/jarvis/index.js';
 import { sessionsService } from '@/modules/providers/index.js';
 import { chatRunRegistry, handleChatConnection } from '@/modules/websocket/index.js';
 import type { AuthenticatedWebSocketRequest, NormalizedMessage } from '@/shared/types.js';
@@ -48,6 +52,47 @@ export function sessionIdFromWorkspace(workspaceId: string): string | null {
   return workspaceId.startsWith('wks_') ? workspaceId.slice(4) : null;
 }
 
+/** What the Paseo app attaches to a message: uploaded files (already in CloudCLI's assets) and inline images. */
+export type PaseoAttachments = {
+  images?: Array<{ data: string; mimeType: string }>;
+  attachments?: Array<Record<string, unknown>>;
+};
+
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+};
+
+/** CloudCLI's attachment descriptors (chat.send options.attachments) for what the app sent. */
+async function toCloudCliAttachments(input: PaseoAttachments): Promise<Array<{ path: string; name: string; mimeType: string; size: number }>> {
+  const out: Array<{ path: string; name: string; mimeType: string; size: number }> = [];
+  for (const attachment of input.attachments ?? []) {
+    if (attachment.type !== 'uploaded_file' || typeof attachment.path !== 'string') continue;
+    out.push({
+      path: attachment.path,
+      name: String(attachment.fileName ?? path.basename(attachment.path)),
+      mimeType: String(attachment.mimeType ?? 'application/octet-stream'),
+      size: Number(attachment.size ?? 0),
+    });
+  }
+  const images = input.images ?? [];
+  if (images.length > 0) {
+    const dir = await ensureImageAssetsDir();
+    for (const [index, image] of images.entries()) {
+      const extension = IMAGE_EXTENSIONS[image.mimeType];
+      if (!extension) continue;
+      const bytes = Buffer.from(image.data, 'base64');
+      const name = `image-${index + 1}.${extension}`;
+      const file = path.join(dir, `${Date.now()}-${randomUUID()}-${name}`);
+      await writeFile(file, bytes);
+      out.push({ path: file, name, mimeType: image.mimeType, size: bytes.byteLength });
+    }
+  }
+  return out;
+}
+
 /** The socket CloudCLI's chat gateway writes to; frames arrive parsed in `onFrame`. */
 class HubChatSocket extends EventEmitter {
   readonly OPEN = 1;
@@ -78,6 +123,8 @@ class PaseoHub extends EventEmitter {
   private lastSeq = new Map<string, number>();
   private turnIds = new Map<string, string>();
   private pendingUserMessages = new Map<string, { text: string; clientMessageId: string }>();
+  /** Conversations whose sandbox is being made (the app's "preparing" chip is showing). */
+  private preparing = new Set<string>();
   readonly generation = randomUUID();
   private directorySeq = 0;
 
@@ -162,7 +209,7 @@ class PaseoHub extends EventEmitter {
   }
 
   private async loadTimeline(sessionId: string): Promise<SessionTimeline> {
-    const timeline = new SessionTimeline();
+    const timeline = new SessionTimeline((value) => sentPathToWorkspaceRelative(value));
     try {
       const history = await sessionsService.fetchHistory(sessionId, { limit: null, offset: 0 });
       for (const message of history.messages as NormalizedMessage[]) timeline.apply(message);
@@ -186,15 +233,16 @@ class PaseoHub extends EventEmitter {
   }
 
   /** Creates a conversation (CloudCLI's session row) and starts its first turn. */
-  async createConversation(text: string, clientMessageId: string): Promise<string> {
+  async createConversation(text: string, clientMessageId: string, attachments: PaseoAttachments = {}): Promise<string> {
     const created = await sessionsService.createAppSession('claude', this.workspacePath, text);
-    this.timelines.set(created.sessionId, new SessionTimeline());
-    await this.send(created.sessionId, text, clientMessageId);
+    this.timelines.set(created.sessionId, new SessionTimeline((value) => sentPathToWorkspaceRelative(value)));
+    await this.send(created.sessionId, text, clientMessageId, attachments);
     return created.sessionId;
   }
 
   /** Sends a message: the user row goes on the timeline at once, then CloudCLI runs the turn. */
-  async send(sessionId: string, text: string, clientMessageId: string, attachments: unknown[] = []): Promise<void> {
+  async send(sessionId: string, text: string, clientMessageId: string, sent: PaseoAttachments = {}): Promise<void> {
+    const attachments = await toCloudCliAttachments(sent);
     const timeline = await this.timeline(sessionId);
     const turnId = randomUUID();
     this.turnIds.set(sessionId, turnId);
@@ -276,6 +324,8 @@ class PaseoHub extends EventEmitter {
       case 'status': {
         const sandbox = (frame as { jarvisSandbox?: unknown }).jarvisSandbox;
         if (sessionId && (sandbox === 'preparing' || sandbox === 'ready')) {
+          if (sandbox === 'preparing') this.preparing.add(sessionId);
+          else this.preparing.delete(sessionId);
           this.emitEvent({ type: 'preparing', sessionId, state: sandbox });
         }
         return;
@@ -287,6 +337,8 @@ class PaseoHub extends EventEmitter {
         const turnId = this.turnIdFor(sessionId);
         this.turnIds.delete(sessionId);
         this.pendingUserMessages.delete(sessionId);
+        // A turn that ended while its sandbox was still being made (stopped, or the start failed)
+        if (this.preparing.delete(sessionId)) this.emitEvent({ type: 'preparing', sessionId, state: 'ready' });
         const phase = aborted ? 'canceled' : typeof exitCode === 'number' && exitCode !== 0 ? 'failed' : 'completed';
         this.emitEvent({ type: 'turn', sessionId, phase, turnId });
         this.emitEvent({ type: 'session', sessionId });
@@ -318,6 +370,7 @@ class PaseoHub extends EventEmitter {
     this.lastSeq.clear();
     this.turnIds.clear();
     this.pendingUserMessages.clear();
+    this.preparing.clear();
     this.removeAllListeners();
   }
 }

@@ -358,7 +358,7 @@ class PaseoConnection {
         if (paseoHub.isRunning(agentId)) {
           error = '對話仍在進行中，請稍候。';
         } else {
-          await paseoHub.send(agentId, text, clientMessageId);
+          await paseoHub.send(agentId, text, clientMessageId, { images: message.images, attachments: message.attachments });
         }
         this.reply('send_agent_message_response', { requestId, agentId, accepted: error === null, error });
         return;
@@ -769,6 +769,8 @@ class PaseoConnection {
         await this.pushSession(event.sessionId, event.removed);
         return;
       case 'preparing':
+        // yyc.sandbox_status (paseo/packages/protocol messages.ts): the chip above the composer
+        this.reply('yyc.sandbox_status', { agentId: event.sessionId, state: event.state });
         return;
     }
   }
@@ -784,7 +786,11 @@ class PaseoConnection {
     const clientMessageId = typeof agent.clientMessageId === 'string' ? agent.clientMessageId : `${idempotencyKey}:initial-message`;
 
     const existing = this.creations.get(idempotencyKey);
-    const sessionId = existing ?? await paseoHub.createConversation(text, clientMessageId);
+    const firstContext = (message.firstAgentContext ?? {}) as AnyRecord;
+    const sessionId = existing ?? await paseoHub.createConversation(text, clientMessageId, {
+      images: agent.images ?? firstContext.images,
+      attachments: agent.attachments ?? firstContext.attachments,
+    });
     this.creations.set(idempotencyKey, sessionId);
     const row = await paseoHub.getSession(sessionId);
     if (!row) {

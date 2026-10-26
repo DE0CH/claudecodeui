@@ -63,6 +63,32 @@ export type TimelineAppendResult = { rows: PaseoTimelineRow[] };
 
 const DEFAULT_PAGE = 40;
 
+/** A file Claude handed over with SendUserFile, as the app's sent-file cards read it (tool call metadata). */
+export type SentFile = { path: string; name: string; size: number | null; mediaType: string | null; isImage: boolean };
+
+/** A sandbox path as a path relative to the conversation's files root, or null outside it. */
+export type ToRelativePath = (value: unknown) => string | null;
+
+/** SendUserFile's result, as the files the download route will hand out (anything else is left out). */
+export function sentFilesOf(output: unknown, toRelative: ToRelativePath): SentFile[] {
+  const attachments = (output as { attachments?: unknown } | null)?.attachments;
+  if (!Array.isArray(attachments)) return [];
+  const files: SentFile[] = [];
+  for (const raw of attachments) {
+    const entry = raw as { path?: unknown; size?: unknown; media_type?: unknown; isImage?: unknown };
+    const relative = toRelative(entry.path);
+    if (!relative) continue;
+    files.push({
+      path: relative,
+      name: relative.split('/').pop() || relative,
+      size: typeof entry.size === 'number' ? entry.size : null,
+      mediaType: typeof entry.media_type === 'string' ? entry.media_type : null,
+      isImage: entry.isImage === true,
+    });
+  }
+  return files;
+}
+
 function textOf(message: NormalizedMessage): string {
   if (typeof message.content === 'string') return message.content;
   if (typeof message.text === 'string') return message.text;
@@ -77,6 +103,8 @@ function toolOutput(message: NormalizedMessage): unknown {
 }
 
 export class SessionTimeline {
+  constructor(private readonly toRelative: ToRelativePath) {}
+
   epoch = randomUUID();
   rows: PaseoTimelineRow[] = [];
   private nextSeq = 1;
@@ -158,7 +186,8 @@ export class SessionTimeline {
       const error = typeof output === 'string' ? { message: output } : output ?? { message: 'Tool call failed' };
       return mapClaudeFailedToolCall({ callId, name, input, output, error });
     }
-    return mapClaudeCompletedToolCall({ callId, name, input, output });
+    const metadata = name === 'SendUserFile' ? { sentFiles: sentFilesOf(output, this.toRelative) } : undefined;
+    return mapClaudeCompletedToolCall({ callId, name, input, output, ...(metadata ? { metadata } : {}) });
   }
 
   private push(item: PaseoTimelineItem, timestamp: string, turnId?: string): PaseoTimelineRow {
