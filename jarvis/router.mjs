@@ -10,6 +10,14 @@
 // anyone else gets 403 and nothing is forwarded. It needs no CloudCLI process and is served by whichever replica
 // gets the request.
 //
+// Signed out (Deyao, 2026-10-27, "interface first"): only the paths in SIGNED_IN_PATHS are behind Cloudflare Access
+// (the Access app "YYC AI (staff)" and cloudflared require a token there); everything else reaches the router without
+// one. A request with no valid token gets the static shell and nothing else: GET/HEAD of a built file in dist/ (the
+// Paseo web app's bundle) or, for a page path, dist/index.html marked <meta name="yyc-signed-out">, which the app shows
+// with the chat disabled and a 「登入」 button to GET /api/jarvis/signin (behind Access: it signs the person in, then
+// this answers 302 back to the page). Every other request without a valid token is 401; API, WebSocket and user data
+// still need the token and `users`, checked here on every call.
+//
 // GET /api/jarvis/me is answered by the router too (no CloudCLI process): {firstName}, the Access identity's first
 // name or null, for the empty chat's greeting.
 //
@@ -47,13 +55,14 @@
 //   JARVIS_UI_CHILD_HEAP_MB [256]     --max-old-space-size of each user process
 //   JARVIS_UI_PEERS [unset]           DNS name of the replicas' headless Service (unset: no peer forwarding)
 //   POD_IP                            this replica's address (with JARVIS_UI_PEERS)
+//   JARVIS_UI_DIST [<repo>/dist]       the built web app, served to signed-out visitors (no index.html: no shell)
 //   JARVIS_UID [1000]                 owner of folders the router makes when it runs as root
 //   passed to every process: DATABASE_URL, JWT_SECRET, JARVIS_WEB_URL, JARVIS_CC_TOKEN (plus the per-user contract env)
 import { createHash, createPublicKey, timingSafeEqual, verify as cryptoVerify } from "node:crypto";
 import { spawn as nodeSpawn } from "node:child_process";
 import { promises as dns } from "node:dns";
-import { readFileSync, realpathSync } from "node:fs";
-import { mkdir, readlink, symlink, unlink, chown, lstat } from "node:fs/promises";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { mkdir, readlink, symlink, unlink, chown, lstat, readFile, stat } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -63,6 +72,21 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOP = "x-jarvis-ui-hop";
 const PEER_AUTH = "x-jarvis-ui-peer";
 const PEER_PATH = "/__jarvis/peer/holds";
+// Paths that always need a signed-in staff member; keep in step with the Access app's destinations and cloudflared's
+// access-required ingress rule (DE0CH/YYC news-stream/deploy/cloudflare/tofu: access.tf staff_ai, tunnels.tf yyc_ai)
+export const SIGNED_IN_PATHS = ["/api", "/paseo-ws", "/ws", "/ops"];
+const MIME = {
+  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8", ".json": "application/json", ".map": "application/json", ".webmanifest": "application/manifest+json",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".svg": "image/svg+xml",
+  ".ico": "image/x-icon", ".webp": "image/webp", ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf",
+  ".otf": "font/otf", ".txt": "text/plain; charset=utf-8", ".wasm": "application/wasm",
+};
+
+/** Whether a URL path (no query) needs a signed-in staff member whatever it is. */
+export function needsSignIn(pathname) {
+  return SIGNED_IN_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/")) || pathname.startsWith("/__jarvis");
+}
 
 export function log(level, msg, fields = {}) {
   process.stdout.write(JSON.stringify({ t: new Date().toISOString(), level, msg, ...fields }) + "\n");
@@ -471,6 +495,10 @@ export class Router {
     this.uid = o.uid ?? Number(process.env.JARVIS_UID || 1000);
     // The native app's sign-in callback scheme (GET /api/jarvis/app-signin); unset = the endpoint is off.
     this.appScheme = o.appScheme ?? process.env.JARVIS_APP_SCHEME ?? "";
+    // The signed-out shell (top of this file); null or a folder without index.html = off (401 as for any other path)
+    const dist = o.distDir !== undefined ? o.distDir : (process.env.JARVIS_UI_DIST || path.join(HERE, "..", "dist"));
+    this.distDir = dist && existsSync(path.join(dist, "index.html")) ? path.resolve(dist) : null;
+    this.productName = String(o.productName ?? process.env.JARVIS_PRODUCT_NAME ?? this.config.product?.name ?? "").trim() || "YYC AI";
     this.spawnImpl = o.spawn ?? nodeSpawn;
     this.resolve = o.resolve ?? ((name) => dns.resolve4(name));
     this.now = o.now ?? (() => Date.now());
@@ -705,11 +733,15 @@ export class Router {
     }
     if (url.startsWith(PEER_PATH)) return this.#peerHolds(req, res);
     const who = await this.#identify(req);
+    if (who.status === 401 && this.distDir && (req.method === "GET" || req.method === "HEAD")) {
+      if (await this.#shell(req, res)) return;
+    }
     if (who.status === 401) return page(res, 401, "未登入", "請重新整理頁面登入。Not signed in: reload the page to sign in.");
     if (who.status === 403) return page(res, 403, "沒有權限", `${who.email} 沒有使用 YYC AI 的權限。This account is not allowed.`);
     if (url === "/ops" || url.startsWith("/ops/") || url.startsWith("/ops?")) return this.#ops(req, res, who.email);
     if (url === "/api/jarvis/me" || url.startsWith("/api/jarvis/me?")) return this.#me(req, res, who.email);
     if (url === "/api/jarvis/app-signin" || url.startsWith("/api/jarvis/app-signin?")) return this.#appSignin(req, res);
+    if (url === "/api/jarvis/signin" || url.startsWith("/api/jarvis/signin?")) return this.#signin(req, res);
     const route = await this.#route(req, who.email);
     if (route.peer) return this.#forwardHttp(req, res, route.peer, route.hop, who.email);
     let p;
@@ -768,6 +800,53 @@ export class Router {
       "cache-control": "no-store",
       "referrer-policy": "no-referrer",
     });
+    res.end();
+  }
+
+  /**
+   * The signed-out shell (top of this file): a built file of the web app, or for a page path its index.html marked
+   * signed out. Answers false (nothing sent) for anything else, which then gets the 401.
+   */
+  async #shell(req, res) {
+    let pathname;
+    try { pathname = decodeURIComponent(new URL(req.url, "http://x").pathname); } catch { return false; }
+    if (needsSignIn(pathname) || pathname.includes("\0")) return false;
+    const head = { "x-content-type-options": "nosniff", "referrer-policy": "same-origin" };
+    if (path.extname(pathname)) {
+      const file = path.resolve(this.distDir, "." + path.posix.normalize(pathname));
+      if (!file.startsWith(this.distDir + path.sep)) return false;
+      const st = await stat(file).catch(() => null);
+      if (!st?.isFile()) return false;
+      const ext = path.extname(file).toLowerCase();
+      const hashed = pathname.startsWith("/_expo/static/") || /[.-][0-9a-f]{16,}\.[a-z0-9]+$/i.test(pathname);
+      res.writeHead(200, {
+        ...head,
+        "content-type": MIME[ext] ?? "application/octet-stream",
+        "content-length": st.size,
+        "cache-control": ext === ".html" ? "no-store" : hashed ? "public, max-age=31536000, immutable" : "public, max-age=300",
+      });
+      if (req.method === "HEAD") return res.end(), true;
+      res.end(await readFile(file));
+      return true;
+    }
+    const name = this.productName.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+    const html = (await readFile(path.join(this.distDir, "index.html"), "utf8"))
+      .replace(/<title>[^<]*<\/title>/, `<title>${name}</title>`)
+      .replace(/(<meta name="apple-mobile-web-app-title" content=")[^"]*(")/, `$1${name}$2`)
+      .replace(/<\/head>/i, `<meta name="yyc-signed-out" content="1"></head>`);
+    res.writeHead(200, { ...head, "content-type": "text/html; charset=utf-8", "cache-control": "no-store", vary: "cookie" });
+    res.end(req.method === "HEAD" ? undefined : html);
+    return true;
+  }
+
+  /**
+   * GET /api/jarvis/signin?next=/path: the web page's 「登入」. Access has signed the person in by the time this runs
+   * (the path is behind it), so it only sends them back to the page they were on (a same-origin path, else /).
+   */
+  #signin(req, res) {
+    const next = new URL(req.url, "http://x").searchParams.get("next") || "/";
+    const safe = /^\/(?![\/\\])[^\s]*$/.test(next) && !needsSignIn(next.split(/[?#]/)[0]) ? next : "/";
+    res.writeHead(302, { location: safe, "cache-control": "no-store", "referrer-policy": "no-referrer" });
     res.end();
   }
 

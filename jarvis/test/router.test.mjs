@@ -1,7 +1,7 @@
 // Router tests with fake CloudCLI children (test/fake-cloudcli.mjs): `node --test jarvis/test/`.
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign, randomUUID } from "node:crypto";
-import { mkdtempSync, writeFileSync, readlinkSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readlinkSync, existsSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -9,7 +9,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { AccessVerifier, Router, TeamsVerifier, ownerOf, pickFirstName, userKey } from "../router.mjs";
+import { AccessVerifier, Router, needsSignIn, TeamsVerifier, ownerOf, pickFirstName, userKey } from "../router.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE = path.join(HERE, "fake-cloudcli.mjs");
@@ -42,6 +42,7 @@ function makeRouter(o = {}) {
     host: "127.0.0.1",
     killAfterMs: 2000,
     sweepMs: 3600_000,
+    distDir: null,
     ...o,
   });
   r.root = root;
@@ -525,4 +526,53 @@ test("two Access teams (access.also, a move to another Cloudflare account): each
   const r = new Router({ config: { access: { teamDomain: TEAM, audience: AUD, also: [{ teamDomain: NEW, audience: "aud-new" }] }, users: [ALICE] }, jwks: JWKS });
   assert.ok(r.verifier instanceof TeamsVerifier);
   assert.equal(await r.verifier.email(jwt({ email: ALICE, iss: `https://${NEW}`, aud: ["aud-new"] })), ALICE);
+});
+
+test("signed out: only the built shell (index marked signed out, files of dist/), 401 for API, WebSocket and anything else; /api/jarvis/signin sends a signed-in person back", async () => {
+  const dist = mkdtempSync(path.join(os.tmpdir(), "router-dist-"));
+  writeFileSync(path.join(dist, "index.html"), '<html><head><title>x</title><meta name="apple-mobile-web-app-title" content="x" /></head><body></body></html>');
+  mkdirSync(path.join(dist, "_expo", "static", "js"), { recursive: true });
+  writeFileSync(path.join(dist, "_expo", "static", "js", "app-0123456789abcdef0123.js"), "console.log(1)");
+  writeFileSync(path.join(dist, "yyc-logo.png"), "png");
+  writeFileSync(path.join(os.tmpdir(), "router-secret.txt"), "secret");
+  const r = makeRouter({ distDir: dist, productName: "YYC <AI>" });
+  await r.listen();
+  for (const p of ["/", "/new", "/s/abc", "/h/srv/workspace/wks_1?x=1"]) {
+    const page = await get(r, p);
+    assert.equal(page.status, 200, p);
+    assert.match(page.body, /<meta name="yyc-signed-out" content="1"><\/head>/);
+    assert.match(page.body, /<title>YYC &#60;AI&#62;<\/title>/);
+    assert.equal(page.headers["cache-control"], "no-store");
+  }
+  const js = await get(r, "/_expo/static/js/app-0123456789abcdef0123.js");
+  assert.equal(js.status, 200);
+  assert.match(js.headers["content-type"], /^text\/javascript/);
+  assert.match(js.headers["cache-control"], /immutable/);
+  const logo = await get(r, "/yyc-logo.png");
+  assert.equal(logo.status, 200);
+  assert.equal(logo.headers["content-type"], "image/png");
+  assert.equal((await get(r, "/yyc-logo.png", {}, "HEAD")).status, 200);
+  for (const p of ["/api/jarvis/me", "/api/sessions", "/api/jarvis/signin", "/paseo-ws", "/ws", "/ops/", "/missing.js",
+    "/../router-secret.txt", "/%2e%2e/router-secret.txt", "/..%2Frouter-secret.txt", "/__jarvis/x"]) {
+    assert.equal((await get(r, p)).status, 401, p);
+  }
+  assert.equal((await get(r, "/", {}, "POST")).status, 401, "only GET/HEAD");
+  const sock = net.connect(r.port, "127.0.0.1");
+  sock.write("GET /paseo-ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
+  const ans = await new Promise((resolve) => { let b = ""; sock.on("data", (c) => (b += c)); sock.on("close", () => resolve(b)); });
+  assert.match(ans, /^HTTP\/1.1 401/);
+  assert.equal(r.procs.size, 0, "no CloudCLI process for a signed-out visitor");
+  // a bad token is signed out too
+  assert.match((await get(r, "/", { "cf-access-jwt-assertion": jwt({ email: ALICE, aud: ["other"] }) })).body, /yyc-signed-out/);
+  // unlisted: 403, never the shell
+  assert.equal((await get(r, "/", auth("mallory@yyc.hk"))).status, 403);
+  // signed in: back to the page, only a same-origin path
+  const back = await get(r, "/api/jarvis/signin?next=%2Fs%2Fabc%3Fx%3D1", auth(ALICE));
+  assert.equal(back.status, 302);
+  assert.equal(back.headers.location, "/s/abc?x=1");
+  for (const next of ["https://evil.example/", "//evil.example/", "/\\evil.example", "/api/jarvis/app-signin?state=abcdefghijklmnop", ""]) {
+    assert.equal((await get(r, `/api/jarvis/signin?next=${encodeURIComponent(next)}`, auth(ALICE))).headers.location, "/", next);
+  }
+  assert.equal(r.procs.size, 0, "no CloudCLI process for the sign-in either");
+  assert.ok(needsSignIn("/api") && needsSignIn("/paseo-ws") && needsSignIn("/ops/x") && !needsSignIn("/apix") && !needsSignIn("/"));
 });
