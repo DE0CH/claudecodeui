@@ -133,6 +133,18 @@ test("a signed-in user gets their own process with the contract env, X-Jarvis-Us
   assert.equal(r.procs.size, 2);
 });
 
+test("a \"@domain\" entry in users admits everyone at that email domain, and only them", async () => {
+  const r = makeRouter({ config: { access: { teamDomain: TEAM, audience: AUD }, users: [ALICE, "@Yyc.HK"] } });
+  await r.listen();
+  assert.equal((await get(r, "/", auth("staff@yyc.hk"))).status, 200);
+  assert.equal((await get(r, "/", auth("Other.Staff@YYC.hk"))).status, 200);
+  assert.equal((await get(r, "/", auth("someone@notyyc.hk"))).status, 403);
+  assert.equal((await get(r, "/", auth("yyc.hk@evil.test"))).status, 403);
+  assert.equal((await get(r, "/", auth("x@sub.yyc.hk"))).status, 403);
+  assert.equal((await get(r, "/", auth(ALICE))).status, 200);
+  assert.equal(r.allowed("@yyc.hk"), false);
+});
+
 test("concurrent first requests start one process", async () => {
   const r = makeRouter();
   await r.listen();

@@ -35,7 +35,7 @@
 // Environment (defaults in brackets):
 //   PORT [8080]                       listen port (all interfaces)
 //   JARVIS_CONFIG [/etc/jarvis/config.json]   instance config: access.teamDomain, access.audience (and access.also:
-//                                             more {teamDomain, audience}), users, admins
+//                                             more {teamDomain, audience}), users (emails, or "@domain"), admins
 //                                     (access.jwksFile: a local JWKS instead of the team's, for tests only)
 //   JARVIS_UI_SERVER [<repo>/dist-server/server/index.js]   the CloudCLI server entry
 //   JARVIS_UI_HOME_ROOT [/var/lib/cloudcli/home]   per-user HOME folders (HOME/.claude -> $JARVIS_JFS_ROOT/users/<key>/claude)
@@ -441,7 +441,11 @@ export class Router {
     this.verifier = o.verifier ?? (also.length
       ? new TeamsVerifier([{ teamDomain: a.teamDomain, audience: a.audience }, ...also].map((t) => new AccessVerifier({ ...t, jwks })))
       : new AccessVerifier({ teamDomain: a.teamDomain, audience: a.audience, jwks }));
-    this.users = new Set((this.config.users ?? []).map((u) => String(u).trim().toLowerCase()));
+    // `users`: emails, or "@domain" for everyone at that email domain (YYC: "@yyc.hk", signing in with Access's emailed
+    // code); Access checks the same list, so the router admits no one Access didn't
+    const entries = (this.config.users ?? []).map((u) => String(u).trim().toLowerCase());
+    this.users = new Set(entries.filter((u) => !u.startsWith("@")));
+    this.domains = new Set(entries.filter((u) => u.startsWith("@") && u.length > 1).map((u) => u.slice(1)));
     this.admins = new Set((this.config.admins ?? []).map((u) => String(u).trim().toLowerCase()));
     this.webUrl = o.webUrl ?? process.env.JARVIS_WEB_URL ?? "";
     this.ccToken = o.ccToken ?? process.env.JARVIS_CC_TOKEN ?? "";
@@ -625,12 +629,20 @@ export class Router {
     return { local: true };
   }
 
+  /** a person of this instance: listed by email, or at a listed "@domain" */
+  allowed(email) {
+    const e = String(email || "").toLowerCase();
+    if (this.users.has(e)) return true;
+    const at = e.lastIndexOf("@");
+    return at > 0 && this.domains.has(e.slice(at + 1));
+  }
+
   async #identify(req) {
     const token = accessToken(req);
     if (!token) return { status: 401 };
     let email;
     try { email = await this.verifier.email(token); } catch { return { status: 401 }; }
-    if (!this.users.has(email)) return { status: 403, email };
+    if (!this.allowed(email)) return { status: 403, email };
     return { status: 200, email };
   }
 
