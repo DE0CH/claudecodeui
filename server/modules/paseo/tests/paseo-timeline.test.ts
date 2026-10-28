@@ -106,7 +106,7 @@ describe('SessionTimeline', () => {
     }));
     const metadata = (timeline.rows[0]?.item as { metadata?: { sentFiles?: unknown } }).metadata;
     assert.deepEqual(metadata?.sentFiles, [
-      { path: 'out/a.csv', name: 'a.csv', size: 12, mediaType: 'text/csv', isImage: false },
+      { path: 'out/a.csv', name: 'a.csv', size: 12, mediaType: 'text/csv', isImage: false, sent: 'f1' },
     ]);
   });
 

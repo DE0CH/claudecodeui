@@ -28,6 +28,7 @@ import path from 'node:path';
 
 import { all, get, run, sessionsDb } from '@/modules/database/index.js';
 import {
+  conversationSentDir,
   conversationWorkspaceDir,
   isConversationId,
   jarvisProjectDirName,
@@ -37,6 +38,7 @@ import {
   jarvisOwner,
   jarvisUntitledName,
 } from '@/modules/jarvis/jarvis-config.js';
+import { cloneTree } from '@/modules/jarvis/jarvis-clone.js';
 import { readSentFiles, sentPathToWorkspaceRelative, transcriptPathFor } from '@/modules/jarvis/jarvis-sent-files.js';
 import type { PaseoTimelineRow } from '@/modules/paseo/index.js';
 import type { NormalizedMessage } from '@/shared/types.js';
@@ -254,6 +256,9 @@ export async function createShare(sessionId: string, deps?: ShareDeps): Promise<
       // symlinks are copied as links (never followed); downloads refuse them anyway
       await cp(ws, path.join(dir, 'ws'), { recursive: true, verbatimSymlinks: true, force: true });
     }
+    // the sent files as each send kept them (copy-on-write snapshots, jarvis-config.ts conversationSentDir)
+    const sentDir = conversationSentDir(sessionId);
+    if (await exists(sentDir)) await cloneTree(sentDir, path.join(dir, 'sent'));
     // what the shared page may hand out: the files Claude sent, and the uploads
     const sent = (await readSentFiles(path.join(dir, 'transcript.jsonl'))).map((f) => f.path);
     const uploads = await listFiles(path.join(dir, 'ws'), 'uploads');
@@ -361,11 +366,14 @@ export async function shareView(id: string): Promise<{
   };
 }
 
-/** Where a shared file may be read from: its snapshot /workspace, and only for a file the page may hand out. */
-export async function shareFileRoot(id: string, rel: string): Promise<string> {
+/**
+ * Where a shared file may be read from, and only for a file the page may hand out: the share's copy of /workspace,
+ * and its copy of the sent-file snapshots (`sent/<toolUseId>/…`, read first when the card names its send).
+ */
+export async function shareFileRoot(id: string, rel: string): Promise<{ root: string; sentDir: string }> {
   const row = await requireShare(id);
   if (!row.files.includes(rel)) throw new ShareError(404, 'FILE_NOT_FOUND', 'That file was not found.');
-  return path.join(row.dir, 'ws');
+  return { root: path.join(row.dir, 'ws'), sentDir: path.join(row.dir, 'sent') };
 }
 
 const UUID_G = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -453,6 +461,9 @@ export async function continueShare(id: string, deps?: ShareDeps): Promise<{ ses
     if (await exists(files)) {
       await cp(files, conversationWorkspaceDir(conversation), { recursive: true, verbatimSymlinks: true, force: true });
     }
+    // the snapshots keep their send ids: tool call ids are not among the ids transcriptUnderNewIds replaces
+    const sent = path.join(row.dir, 'sent');
+    if (await exists(sent)) await cloneTree(sent, conversationSentDir(conversation));
   } catch (error) {
     await sessionsDb.deleteSessionById(conversation).catch(() => {});
     await rm(jsonlPath, { force: true }).catch(() => {});

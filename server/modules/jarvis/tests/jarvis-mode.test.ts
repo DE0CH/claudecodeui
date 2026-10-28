@@ -12,10 +12,10 @@ import express from 'express';
 import { closeConnection, initializeDatabase, projectsDb, sessionsDb, userDb } from '@/modules/database/index.js';
 import { releaseTestDatabase } from '@/modules/database/testing.js';
 import { ensureJarvisProject, ensureJarvisUser } from '@/modules/jarvis/jarvis-bootstrap.js';
-import { conversationWorkspaceDir, jarvisLocale, jarvisModel, jarvisProductName, jarvisSessionName, resetJarvisInstanceConfig } from '@/modules/jarvis/jarvis-config.js';
+import { conversationFilesRoot, conversationSentDir, conversationWorkspaceDir, jarvisLocale, jarvisModel, jarvisProductName, jarvisSessionName, resetJarvisInstanceConfig } from '@/modules/jarvis/jarvis-config.js';
 import { onConversationDeleted, onConversationForked, recordJarvisFailedTurn, stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
 import { readableClaudeApiError, readableSandboxError, SandboxServiceError } from '@/modules/jarvis/jarvis-errors.js';
-import { createJarvisFilesRouter, listSentWorkspaceFiles, openWorkspaceFile } from '@/modules/jarvis/jarvis-files.routes.js';
+import { createJarvisFilesRouter, listSentWorkspaceFiles, openSentFile, openWorkspaceFile } from '@/modules/jarvis/jarvis-files.routes.js';
 import { readSentFiles, sentPathToWorkspaceRelative } from '@/modules/jarvis/jarvis-sent-files.js';
 import { isUnavailableInJarvis, jarvisApiGuard } from '@/modules/jarvis/jarvis-guard.js';
 import { createJarvisWarmRouter, forwardWarm } from '@/modules/jarvis/jarvis-warm.routes.js';
@@ -347,7 +347,7 @@ test('a failed release still removes the files; ids that are not conversations t
       release: async () => { order.push('release'); throw new Error('down'); },
       removeDir: async (dir) => { order.push(`rm ${path.relative(jfs, dir)}`); },
     });
-    assert.deepEqual(order, ['release', `rm ws/${id}`]);
+    assert.deepEqual(order, ['release', `rm ws/${id}`, `rm sent/${id}`], 'the sent-file snapshots go with the workspace');
 
     order.length = 0;
     await onConversationDeleted('../../users', {
@@ -368,6 +368,31 @@ test('a fork starts with a copy of the conversation\'s files', async () => {
     await onConversationForked(from, to);
     assert.equal(await readFile(path.join(jfs, 'ws', to, 'sub', 'a.txt'), 'utf8'), 'A');
     await onConversationForked(randomUUID(), randomUUID());
+  });
+});
+
+test('sent files: a download reads the send\'s snapshot, not the file the agent changed since; a fork keeps the snapshots', async () => {
+  await withJarvis(async ({ jfs }) => {
+    const id = randomUUID();
+    await mkdir(path.join(jfs, 'ws', id, 'out'), { recursive: true });
+    await writeFile(path.join(jfs, 'ws', id, 'out', 'r.pdf'), 'rewritten later');
+    await mkdir(path.join(jfs, 'sent', id, 'toolu_1', 'out'), { recursive: true });
+    await writeFile(path.join(jfs, 'sent', id, 'toolu_1', 'out', 'r.pdf'), 'as sent');
+    const read = async (toolUseId: unknown) => {
+      const { handle } = await openSentFile(conversationFilesRoot(id).dir, conversationSentDir(id), 'out/r.pdf', toolUseId);
+      try {
+        return (await handle.readFile()).toString();
+      } finally {
+        await handle.close();
+      }
+    };
+    assert.equal(await read('toolu_1'), 'as sent');
+    assert.equal(await read(undefined), 'rewritten later', 'a card from before snapshots reads the live file');
+    assert.equal(await read('toolu_unknown'), 'rewritten later', 'no snapshot for that send: the live file');
+    assert.equal(await read('../../ws'), 'rewritten later', 'a bad send id is never a path');
+    const fork = randomUUID();
+    await onConversationForked(id, fork);
+    assert.equal(await readFile(path.join(jfs, 'sent', fork, 'toolu_1', 'out', 'r.pdf'), 'utf8'), 'as sent');
   });
 });
 

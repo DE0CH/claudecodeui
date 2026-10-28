@@ -120,6 +120,9 @@ async function makeConversation(jfs: string): Promise<{ sessionId: string; provi
   await writeFile(path.join(ws, 'make.py'), 'print(1)');
   await writeFile(path.join(jfs, 'secret.txt'), 'other user');
   await symlink(path.join(jfs, 'secret.txt'), path.join(ws, 'link.txt'));
+  // the send t1's copy-on-write snapshot (router.mjs "Sent files"), here a different version than the live file
+  await mkdir(path.join(jfs, 'sent', sessionId, 't1'), { recursive: true });
+  await writeFile(path.join(jfs, 'sent', sessionId, 't1', 'report.pdf'), '%PDF-1.4 as sent');
   return { sessionId, providerId };
 }
 
@@ -181,6 +184,9 @@ test('share, view as another user, download only sent files and uploads, continu
       assert.equal(await ok.text(), '%PDF-1.4 report');
       assert.match(ok.headers.get('content-disposition') ?? '', /^attachment/);
       assert.equal((await fetch(`${base}/shares/${link.id}/files/raw?path=uploads/photo.png&inline=1`)).status, 200);
+      // with the card's send id, the file as that send kept it
+      const sent = await fetch(`${base}/shares/${link.id}/files/raw?path=report.pdf&sent=t1`);
+      assert.equal(await sent.text(), '%PDF-1.4 as sent');
       for (const p of ['make.py', 'link.txt', '../secret.txt', '/etc/passwd']) {
         const r = await fetch(`${base}/shares/${link.id}/files/raw?path=${encodeURIComponent(p)}`);
         assert.ok(r.status === 404 || r.status === 400, `${p} answered ${r.status}`);
@@ -207,6 +213,7 @@ test('share, view as another user, download only sent files and uploads, continu
     assert.equal(await readFile(path.join(os.homedir(), '.claude', 'projects', '-workspace', row.provider_session_id!, 'subagents', 'agent-x.jsonl'), 'utf8'), '{}\n');
     assert.equal(await readFile(path.join(jfs, 'ws', mine, 'report.pdf'), 'utf8'), '%PDF-1.4 report');
     assert.equal(await readFile(path.join(jfs, 'ws', mine, 'make.py'), 'utf8'), 'print(1)');
+    assert.equal(await readFile(path.join(jfs, 'sent', mine, 't1', 'report.pdf'), 'utf8'), '%PDF-1.4 as sent', 'the snapshots come along');
     // exactly one conversation in the viewer's list, and its message chain intact
     assert.deepEqual((await sessionsDb.getAllSessions()).map((s) => s.session_id), [mine]);
     const rows = text.trim().split('\n').map((l) => JSON.parse(l));

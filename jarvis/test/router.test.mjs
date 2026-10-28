@@ -1,7 +1,7 @@
 // Router tests with fake CloudCLI children (test/fake-cloudcli.mjs): `node --test jarvis/test/`.
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign, randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readlinkSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readlinkSync, existsSync, readFileSync, symlinkSync, unlinkSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -9,7 +9,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { AccessVerifier, Router, needsSignIn, TeamsVerifier, ownerOf, pickFirstName, userKey } from "../router.mjs";
+import { AccessVerifier, Router, needsSignIn, TeamsVerifier, ownerOf, pickFirstName, userKey, workspaceRelative } from "../router.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE = path.join(HERE, "fake-cloudcli.mjs");
@@ -387,6 +387,46 @@ test("a replica in its preStop pause (out of DNS, not yet draining) never counts
   const res = await get(a, "/x", auth(email));
   assert.equal(res.status, 200);
   assert.ok(b.procs.has(email) && !a.procs.has(email));
+});
+
+test("sent files: egress's snapshot call keeps a copy of each file outside the workspace; refusals", async () => {
+  const r = makeRouter({ sentFilesToken: "snap-tok", juicefs: "/nonexistent/juicefs" });
+  await r.listen();
+  const conv = randomUUID();
+  const ws = path.join(r.jfsRoot, "ws", conv);
+  mkdirSync(path.join(ws, "out"), { recursive: true });
+  writeFileSync(path.join(ws, "out", "report.pdf"), "v1");
+  writeFileSync(path.join(ws, "chart.png"), "png");
+  const snap = (body, headers = {}) =>
+    get(r, "/__jarvis/sent-files/snapshot", { authorization: "Bearer snap-tok", "x-jarvis-conversation": conv, "content-type": "application/json", ...headers }, "POST", JSON.stringify(body));
+  const ok = await snap({ toolUseId: "toolu_01", files: ["/workspace/out/report.pdf", "/workspace/chart.png", "/workspace/gone.txt"] });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.json, { kept: ["out/report.pdf", "chart.png"], skipped: ["gone.txt"] });
+  const kept = path.join(r.jfsRoot, "sent", conv, "toolu_01", "out", "report.pdf");
+  assert.equal(readFileSync(kept, "utf8"), "v1");
+  // the agent rewrites and deletes the original: the kept copy stays as sent; a retried send keeps the first copy
+  writeFileSync(path.join(ws, "out", "report.pdf"), "v2");
+  assert.equal((await snap({ toolUseId: "toolu_01", files: ["/workspace/out/report.pdf"] })).status, 200);
+  unlinkSync(path.join(ws, "out", "report.pdf"));
+  assert.equal(readFileSync(kept, "utf8"), "v1");
+  // refusals: no or a wrong token (404, as if absent), no conversation, a path outside /workspace, a symlink, GET
+  assert.equal((await snap({ toolUseId: "toolu_02", files: [] }, { authorization: "Bearer nope" })).status, 404);
+  assert.equal((await snap({ toolUseId: "toolu_02", files: [] }, { "x-jarvis-conversation": "../x" })).status, 400);
+  assert.equal((await snap({ toolUseId: "../up", files: [] })).status, 400);
+  assert.equal((await snap({ toolUseId: "toolu_02", files: ["/etc/passwd"] })).status, 400);
+  symlinkSync("/etc/passwd", path.join(ws, "link.txt"));
+  const linked = await snap({ toolUseId: "toolu_02", files: ["/workspace/link.txt"] });
+  assert.equal(linked.status, 400);
+  assert.match(linked.json.error, /not a plain file/);
+  assert.equal(existsSync(path.join(r.jfsRoot, "sent", conv, "toolu_02", "link.txt")), false);
+  assert.equal((await get(r, "/__jarvis/sent-files/snapshot", { authorization: "Bearer snap-tok", "x-jarvis-conversation": conv })).status, 405);
+  // without a token configured the endpoint does not exist
+  const off = makeRouter();
+  await off.listen();
+  assert.equal((await get(off, "/__jarvis/sent-files/snapshot", { authorization: "Bearer ", "x-jarvis-conversation": conv }, "POST", "{}")).status, 404);
+  assert.equal(workspaceRelative("/workspace/a/../b.txt"), "b.txt");
+  assert.equal(workspaceRelative("/workspace/../etc/passwd"), null);
+  assert.equal(workspaceRelative("relative.txt"), null);
 });
 
 test("the peer endpoint needs the peer key", async () => {

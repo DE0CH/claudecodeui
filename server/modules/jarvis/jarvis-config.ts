@@ -136,6 +136,20 @@ export function conversationWorkspaceDir(conversationId: string): string {
 }
 
 /**
+ * Where the files Claude sent are kept: a copy-on-write snapshot of each, made before the send by the router's
+ * /__jarvis/sent-files/snapshot (DE0CH/jarvis3 docs/CLAUDE-CODE.md "Sent files"), at
+ * $JARVIS_JFS_ROOT/sent/<id>/<tool use id>/<path relative to /workspace>, outside the sandbox's view. Sandbox mode only.
+ */
+export function conversationSentDir(conversationId: string): string {
+  if (!isConversationId(conversationId)) throw new Error('not a conversation id');
+  if (jarvisLocal()) throw new Error('local conversations have no folder of their own');
+  return path.join(jarvisJfsRoot(), 'sent', conversationId.toLowerCase());
+}
+
+/** A SendUserFile call's id as Claude Code writes it (toolu_…): the only name a snapshot folder may have. */
+export const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
  * The folder the conversation's files (what Claude sent, downloads) are read from: as this process sees it (`dir`)
  * and as Claude Code does (`claudePath`). Sandbox mode: the conversation's /workspace. Local mode: the home folder,
  * so a file Claude sends from ~/artifacts is reachable as well as one in the workspace.

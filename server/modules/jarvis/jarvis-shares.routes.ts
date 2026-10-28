@@ -6,7 +6,8 @@
  *   DELETE /api/jarvis/shares/:id                     (owner)  → 204; anyone else's or a revoked id → 404
  *   GET    /api/jarvis/shares/:id                     (staff)  → {id, title, ownerName, isOwner, createdAt, timeline}
  *                                                               (timeline: the chat view's rows, paseo-timeline.ts)
- *   GET    /api/jarvis/shares/:id/files/raw?path=REL  (staff)  → the bytes of a file the page may hand out
+ *   GET    /api/jarvis/shares/:id/files/raw?path=REL[&sent=TOOL_USE_ID]  (staff)  → the bytes of a file the page may
+ *                                                     hand out (with `sent`: as that send kept it)
  *                                                                (`inline=1` shows images and PDFs)
  *   POST   /api/jarvis/shares/:id/continue            (staff)  → 201 {sessionId}: a new conversation of the caller's
  *
@@ -19,7 +20,7 @@ import path from 'node:path';
 import express, { type Request, type Response } from 'express';
 import mime from 'mime-types';
 
-import { openWorkspaceFile, safeRelativePath } from '@/modules/jarvis/jarvis-files.routes.js';
+import { openSentFile, safeRelativePath } from '@/modules/jarvis/jarvis-files.routes.js';
 import { continueShare, createShare, listShares, revokeShare, shareFileRoot, ShareError, shareView } from '@/modules/jarvis/jarvis-shares.js';
 
 function sendError(res: Response, error: unknown): void {
@@ -83,8 +84,8 @@ export function createJarvisSharesRouter(): express.Router {
   router.get('/shares/:id/files/raw', async (req: Request, res: Response) => {
     try {
       const rel = safeRelativePath(req.query.path);
-      const root = await shareFileRoot(String(req.params.id), rel);
-      const { handle, size, mtime } = await openWorkspaceFile(root, rel);
+      const { root, sentDir } = await shareFileRoot(String(req.params.id), rel);
+      const { handle, size, mtime } = await openSentFile(root, sentDir, rel, req.query.sent);
       const fileName = path.posix.basename(rel);
       const contentType = mime.lookup(fileName) || 'application/octet-stream';
       const inline = req.query.inline === '1' && previewable(contentType);

@@ -8,7 +8,8 @@ import { copyFile, cp, mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises'
 import path from 'node:path';
 
 import { jarvisTurnsDb } from '@/modules/database/index.js';
-import { conversationUploads, conversationWorkspaceDir, isConversationId, jarvisEnabled, jarvisLocal } from '@/modules/jarvis/jarvis-config.js';
+import { cloneTree } from '@/modules/jarvis/jarvis-clone.js';
+import { conversationSentDir, conversationUploads, conversationWorkspaceDir, isConversationId, jarvisEnabled, jarvisLocal } from '@/modules/jarvis/jarvis-config.js';
 import { releaseSandbox } from '@/modules/jarvis/sandbox-process.js';
 import { revokeSharesOf } from '@/modules/jarvis/jarvis-shares.js';
 
@@ -63,6 +64,11 @@ export async function onConversationDeleted(sessionId: string, deps: Deps = defa
   } catch (error) {
     console.warn('[jarvis] workspace removal failed', { sessionId, error: error instanceof Error ? error.message : error });
   }
+  try {
+    await deps.removeDir(conversationSentDir(sessionId));
+  } catch (error) {
+    console.warn('[jarvis] sent files removal failed', { sessionId, error: error instanceof Error ? error.message : error });
+  }
 }
 
 /** After a fork: the new conversation starts with a copy of the source's /workspace (when it has one). */
@@ -80,6 +86,15 @@ export async function onConversationForked(sourceSessionId: string, forkSessionI
     await cp(from, to, { recursive: true, errorOnExist: false, force: false, verbatimSymlinks: true });
   } catch (error) {
     console.warn('[jarvis] workspace copy for fork failed', { sourceSessionId, forkSessionId, error: error instanceof Error ? error.message : error });
+  }
+  // the sent-file snapshots too, so the fork's cards keep their files
+  const sent = conversationSentDir(sourceSessionId);
+  try {
+    if ((await stat(sent)).isDirectory()) await cloneTree(sent, conversationSentDir(forkSessionId));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[jarvis] sent files copy for fork failed', { sourceSessionId, forkSessionId, error: error instanceof Error ? error.message : error });
+    }
   }
 }
 

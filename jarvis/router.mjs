@@ -38,6 +38,13 @@
 // a chat running for the person (each up to JARVIS_UI_DRAIN_SECONDS). Other forwarded tabs are closed at once and
 // reconnect through a ready replica to the process that has the run, where the page re-subscribes to it.
 //
+// Sent files (DE0CH/jarvis3 docs/CLAUDE-CODE.md "Sent files"): POST /__jarvis/sent-files/snapshot, from egress's
+// `sent-files` route only (bearer JARVIS_SENT_FILES_TOKEN, X-Jarvis-Conversation as egress verified it), is what
+// Claude Code's PreToolUse hook on SendUserFile waits for: each file it is about to send is cloned copy-on-write
+// (`juicefs clone`) from $JARVIS_JFS_ROOT/ws/<conversation>/<path> to sent/<conversation>/<toolUseId>/<path>, outside
+// the sandbox's view, and the UI's file cards read that copy. Any replica serves it; no CloudCLI process is involved.
+// Symlinks are refused; a file that is not there is skipped (SendUserFile reports it itself).
+//
 // No dependencies beyond Node's standard library.
 //
 // Environment (defaults in brackets):
@@ -57,12 +64,14 @@
 //   POD_IP                            this replica's address (with JARVIS_UI_PEERS)
 //   JARVIS_UI_DIST [<repo>/dist]       the built web app, served to signed-out visitors (no index.html: no shell)
 //   JARVIS_UID [1000]                 owner of folders the router makes when it runs as root
+//   JARVIS_SENT_FILES_TOKEN [unset]   bearer of POST /__jarvis/sent-files/snapshot (egress's sent-files route); unset: off
+//   JARVIS_JUICEFS [/usr/local/bin/juicefs]   the client used for copy-on-write clones (absent: a plain copy)
 //   passed to every process: DATABASE_URL, JWT_SECRET, JARVIS_WEB_URL, JARVIS_CC_TOKEN (plus the per-user contract env)
 import { createHash, createPublicKey, timingSafeEqual, verify as cryptoVerify } from "node:crypto";
-import { spawn as nodeSpawn } from "node:child_process";
+import { execFile, spawn as nodeSpawn } from "node:child_process";
 import { promises as dns } from "node:dns";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { mkdir, readlink, symlink, unlink, chown, lstat, readFile, stat } from "node:fs/promises";
+import { mkdir, readlink, symlink, unlink, chown, lstat, readFile, stat, realpath, copyFile, access } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -72,6 +81,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOP = "x-jarvis-ui-hop";
 const PEER_AUTH = "x-jarvis-ui-peer";
 const PEER_PATH = "/__jarvis/peer/holds";
+const SENT_FILES_PATH = "/__jarvis/sent-files/snapshot";
+const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 // Paths that always need a signed-in staff member; keep in step with the Access app's destinations and cloudflared's
 // access-required ingress rule (DE0CH/YYC news-stream/deploy/cloudflare/tofu: access.tf staff_ai, tunnels.tf yyc_ai)
 export const SIGNED_IN_PATHS = ["/api", "/paseo-ws", "/ws", "/ops"];
@@ -303,6 +315,31 @@ function rejectUpgrade(socket, status, text) {
   socket.end(`HTTP/1.1 ${status} ${http.STATUS_CODES[status] || ""}\r\ncontent-type: text/plain\r\nconnection: close\r\ncontent-length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
 }
 
+/** A /workspace path (absolute, as Claude Code passes it) as a normalised relative path, or null outside it. */
+export function workspaceRelative(abs) {
+  if (typeof abs !== "string" || abs.includes("\0") || abs.length > 4096) return null;
+  const p = path.posix.normalize(abs.replace(/^file:\/\//, ""));
+  if (!p.startsWith("/workspace/")) return null;
+  const rel = p.slice("/workspace/".length);
+  if (!rel || rel === "." || rel.startsWith("../") || rel.split("/").includes("..")) return null;
+  return rel;
+}
+
+/** The request body as text, at most `max` bytes (more is an error). */
+function readLimited(req, max) {
+  return new Promise((resolve, reject) => {
+    const parts = [];
+    let n = 0;
+    req.on("data", (c) => {
+      n += c.length;
+      if (n > max) { reject(new Error("too large")); req.destroy(); return; }
+      parts.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(parts).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
 /** Request headers for the user's process: hop-by-hop headers dropped, X-Jarvis-User set by us only. */
 function upstreamHeaders(req, email, extra = {}) {
   const h = { ...req.headers };
@@ -493,6 +530,8 @@ export class Router {
     this.port = o.port ?? Number(process.env.PORT || 8080);
     this.host = o.host ?? undefined;
     this.uid = o.uid ?? Number(process.env.JARVIS_UID || 1000);
+    this.sentFilesToken = o.sentFilesToken ?? process.env.JARVIS_SENT_FILES_TOKEN ?? "";
+    this.juicefs = o.juicefs ?? process.env.JARVIS_JUICEFS ?? "/usr/local/bin/juicefs";
     // The native app's sign-in callback scheme (GET /api/jarvis/app-signin); unset = the endpoint is off.
     this.appScheme = o.appScheme ?? process.env.JARVIS_APP_SCHEME ?? "";
     // The signed-out shell (top of this file); null or a folder without index.html = off (401 as for any other path)
@@ -586,6 +625,80 @@ export class Router {
     const running = p ? await p.runningChats() : 0;
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify({ holds: !!p, running, draining: this.draining }));
+  }
+
+  /** POST /__jarvis/sent-files/snapshot {toolUseId, files: [/workspace/…]}: copy-on-write copies (top of this file). */
+  async #sentFilesSnapshot(req, res) {
+    const answer = (status, body) => {
+      res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(body));
+    };
+    const given = String(req.headers.authorization || "");
+    const want = `Bearer ${this.sentFilesToken}`;
+    const ok = this.sentFilesToken && given.length === want.length && timingSafeEqual(Buffer.from(given), Buffer.from(want));
+    if (!ok) { req.resume(); return answer(404, { error: "not found" }); }
+    if (req.method !== "POST") { req.resume(); return answer(405, { error: "POST only" }); }
+    const conversation = String(req.headers["x-jarvis-conversation"] || "").toLowerCase();
+    if (!CONVERSATION_ID.test(conversation)) { req.resume(); return answer(400, { error: "no conversation" }); }
+    let body;
+    try {
+      const raw = await readLimited(req, 256 * 1024);
+      body = JSON.parse(raw);
+    } catch {
+      return answer(400, { error: "the body is JSON {toolUseId, files}" });
+    }
+    const toolUseId = typeof body?.toolUseId === "string" ? body.toolUseId : "";
+    const files = Array.isArray(body?.files) ? body.files : [];
+    if (!TOOL_USE_ID.test(toolUseId) || files.length > 100 || !files.every((f) => typeof f === "string")) {
+      return answer(400, { error: "toolUseId and files (paths) are required" });
+    }
+    const ws = path.join(this.jfsRoot, "ws", conversation);
+    const dest = path.join(this.jfsRoot, "sent", conversation, toolUseId);
+    const kept = [];
+    const skipped = [];
+    try {
+      const realWs = await realpath(ws).catch(() => null);
+      for (const abs of files) {
+        const rel = workspaceRelative(abs);
+        if (!rel) return answer(400, { error: `${abs} is not a file in /workspace` });
+        const src = path.join(ws, ...rel.split("/"));
+        const st = await lstat(src).catch(() => null);
+        if (!st || !realWs) { skipped.push(rel); continue; }
+        // only a plain file reached without a symlink anywhere on the way (the sandbox can link anywhere on the volume)
+        if (!st.isFile() || (await realpath(src)) !== path.join(realWs, ...rel.split("/"))) {
+          return answer(400, { error: `${rel} is not a plain file (symlinks and folders are not sent)` });
+        }
+        const dst = path.join(dest, ...rel.split("/"));
+        if (await lstat(dst).catch(() => null)) { kept.push(rel); continue; } // a retried send: already kept
+        await this.#mkdirOwned(path.dirname(dst));
+        await this.#clone(src, dst);
+        kept.push(rel);
+      }
+    } catch (e) {
+      log("warn", "sent files snapshot failed", { conversation, toolUseId, error: String(e.message || e) });
+      return answer(500, { error: String(e.message || e).slice(0, 300) });
+    }
+    log("info", "sent files kept", { conversation, toolUseId, kept: kept.length, skipped: skipped.length });
+    answer(200, { kept, skipped });
+  }
+
+  /** mkdir -p, owned by JARVIS_UID when the router runs as root. */
+  async #mkdirOwned(dir) {
+    await mkdir(dir, { recursive: true });
+    if (process.getuid?.() === 0) await chown(dir, this.uid, this.uid).catch(() => {});
+  }
+
+  /** A copy-on-write clone with the juicefs client (metadata only), or a plain copy where there is none. */
+  async #clone(src, dst) {
+    const haveJuicefs = await access(this.juicefs).then(() => true, () => false);
+    if (!haveJuicefs) return copyFile(src, dst);
+    await new Promise((resolve, reject) => {
+      execFile(this.juicefs, ["clone", src, dst], { timeout: 30_000 }, (error, _stdout, stderr) => {
+        if (error) reject(new Error(`juicefs clone: ${String(stderr || error.message).trim().slice(0, 200)}`));
+        else resolve();
+      });
+    });
+    if (process.getuid?.() === 0) await chown(dst, this.uid, this.uid).catch(() => {});
   }
 
   /** Ask one replica about a user key; null when it can't be asked (a replica that refuses connections is forgotten). */
@@ -732,6 +845,7 @@ export class Router {
       return res.end(JSON.stringify({ ok, draining: this.draining, processes: this.procs.size }));
     }
     if (url.startsWith(PEER_PATH)) return this.#peerHolds(req, res);
+    if (url === SENT_FILES_PATH || url.startsWith(SENT_FILES_PATH + "?")) return this.#sentFilesSnapshot(req, res);
     const who = await this.#identify(req);
     if (who.status === 401 && this.distDir && (req.method === "GET" || req.method === "HEAD")) {
       if (await this.#shell(req, res)) return;

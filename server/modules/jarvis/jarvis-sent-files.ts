@@ -21,6 +21,8 @@ export type SentFileRecord = {
   /** When the tool's result was written (ISO 8601). */
   sentAt: string;
   caption?: string;
+  /** The SendUserFile call's id: names its snapshot folder (jarvis-config.ts conversationSentDir). */
+  toolUseId?: string;
 };
 
 /**
@@ -110,7 +112,7 @@ export async function readSentFiles(transcriptPath: string): Promise<SentFileRec
       for (const raw of reported && reported.length ? reported : given) {
         const rel = sentPathToWorkspaceRelative(raw);
         if (!rel) continue;
-        latest.set(rel, { path: rel, sentAt, ...(call.caption ? { caption: call.caption } : {}) });
+        latest.set(rel, { path: rel, sentAt, toolUseId: part.tool_use_id, ...(call.caption ? { caption: call.caption } : {}) });
         seq.set(rel, order++);
       }
     }
