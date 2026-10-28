@@ -622,3 +622,149 @@ test("signed out: only the built shell (index marked signed out, files of dist/)
   assert.equal(r.procs.size, 0, "no CloudCLI process for the sign-in either");
   assert.ok(needsSignIn("/api") && needsSignIn("/paseo-ws") && needsSignIn("/ops/x") && !needsSignIn("/apix") && !needsSignIn("/"));
 });
+
+// --- view as (Deyao, 2026-10-28): an admin sees the app as a staff member; the router enforces who may ---
+function viewAsRouter(o = {}) {
+  const recorded = [];
+  const r = makeRouter({
+    config: { access: { teamDomain: TEAM, audience: AUD }, users: [ALICE, BOB, CAROL], admins: [ALICE] },
+    ccToken: "cc-secret",
+    recordViewAs: async (e) => { if (o.failRecord) throw new Error("web down"); recorded.push(e); },
+    ...o,
+  });
+  r.recorded = recorded;
+  return r;
+}
+const sameOrigin = { "content-type": "application/x-www-form-urlencoded", "sec-fetch-site": "same-origin" };
+async function startViewAs(r, actor, user, extra = {}) {
+  return get(r, "/api/jarvis/view-as", { ...auth(actor), ...sameOrigin, ...extra }, "POST", `user=${encodeURIComponent(user)}`);
+}
+const tokenOf = (res) => /#jarvis-view-as=(.+)$/.exec(res.headers.location ?? "")?.[1];
+function upgrade(r, p, headers) {
+  return new Promise((resolve) => {
+    const s = net.connect(r.port, "127.0.0.1");
+    s.write(`GET ${p} HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: test\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join("")}\r\n`);
+    let b = "";
+    s.on("data", (d) => { b += d; if (b.includes("\r\n\r\n")) { s.destroy(); resolve(b); } });
+    s.on("close", () => resolve(b));
+  });
+}
+
+test("view as: only an admin can start it, from the same origin, for a user; recorded first; the token opens the person's own process", async () => {
+  const r = viewAsRouter();
+  await r.listen();
+  // a non-admin, a cross-site form, a GET, someone who is not a user, a "@domain": refused, nothing recorded
+  assert.equal((await startViewAs(r, BOB, ALICE)).status, 403);
+  assert.equal((await startViewAs(r, ALICE, BOB, { "sec-fetch-site": "cross-site" })).status, 403);
+  assert.equal((await get(r, "/api/jarvis/view-as?user=bob@yyc.hk", auth(ALICE))).status, 405);
+  assert.equal((await startViewAs(r, ALICE, "mallory@yyc.hk")).status, 400);
+  assert.equal((await startViewAs(r, ALICE, "@yyc.hk")).status, 400);
+  assert.equal(r.recorded.length, 0);
+  // no Sec-Fetch-Site: the Origin must be this host
+  assert.equal((await get(r, "/api/jarvis/view-as", { ...auth(ALICE), "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example", host: "ai.example" }, "POST", "user=bob@yyc.hk")).status, 403);
+  // the admin, same origin
+  const started = await startViewAs(r, ALICE, " Bob@YYC.hk ");
+  assert.equal(started.status, 303);
+  const token = tokenOf(started);
+  assert.ok(token);
+  assert.equal(r.recorded.length, 1);
+  assert.deepEqual({ ...r.recorded[0], session: "x" }, { event: "start", admin: ALICE, user: BOB, session: "x" });
+  // with the token, the admin's request reaches BOB's process as BOB, the viewer named, the token off the URL
+  const res = await get(r, `/api/sessions?a=1&jarvis_view_as=${token}`, { ...auth(ALICE), "x-jarvis-viewer": "forged@yyc.hk" });
+  assert.equal(res.status, 200);
+  assert.equal(res.json.headers["x-jarvis-user"], BOB);
+  assert.equal(res.json.headers["x-jarvis-viewer"], ALICE);
+  assert.equal(res.json.headers["x-jarvis-viewer-session"], r.recorded[0].session);
+  assert.equal(res.json.url, "/api/sessions?a=1");
+  assert.equal(res.json.env.JARVIS_CC_OWNER, BOB);
+  assert.ok(r.procs.has(BOB) && !r.procs.has(ALICE));
+  // the header form works too
+  assert.equal((await get(r, "/api/x", { ...auth(ALICE), "x-jarvis-view-as": token })).json.headers["x-jarvis-user"], BOB);
+  // /api/jarvis/me says so
+  const me = await get(r, `/api/jarvis/me?jarvis_view_as=${token}`, auth(ALICE));
+  assert.equal(me.json.viewAs.user, BOB);
+  assert.ok(Date.parse(me.json.viewAs.expiresAt) > Date.now());
+  // without the token the admin is themself, and a client can never set the viewer
+  const own = await get(r, "/api/x", { ...auth(ALICE), "x-jarvis-viewer": "forged@yyc.hk" });
+  assert.equal(own.json.headers["x-jarvis-user"], ALICE);
+  assert.equal(own.json.headers["x-jarvis-viewer"], undefined);
+});
+
+test("view as: a non-admin can never become anyone, with any token; expired, forged or another admin's tokens are refused", async () => {
+  const r = viewAsRouter({ config: { access: { teamDomain: TEAM, audience: AUD }, users: [ALICE, BOB, CAROL], admins: [ALICE, CAROL] } });
+  await r.listen();
+  const token = tokenOf(await startViewAs(r, ALICE, BOB));
+  // BOB (not an admin) with ALICE's token: refused, also on the socket
+  const stolen = await get(r, `/api/x?jarvis_view_as=${token}`, auth(BOB));
+  assert.equal(stolen.status, 403);
+  assert.equal(stolen.json.error.code, "VIEW_AS_REFUSED");
+  assert.equal((await get(r, "/api/x", { ...auth(BOB), "x-jarvis-view-as": token })).status, 403);
+  assert.match(await upgrade(r, `/paseo-ws?jarvis_view_as=${token}`, { "cf-access-jwt-assertion": jwt({ email: BOB }) }), /^HTTP\/1.1 403/);
+  // CAROL, an admin too, with ALICE's token: refused (a token is its admin's alone)
+  assert.equal((await get(r, `/api/x?jarvis_view_as=${token}`, auth(CAROL))).status, 403);
+  // a token BOB makes himself (no key), a tampered one, an expired one
+  const [body] = token.split(".");
+  const claims = JSON.parse(Buffer.from(body, "base64url").toString());
+  const forged = `${Buffer.from(JSON.stringify({ ...claims, a: BOB })).toString("base64url")}.${token.split(".")[1]}`;
+  assert.equal((await get(r, `/api/x?jarvis_view_as=${forged}`, auth(BOB))).status, 403);
+  assert.equal((await get(r, `/api/x?jarvis_view_as=${forged}`, auth(ALICE))).status, 403);
+  assert.equal((await get(r, `/api/x?jarvis_view_as=garbage`, auth(ALICE))).status, 403);
+  const late = viewAsRouter({ viewAsTtlMs: -1000 });
+  await late.listen();
+  const expired = tokenOf(await startViewAs(late, ALICE, BOB));
+  assert.equal((await get(late, `/api/x?jarvis_view_as=${expired}`, auth(ALICE))).status, 403);
+  // removed from admins: the token stops working
+  r.admins.delete(ALICE);
+  assert.equal((await get(r, `/api/x?jarvis_view_as=${token}`, auth(ALICE))).status, 403);
+  assert.ok(!r.procs.has(BOB), "BOB's process never started for anyone else");
+});
+
+test("view as: read-only REST and sockets except the Paseo socket; the socket carries the viewer; nothing opens if the start can't be recorded", async () => {
+  const r = viewAsRouter();
+  await r.listen();
+  const token = tokenOf(await startViewAs(r, ALICE, BOB));
+  const q = `jarvis_view_as=${token}`;
+  for (const [m, p] of [["POST", "/api/jarvis/sessions/x/shares"], ["DELETE", "/api/jarvis/shares/x"], ["PUT", "/api/x"], ["POST", "/api/chat"]]) {
+    const res = await get(r, `${p}?${q}`, auth(ALICE), m, m === "DELETE" ? undefined : "{}");
+    assert.equal(res.status, 403, `${m} ${p}`);
+    assert.equal(res.json.error.code, "VIEW_AS_READ_ONLY");
+  }
+  assert.equal((await get(r, `/api/jarvis/warm?${q}`, auth(ALICE), "POST", "{}")).status, 200);
+  assert.equal((await get(r, `/api/assets/files?${q}`, auth(ALICE), "POST", "x")).status, 200);
+  assert.match(await upgrade(r, `/ws?${q}`, { "cf-access-jwt-assertion": jwt({ email: ALICE }) }), /^HTTP\/1.1 403/);
+  const ok = await upgrade(r, `/paseo-ws?${q}`, { "cf-access-jwt-assertion": jwt({ email: ALICE }) });
+  assert.match(ok, /^HTTP\/1.1 101/);
+  assert.match(ok, new RegExp(`X-Jarvis-User-Seen: ${BOB}`, "i"));
+  assert.match(ok, new RegExp(`X-Jarvis-Viewer-Seen: ${ALICE}`, "i"));
+  assert.match(ok, /X-Url-Seen: \/paseo-ws\r\n/i);
+  // the admin's own socket (no token) has no viewer
+  const own = await upgrade(r, "/paseo-ws", { "cf-access-jwt-assertion": jwt({ email: ALICE }) });
+  assert.match(own, new RegExp(`X-Jarvis-User-Seen: ${ALICE}`, "i"));
+  assert.match(own, /X-Jarvis-Viewer-Seen: \r\n/i);
+
+  const down = viewAsRouter({ failRecord: true });
+  await down.listen();
+  const res = await startViewAs(down, ALICE, BOB);
+  assert.equal(res.status, 502);
+  assert.equal(res.headers.location, undefined);
+});
+
+test("view as: a replica passes the token on and the owner checks it again", async () => {
+  const { rs: [a, b] } = await cluster(2);
+  for (const r of [a, b]) {
+    r.admins = new Set([ALICE]);
+    r.recordViewAs = async () => {};
+    r.users.add(ALICE); r.users.add(BOB);
+  }
+  // b's view-as key is the same (both derive it from the same JARVIS_CC_TOKEN)
+  const token = tokenOf(await startViewAs(a, ALICE, BOB));
+  const owner = ownerOf(userKey(BOB), ["127.0.0.1", "127.0.0.2"]);
+  const entry = owner === "127.0.0.1" ? b : a;
+  const res = await get(entry, `/api/x?jarvis_view_as=${token}`, auth(ALICE));
+  assert.equal(res.status, 200);
+  assert.equal(res.json.headers["x-jarvis-user"], BOB);
+  assert.equal(res.json.headers["x-jarvis-viewer"], ALICE);
+  assert.equal(res.json.url, "/api/x");
+  // and refuses a stolen token there as well
+  assert.equal((await get(entry, `/api/x?jarvis_view_as=${token}`, auth(BOB))).status, 403);
+});

@@ -21,7 +21,8 @@ const server = http.createServer((req, res) => {
   });
 });
 server.on("upgrade", (req, socket) => {
-  socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: test\r\nConnection: Upgrade\r\nX-Jarvis-User-Seen: " + (req.headers["x-jarvis-user"] || "") + "\r\n\r\n");
+  socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: test\r\nConnection: Upgrade\r\nX-Jarvis-User-Seen: " + (req.headers["x-jarvis-user"] || "") +
+    "\r\nX-Jarvis-Viewer-Seen: " + (req.headers["x-jarvis-viewer"] || "") + "\r\nX-Url-Seen: " + req.url + "\r\n\r\n");
   socket.on("data", (d) => socket.write(d));
 });
 if (process.env.FAKE_SLOW_START) await new Promise((r) => setTimeout(r, Number(process.env.FAKE_SLOW_START)));

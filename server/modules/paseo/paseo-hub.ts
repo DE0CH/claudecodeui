@@ -233,8 +233,28 @@ class PaseoHub extends EventEmitter {
   }
 
   /** Creates a conversation (CloudCLI's session row) and starts its first turn. */
-  async createConversation(text: string, clientMessageId: string, attachments: PaseoAttachments = {}): Promise<string> {
+  /**
+   * A new conversation with its first message. `beforeSend` (view as: the record of the send) runs once the
+   * conversation exists and before anything is sent; if it throws, the empty conversation is removed for good and the
+   * error passed on.
+   */
+  async createConversation(
+    text: string,
+    clientMessageId: string,
+    attachments: PaseoAttachments = {},
+    beforeSend?: (sessionId: string) => Promise<void>,
+  ): Promise<string> {
     const created = await sessionsService.createAppSession('claude', this.workspacePath, text);
+    if (beforeSend) {
+      try {
+        await beforeSend(created.sessionId);
+      } catch (error) {
+        await sessionsService
+          .deleteOrArchiveSessionById(created.sessionId, { force: true, deletedFromDisk: true })
+          .catch((e: unknown) => console.error('[paseo] removing an unsent conversation failed', e));
+        throw error;
+      }
+    }
     this.timelines.set(created.sessionId, new SessionTimeline((value) => sentPathToWorkspaceRelative(value)));
     await this.send(created.sessionId, text, clientMessageId, attachments);
     return created.sessionId;

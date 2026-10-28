@@ -45,6 +45,21 @@
 // the sandbox's view, and the UI's file cards read that copy. Any replica serves it; no CloudCLI process is involved.
 // Symlinks are refused; a file that is not there is skipped (SendUserFile reports it itself).
 //
+// View as (Deyao, 2026-10-28; DE0CH/jarvis3 docs/CHAT.md "View as"): an admin sees the app exactly as a staff member
+// does, in a tab of its own. POST /api/jarvis/view-as (form field `user`, from the operator page's 「View as」, same
+// origin only) by someone in config `admins` records the start in the operator page's History (web POST
+// /internal/cc/view-as; nothing opens if it can't be recorded) and answers 303 to /#jarvis-view-as=<token>. The token
+// (HMAC with a key derived from JARVIS_CC_TOKEN, so every replica checks it; VIEW_AS_HOURS long) names the admin, the
+// person and the view's id; the page keeps it in that tab only (sessionStorage) and sends it as ?jarvis_view_as= (or
+// the X-Jarvis-View-As header) on every API call, file link and socket. The router honours it only when the request's
+// own Access identity is that admin, still in `admins`, and the person is still a user; anything else with a token is
+// 403 (a non-admin can never become anyone). Honoured, the request goes to the PERSON's process as them
+// (X-Jarvis-User), with X-Jarvis-Viewer / X-Jarvis-Viewer-Session naming the admin and the view (set here only, a
+// client's copies are dropped), and the token taken off the URL. While viewing: GET/HEAD anything, POST only
+// /api/jarvis/warm and /api/assets/files (an upload for a message), WebSocket only /paseo-ws, whose bridge
+// (server/modules/paseo) records every message and new conversation sent as the person before sending it and refuses
+// renames and deletes. Peers re-check the token like any request.
+//
 // No dependencies beyond Node's standard library.
 //
 // Environment (defaults in brackets):
@@ -66,8 +81,9 @@
 //   JARVIS_UID [1000]                 owner of folders the router makes when it runs as root
 //   JARVIS_SENT_FILES_TOKEN [unset]   bearer of POST /__jarvis/sent-files/snapshot (egress's sent-files route); unset: off
 //   JARVIS_JUICEFS [/usr/local/bin/juicefs]   the client used for copy-on-write clones (absent: a plain copy)
+//   JARVIS_VIEW_AS_HOURS [12]         how long a view-as token lasts
 //   passed to every process: DATABASE_URL, JWT_SECRET, JARVIS_WEB_URL, JARVIS_CC_TOKEN (plus the per-user contract env)
-import { createHash, createPublicKey, timingSafeEqual, verify as cryptoVerify } from "node:crypto";
+import { createHash, createHmac, createPublicKey, randomUUID, timingSafeEqual, verify as cryptoVerify } from "node:crypto";
 import { execFile, spawn as nodeSpawn } from "node:child_process";
 import { promises as dns } from "node:dns";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -84,6 +100,13 @@ const PEER_PATH = "/__jarvis/peer/holds";
 const SENT_FILES_PATH = "/__jarvis/sent-files/snapshot";
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+export const VIEW_AS_PATH = "/api/jarvis/view-as";
+export const VIEW_AS_PARAM = "jarvis_view_as";
+const VIEW_AS_HEADER = "x-jarvis-view-as";
+const VIEWER_HEADER = "x-jarvis-viewer";
+const VIEWER_SESSION_HEADER = "x-jarvis-viewer-session";
+/** The only writes while viewing as someone (method, path): warming and an upload for a message sent with the override. */
+const VIEW_AS_WRITES = [["POST", "/api/jarvis/warm"], ["POST", "/api/assets/files"]];
 // Paths that always need a signed-in staff member; keep in step with the Access app's destinations and cloudflared's
 // access-required ingress rule (DE0CH/YYC news-stream/deploy/cloudflare/tofu: access.tf staff_ai, tunnels.tf yyc_ai)
 export const SIGNED_IN_PATHS = ["/api", "/paseo-ws", "/ws", "/ops"];
@@ -134,6 +157,48 @@ async function hasExpiredDeletions(email) {
 /** jarvis3's userKey: "u" + the first 24 hex characters of sha256(lowercased, trimmed email). */
 export function userKey(email) {
   return "u" + createHash("sha256").update(String(email).trim().toLowerCase()).digest("hex").slice(0, 24);
+}
+
+/** A view-as token: base64url(JSON {a: admin, u: person, s: view id, e: expiry in s}).base64url(HMAC-SHA256). */
+export function signViewAs(key, claims) {
+  const body = Buffer.from(JSON.stringify(claims)).toString("base64url");
+  return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
+}
+
+/** The claims of a valid, unexpired view-as token, else null. */
+export function readViewAs(key, token, nowMs = Date.now()) {
+  if (!key || typeof token !== "string" || token.length > 2048) return null;
+  const [body, sig, extra] = token.split(".");
+  if (!body || !sig || extra !== undefined) return null;
+  const want = createHmac("sha256", key).update(body).digest();
+  const given = Buffer.from(sig, "base64url");
+  if (given.length !== want.length || !timingSafeEqual(given, want)) return null;
+  let c;
+  try { c = JSON.parse(Buffer.from(body, "base64url").toString("utf8")); } catch { return null; }
+  if (!c || typeof c.a !== "string" || typeof c.u !== "string" || typeof c.s !== "string" || typeof c.e !== "number") return null;
+  if (c.e * 1000 <= nowMs) return null;
+  return c;
+}
+
+/** The view-as token a request carries (?jarvis_view_as= or X-Jarvis-View-As), or "". */
+export function viewAsTokenOf(req) {
+  const h = req.headers[VIEW_AS_HEADER];
+  if (typeof h === "string" && h) return h;
+  const url = req.url || "/";
+  if (!url.includes(VIEW_AS_PARAM)) return "";
+  try { return new URL(url, "http://x").searchParams.get(VIEW_AS_PARAM) || ""; } catch { return ""; }
+}
+
+/** The URL without its ?jarvis_view_as= (unchanged when it has none). */
+export function withoutViewAs(url) {
+  if (!url.includes(VIEW_AS_PARAM)) return url;
+  const q = url.indexOf("?");
+  if (q < 0) return url;
+  const params = new URLSearchParams(url.slice(q + 1));
+  if (!params.has(VIEW_AS_PARAM)) return url;
+  params.delete(VIEW_AS_PARAM);
+  const rest = params.toString();
+  return url.slice(0, q) + (rest ? `?${rest}` : "");
 }
 
 /** The Access token of a request: the Cf-Access-Jwt-Assertion header, else the CF_Authorization cookie. */
@@ -221,6 +286,12 @@ export class AccessVerifier {
     return { given_name: oidc.given_name ?? j.given_name, name: oidc.name ?? j.name };
   }
 
+  /** A first name already looked up for `email` (another person's, while an admin views as them), else null. */
+  cachedFirstName(email) {
+    const hit = this.#names.get(email);
+    return hit && hit.until > this.#now() ? hit.name : null;
+  }
+
   /** The verified claims; throws on anything but a valid, current token for this app. */
   async #verify(token) {
     const parts = String(token).split(".");
@@ -267,6 +338,10 @@ export class TeamsVerifier {
   async email(token) { return this.#pick(token).email(token); }
   async firstName(token, email) {
     try { return await this.#pick(token).firstName(token, email); } catch { return null; }
+  }
+  cachedFirstName(email) {
+    for (const v of this.#by.values()) { const n = v.cachedFirstName(email); if (n) return n; }
+    return null;
   }
 }
 
@@ -340,12 +415,23 @@ function readLimited(req, max) {
   });
 }
 
-/** Request headers for the user's process: hop-by-hop headers dropped, X-Jarvis-User set by us only. */
-function upstreamHeaders(req, email, extra = {}) {
+/**
+ * Request headers for the user's process (`email` set) or another replica (`email` null): hop-by-hop headers dropped,
+ * X-Jarvis-User and the viewer headers set by us only. A replica gets the view-as token as sent (it checks it again);
+ * the process gets the viewer instead.
+ */
+function upstreamHeaders(req, email, extra = {}, viewer = null) {
   const h = { ...req.headers };
-  for (const k of ["x-jarvis-user", HOP, PEER_AUTH, "proxy-connection", "keep-alive", "te", "trailer"]) delete h[k];
+  for (const k of ["x-jarvis-user", VIEWER_HEADER, VIEWER_SESSION_HEADER, HOP, PEER_AUTH, "proxy-connection", "keep-alive", "te", "trailer"]) delete h[k];
   if (!req.headers.upgrade) delete h.connection;
-  if (email) h["x-jarvis-user"] = email;
+  if (email) {
+    h["x-jarvis-user"] = email;
+    delete h[VIEW_AS_HEADER];
+    if (viewer) {
+      h[VIEWER_HEADER] = viewer.a;
+      h[VIEWER_SESSION_HEADER] = viewer.s;
+    }
+  }
   return { ...h, ...extra };
 }
 
@@ -534,6 +620,12 @@ export class Router {
     this.juicefs = o.juicefs ?? process.env.JARVIS_JUICEFS ?? "/usr/local/bin/juicefs";
     // The native app's sign-in callback scheme (GET /api/jarvis/app-signin); unset = the endpoint is off.
     this.appScheme = o.appScheme ?? process.env.JARVIS_APP_SCHEME ?? "";
+    // View as (top of this file): the token key (none without JARVIS_CC_TOKEN: view-as is off), lifetime, and how a
+    // start is recorded (web's /internal/cc/view-as; tests pass their own)
+    const viewAsSecret = o.viewAsSecret ?? this.ccToken;
+    this.viewAsKey = viewAsSecret ? createHash("sha256").update(`jarvis-view-as|${viewAsSecret}`).digest() : null;
+    this.viewAsTtlMs = o.viewAsTtlMs ?? Number(process.env.JARVIS_VIEW_AS_HOURS || 12) * 3600_000;
+    this.recordViewAs = o.recordViewAs ?? ((event) => this.#postViewAs(event));
     // The signed-out shell (top of this file); null or a folder without index.html = off (401 as for any other path)
     const dist = o.distDir !== undefined ? o.distDir : (process.env.JARVIS_UI_DIST || path.join(HERE, "..", "dist"));
     this.distDir = dist && existsSync(path.join(dist, "index.html")) ? path.resolve(dist) : null;
@@ -778,13 +870,25 @@ export class Router {
     return at > 0 && this.domains.has(e.slice(at + 1));
   }
 
+  /**
+   * Who a request is: {status, email, actor, viewAs}. `actor` is the Access identity; `email` is whose data it reaches:
+   * the actor, or the person an admin views as (a valid view-as token of this admin: top of this file). A token that
+   * isn't the caller's own, has expired, or comes from a non-admin is 403 (`viewAsRefused`), never a fall-back.
+   */
   async #identify(req) {
     const token = accessToken(req);
     if (!token) return { status: 401 };
     let email;
     try { email = await this.verifier.email(token); } catch { return { status: 401 }; }
     if (!this.allowed(email)) return { status: 403, email };
-    return { status: 200, email };
+    const viewToken = viewAsTokenOf(req);
+    if (!viewToken) return { status: 200, email, actor: email, viewAs: null };
+    const claims = this.admins.has(email) ? readViewAs(this.viewAsKey, viewToken, this.now()) : null;
+    if (!claims || claims.a !== email || !this.allowed(claims.u)) {
+      log("warn", "view-as refused", { user: userKey(email), admin: this.admins.has(email) });
+      return { status: 403, email, viewAsRefused: true };
+    }
+    return { status: 200, email: claims.u, actor: email, viewAs: claims };
   }
 
   async #process(email) {
@@ -851,9 +955,15 @@ export class Router {
       if (await this.#shell(req, res)) return;
     }
     if (who.status === 401) return page(res, 401, "未登入", "請重新整理頁面登入。Not signed in: reload the page to sign in.");
+    if (who.status === 403 && who.viewAsRefused) {
+      res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ success: false, error: { code: "VIEW_AS_REFUSED", message: "This view-as link is not valid for this account, or has expired." } }));
+    }
     if (who.status === 403) return page(res, 403, "沒有權限", `${who.email} 沒有使用 YYC AI 的權限。This account is not allowed.`);
-    if (url === "/ops" || url.startsWith("/ops/") || url.startsWith("/ops?")) return this.#ops(req, res, who.email);
-    if (url === "/api/jarvis/me" || url.startsWith("/api/jarvis/me?")) return this.#me(req, res, who.email);
+    if (url === "/ops" || url.startsWith("/ops/") || url.startsWith("/ops?")) return this.#ops(req, res, who.actor);
+    const pathname = url.split("?")[0];
+    if (pathname === VIEW_AS_PATH) return this.#viewAsStart(req, res, who.actor);
+    if (pathname === "/api/jarvis/me") return this.#me(req, res, who);
     if (url === "/api/jarvis/app-signin" || url.startsWith("/api/jarvis/app-signin?")) return this.#appSignin(req, res);
     if (url === "/api/jarvis/signin" || url.startsWith("/api/jarvis/signin?")) return this.#signin(req, res);
     // A bare signed-in prefix opened as a page lands on the app: Access sends a sign-in that started from its own login
@@ -861,6 +971,11 @@ export class Router {
     if ((req.method === "GET" || req.method === "HEAD") && ["/api", "/api/", "/ws", "/paseo-ws"].includes(url)) {
       res.writeHead(302, { location: "/", "cache-control": "no-store" });
       return res.end();
+    }
+    if (who.viewAs && !["GET", "HEAD", "OPTIONS"].includes(req.method) && !VIEW_AS_WRITES.some(([m, p]) => m === req.method && p === pathname)) {
+      req.resume();
+      res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ success: false, error: { code: "VIEW_AS_READ_ONLY", message: "Read-only while viewing as someone else." } }));
     }
     const route = await this.#route(req, who.email);
     if (route.peer) return this.#forwardHttp(req, res, route.peer, route.hop, who.email);
@@ -876,7 +991,7 @@ export class Router {
     p.touch();
     let finished = false;
     const done = () => { if (!finished) { finished = true; p.inflight--; p.touch(); } };
-    const up = http.request({ host: "127.0.0.1", port: p.port, method: req.method, path: url, headers: upstreamHeaders(req, who.email) }, (ures) => {
+    const up = http.request({ host: "127.0.0.1", port: p.port, method: req.method, path: withoutViewAs(url), headers: upstreamHeaders(req, who.email, {}, who.viewAs) }, (ures) => {
       res.writeHead(ures.statusCode || 502, ures.statusMessage, responseHeaders(ures));
       ures.on("data", () => p.touch());
       ures.pipe(res);
@@ -893,11 +1008,59 @@ export class Router {
     req.pipe(up);
   }
 
-  /** GET /api/jarvis/me: {firstName} for the empty chat's greeting (answered here, no CloudCLI process needed). */
-  async #me(req, res, email) {
-    const firstName = await this.verifier.firstName(accessToken(req), email).catch(() => null);
+  /**
+   * GET /api/jarvis/me: {firstName} for the empty chat's greeting (answered here, no CloudCLI process needed). Viewing
+   * as someone: their first name if this replica has seen it, and viewAs {user, expiresAt}.
+   */
+  async #me(req, res, who) {
+    const body = who.viewAs
+      ? { firstName: this.verifier.cachedFirstName?.(who.email) ?? null, viewAs: { user: who.email, expiresAt: new Date(who.viewAs.e * 1000).toISOString() } }
+      : { firstName: await this.verifier.firstName(accessToken(req), who.email).catch(() => null) };
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-    res.end(JSON.stringify({ firstName }));
+    res.end(JSON.stringify(body));
+  }
+
+  /**
+   * POST /api/jarvis/view-as (form `user`): an admin starts viewing the app as that person (top of this file). Same
+   * origin only (the operator page's form); recorded in the operator page's History before anything opens.
+   */
+  async #viewAsStart(req, res, actor) {
+    const refuse = (status, text) => { req.resume(); return page(res, status, "View as", text); };
+    if (!this.admins.has(actor)) {
+      log("warn", "view-as start refused: not an admin", { user: userKey(actor) });
+      return refuse(403, "Only an admin of this instance can view as someone else.");
+    }
+    if (req.method !== "POST") return refuse(405, "Start it from the operator page.");
+    const site = String(req.headers["sec-fetch-site"] || "");
+    let originHost = "";
+    try { originHost = new URL(String(req.headers.origin || "")).host; } catch { /* none */ }
+    if (site ? site !== "same-origin" : originHost !== String(req.headers.host || "")) return refuse(403, "Start it from the operator page.");
+    if (!this.viewAsKey) return refuse(503, "View as is off (no JARVIS_CC_TOKEN).");
+    let user = "";
+    try { user = String(new URLSearchParams(await readLimited(req, 4096)).get("user") || "").trim().toLowerCase(); } catch { /* bad body */ }
+    if (!user || user.startsWith("@") || !this.allowed(user)) return page(res, 400, "View as", "That address is not a user of this instance.");
+    const claims = { a: actor, u: user, s: randomUUID(), e: Math.floor((this.now() + this.viewAsTtlMs) / 1000) };
+    try {
+      await this.recordViewAs({ event: "start", admin: actor, user, session: claims.s });
+    } catch (e) {
+      log("warn", "view-as start not recorded", { error: String(e.message || e) });
+      return page(res, 502, "View as", "The view could not be recorded in the operator page's History, so it was not opened. Try again in a moment.");
+    }
+    log("info", "view-as started", { admin: userKey(actor), user: userKey(user), session: claims.s });
+    res.writeHead(303, { location: `/#jarvis-view-as=${signViewAs(this.viewAsKey, claims)}`, "cache-control": "no-store", "referrer-policy": "no-referrer" });
+    res.end();
+  }
+
+  /** Records a view-as event in web's ops_events (POST /internal/cc/view-as); throws when it isn't recorded. */
+  async #postViewAs(event) {
+    if (!this.webUrl || !this.ccToken) throw new Error("JARVIS_WEB_URL / JARVIS_CC_TOKEN are not set");
+    const r = await fetch(new URL("/internal/cc/view-as", this.webUrl), {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.ccToken}`, "content-type": "application/json" },
+      body: JSON.stringify(event),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!r.ok) throw new Error(`web answered ${r.status}`);
   }
 
   /**
@@ -1014,6 +1177,8 @@ export class Router {
     socket.on("error", () => {});
     const who = await this.#identify(req);
     if (who.status !== 200) return rejectUpgrade(socket, who.status, "not allowed\n");
+    // viewing as someone: only the Paseo socket, whose bridge records what is sent (top of this file)
+    if (who.viewAs && (req.url || "").split("?")[0] !== "/paseo-ws") return rejectUpgrade(socket, 403, "read-only while viewing as someone else\n");
     const route = await this.#route(req, who.email);
     const owner = route.peer ?? null;
     let target, p = null;
@@ -1021,9 +1186,9 @@ export class Router {
       target = { host: owner, port: this.port, headers: { ...upstreamHeaders(req, null), [HOP]: route.hop } };
     } else {
       try { p = await this.#process(who.email); } catch { return rejectUpgrade(socket, 503, "busy\n"); }
-      target = { host: "127.0.0.1", port: p.port, headers: upstreamHeaders(req, who.email) };
+      target = { host: "127.0.0.1", port: p.port, headers: upstreamHeaders(req, who.email, {}, who.viewAs), path: withoutViewAs(req.url || "/") };
     }
-    const up = http.request({ ...target, method: req.method, path: req.url });
+    const up = http.request({ path: req.url, ...target, method: req.method });
     up.on("upgrade", (ures, usock, uhead) => {
       let raw = `HTTP/1.1 101 Switching Protocols\r\n`;
       for (let i = 0; i < ures.rawHeaders.length; i += 2) raw += `${ures.rawHeaders[i]}: ${ures.rawHeaders[i + 1]}\r\n`;
