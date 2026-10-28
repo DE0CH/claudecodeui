@@ -742,6 +742,12 @@ export class Router {
     if (url === "/api/jarvis/me" || url.startsWith("/api/jarvis/me?")) return this.#me(req, res, who.email);
     if (url === "/api/jarvis/app-signin" || url.startsWith("/api/jarvis/app-signin?")) return this.#appSignin(req, res);
     if (url === "/api/jarvis/signin" || url.startsWith("/api/jarvis/signin?")) return this.#signin(req, res);
+    // A bare signed-in prefix opened as a page lands on the app: Access sends a sign-in that started from its own login
+    // page (not from 「登入」) back to the app's first path, /api, which CloudCLI answers 404 (Deyao, 2026-10-28)
+    if ((req.method === "GET" || req.method === "HEAD") && ["/api", "/api/", "/ws", "/paseo-ws"].includes(url)) {
+      res.writeHead(302, { location: "/", "cache-control": "no-store" });
+      return res.end();
+    }
     const route = await this.#route(req, who.email);
     if (route.peer) return this.#forwardHttp(req, res, route.peer, route.hop, who.email);
     let p;

@@ -573,6 +573,12 @@ test("signed out: only the built shell (index marked signed out, files of dist/)
   for (const next of ["https://evil.example/", "//evil.example/", "/\\evil.example", "/api/jarvis/app-signin?state=abcdefghijklmnop", ""]) {
     assert.equal((await get(r, `/api/jarvis/signin?next=${encodeURIComponent(next)}`, auth(ALICE))).headers.location, "/", next);
   }
+  // a bare /api (where Access's own login page returns to) lands on the app
+  for (const bare of ["/api", "/api/", "/paseo-ws"]) {
+    const res = await get(r, bare, auth(ALICE));
+    assert.equal(res.status, 302, bare);
+    assert.equal(res.headers.location, "/", bare);
+  }
   assert.equal(r.procs.size, 0, "no CloudCLI process for the sign-in either");
   assert.ok(needsSignIn("/api") && needsSignIn("/paseo-ws") && needsSignIn("/ops/x") && !needsSignIn("/apix") && !needsSignIn("/"));
 });
