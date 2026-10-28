@@ -35,6 +35,7 @@ jobs:
           src/i18n src/provider-selection src/sidebar-nav src/hooks/use-settings/storage.test.ts
           src/tool-calls src/agent-stream/turn-collapse src/composer/actions.test.ts
           src/command-center src/keyboard src/components/sidebar src/composer/input/state.test.ts
+          src/workspace-tabs
       - name: Protocol endpoint tests
         working-directory: paseo/packages/protocol
         run: npx vitest run src/daemon-endpoints.test.ts
