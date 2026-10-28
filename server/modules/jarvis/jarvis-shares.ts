@@ -38,7 +38,7 @@ import {
   jarvisUntitledName,
 } from '@/modules/jarvis/jarvis-config.js';
 import { readSentFiles, sentPathToWorkspaceRelative, transcriptPathFor } from '@/modules/jarvis/jarvis-sent-files.js';
-import { SessionTimeline, type PaseoTimelineRow } from '@/modules/paseo/index.js';
+import type { PaseoTimelineRow } from '@/modules/paseo/index.js';
 import type { NormalizedMessage } from '@/shared/types.js';
 
 export class ShareError extends Error {
@@ -347,6 +347,8 @@ export async function shareView(id: string): Promise<{
   } catch {
     throw new ShareError(404, 'SHARE_NOT_FOUND', 'This link is no longer available.');
   }
+  // loaded when used: the paseo module imports the providers, which import this module (as in defaultDeps)
+  const { SessionTimeline } = await import('@/modules/paseo/index.js');
   const timeline = new SessionTimeline((value) => sentPathToWorkspaceRelative(value));
   for (const message of Array.isArray(messages) ? messages : []) timeline.apply(message);
   return {
