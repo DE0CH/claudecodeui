@@ -4,7 +4,8 @@
  *   POST   /api/jarvis/sessions/:sessionId/shares     (owner)  → 201 {id, url, createdAt}; 400 NOTHING_TO_SHARE
  *   GET    /api/jarvis/sessions/:sessionId/shares     (owner)  → {shares: [{id, url, createdAt}]} its live links
  *   DELETE /api/jarvis/shares/:id                     (owner)  → 204; anyone else's or a revoked id → 404
- *   GET    /api/jarvis/shares/:id                     (staff)  → {id, title, ownerName, isOwner, createdAt, messages, files}
+ *   GET    /api/jarvis/shares/:id                     (staff)  → {id, title, ownerName, isOwner, createdAt, timeline}
+ *                                                               (timeline: the chat view's rows, paseo-timeline.ts)
  *   GET    /api/jarvis/shares/:id/files/raw?path=REL  (staff)  → the bytes of a file the page may hand out
  *                                                                (`inline=1` shows images and PDFs)
  *   POST   /api/jarvis/shares/:id/continue            (staff)  → 201 {sessionId}: a new conversation of the caller's

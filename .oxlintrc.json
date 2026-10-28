@@ -305,6 +305,12 @@
               {
                 "to": { "type": "backend-module" },
                 "allow": { "to": { "internalPath": ["index", "index.{js,mjs,cjs,ts,tsx}"] } }
+              },
+              // a module's test helpers (database/testing.ts: releaseTestDatabase) are for tests, not in its barrel
+              {
+                "from": { "type": "backend-module" },
+                "to": { "type": "backend-module" },
+                "allow": { "to": { "internalPath": ["testing.{js,ts}"] } }
               }
             ]
           }

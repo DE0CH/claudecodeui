@@ -166,8 +166,11 @@ test('share, view as another user, download only sent files and uploads, continu
     assert.equal(view.title, '季度報告');
     assert.equal(view.ownerName, 'owner');
     assert.equal(view.isOwner, false);
-    assert.equal(view.messages.length, 4);
-    assert.deepEqual([...view.files].sort(), ['report.pdf', 'uploads/photo.png']);
+    // the history as the chat view's timeline rows, the user's image included
+    const items = view.timeline.map((r) => r.item);
+    assert.deepEqual(items.map((i) => i.type), ['user_message', 'tool_call', 'assistant_message', 'user_message']);
+    assert.deepEqual((items[0] as { images?: unknown }).images, [{ url: 'data:image/png;base64,AAAA', mimeType: 'image/png' }]);
+    assert.ok(!('messages' in view) && !('files' in view));
     // the viewer can't list or revoke the owner's links
     assert.deepEqual(await listShares(sessionId), []);
     await assert.rejects(revokeShare(link.id), { status: 404 });
@@ -233,7 +236,7 @@ test('nothing to share before an answer; a running turn is not in the link; dele
 
     const link = await createShare(sessionId, deps(true));
     const view = await shareView(link.id);
-    assert.deepEqual((view.messages as Array<{ id: string }>).map((m) => m.id), ['m1', 'm2', 'm3']);
+    assert.deepEqual(view.timeline.map((r) => r.item.type), ['user_message', 'tool_call', 'assistant_message']);
     const transcript = await readFile(path.join((await shareDirOf(link.id))!, 'transcript.jsonl'), 'utf8');
     assert.ok(!transcript.includes('再改一下'));
 

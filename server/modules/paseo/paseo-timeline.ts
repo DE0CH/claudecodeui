@@ -17,8 +17,14 @@ import {
 } from './vendor/claude-tool-call-mapper.js';
 import type { ToolCallTimelineItem } from './vendor/types.js';
 
+/** An image the user attached, as the app shows it on their message (a data: URL, as Claude Code's transcript keeps it). */
+export type UserImage = { url: string; mimeType: string };
+
+/** A file the user attached (saved in the conversation's /workspace/uploads/), as an uploaded-file attachment pill. */
+export type UserFile = { type: 'uploaded_file'; id: string; fileName: string; mimeType: string; size: number; path: string };
+
 export type PaseoTimelineItem =
-  | { type: 'user_message'; text: string; messageId?: string; clientMessageId?: string }
+  | { type: 'user_message'; text: string; messageId?: string; clientMessageId?: string; images?: UserImage[]; attachments?: UserFile[] }
   | { type: 'assistant_message'; text: string; messageId?: string }
   | { type: 'reasoning'; text: string }
   | ToolCallTimelineItem
@@ -89,6 +95,49 @@ export function sentFilesOf(output: unknown, toRelative: ToRelativePath): SentFi
   return files;
 }
 
+/** The user's images in a history message (Claude Code keeps them as data: URLs, CloudCLI passes them on). */
+export function userImagesOf(value: unknown): UserImage[] {
+  if (!Array.isArray(value)) return [];
+  const images: UserImage[] = [];
+  for (const raw of value) {
+    const data = (raw as { data?: unknown } | null)?.data;
+    if (typeof data !== 'string') continue;
+    const m = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(data);
+    if (m) images.push({ url: data, mimeType: m[1]!.toLowerCase() });
+  }
+  return images;
+}
+
+const FILE_TYPES: Record<string, string> = {
+  pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', zip: 'application/zip',
+};
+
+/** The user's files in a history message (CloudCLI's parsed <files_input> block), with paths the file routes accept. */
+export function userFilesOf(value: unknown, toRelative: ToRelativePath): UserFile[] {
+  if (!Array.isArray(value)) return [];
+  const files: UserFile[] = [];
+  for (const raw of value) {
+    const entry = raw as { path?: unknown; name?: unknown; mimeType?: unknown; size?: unknown } | null;
+    const relative = toRelative(entry?.path);
+    if (!relative) continue;
+    const fileName = typeof entry?.name === 'string' && entry.name ? entry.name : relative.split('/').pop() || relative;
+    const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
+    files.push({
+      type: 'uploaded_file',
+      id: relative,
+      fileName,
+      mimeType: typeof entry?.mimeType === 'string' && entry.mimeType ? entry.mimeType : FILE_TYPES[extension] ?? 'application/octet-stream',
+      size: typeof entry?.size === 'number' && entry.size >= 0 ? Math.floor(entry.size) : 0,
+      path: relative,
+    });
+  }
+  return files;
+}
+
 function textOf(message: NormalizedMessage): string {
   if (typeof message.content === 'string') return message.content;
   if (typeof message.text === 'string') return message.text;
@@ -126,9 +175,18 @@ export class SessionTimeline {
     switch (message.kind) {
       case 'text': {
         const text = textOf(message);
-        if (!text.trim()) return [];
+        const hasAttachments = message.role === 'user' && (userImagesOf(message.images).length > 0 || Array.isArray(message.files) && message.files.length > 0);
+        if (!text.trim() && !hasAttachments) return [];
         if (message.role === 'user') {
-          return [this.push({ type: 'user_message', text, messageId: message.transcriptAnchorId ?? message.id }, timestamp, turnId)];
+          const images = userImagesOf(message.images);
+          const attachments = userFilesOf(message.files, this.toRelative);
+          return [this.push({
+            type: 'user_message',
+            text,
+            messageId: message.transcriptAnchorId ?? message.id,
+            ...(images.length ? { images } : {}),
+            ...(attachments.length ? { attachments } : {}),
+          }, timestamp, turnId)];
         }
         return [this.push({ type: 'assistant_message', text, messageId: message.transcriptAnchorId ?? message.id }, timestamp, turnId)];
       }

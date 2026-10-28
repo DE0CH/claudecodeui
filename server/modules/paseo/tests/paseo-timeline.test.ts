@@ -32,6 +32,37 @@ describe('SessionTimeline', () => {
     assert.equal(timeline.maxSeq, 3);
   });
 
+  it("keeps the user's images and files on their message, as the history has them", () => {
+    const timeline = new SessionTimeline(toRelative);
+    timeline.apply(message({
+      kind: 'text',
+      role: 'user',
+      content: 'look',
+      images: [{ data: 'data:image/png;base64,AAAA' }, { data: 'https://not-a-data-url' }],
+      files: [
+        { path: '/workspace/uploads/brief.pdf', name: 'brief.pdf' },
+        { path: '/etc/passwd', name: 'passwd' },
+      ],
+    }));
+    // an image-only message still shows
+    timeline.apply(message({ kind: 'text', role: 'user', content: '', images: [{ data: 'data:image/jpeg;base64,BBBB' }] }));
+    assert.deepEqual(timeline.rows.map((row) => row.item), [
+      {
+        type: 'user_message',
+        text: 'look',
+        messageId: (timeline.rows[0]!.item as { messageId?: string }).messageId,
+        images: [{ url: 'data:image/png;base64,AAAA', mimeType: 'image/png' }],
+        attachments: [{ type: 'uploaded_file', id: 'uploads/brief.pdf', fileName: 'brief.pdf', mimeType: 'application/pdf', size: 0, path: 'uploads/brief.pdf' }],
+      },
+      {
+        type: 'user_message',
+        text: '',
+        messageId: (timeline.rows[1]!.item as { messageId?: string }).messageId,
+        images: [{ url: 'data:image/jpeg;base64,BBBB', mimeType: 'image/jpeg' }],
+      },
+    ]);
+  });
+
   it('applies a message once, whether it comes from history or replay', () => {
     const timeline = new SessionTimeline(toRelative);
     const reply = message({ id: 'm1', kind: 'text', role: 'assistant', content: 'once' });

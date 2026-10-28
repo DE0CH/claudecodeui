@@ -112,4 +112,27 @@ describe('Paseo protocol replies', () => {
     assert.deepEqual(socket.sent.map((frame) => frame.message.type), ['agent_stream', 'yyc.sandbox_status']);
     for (const frame of socket.sent) expectValid(frame);
   });
+
+  it("streams a user message with its images and files as a valid frame", async () => {
+    socket.sent = [];
+    const timeline = new SessionTimeline((value) => (typeof value === 'string' && value.startsWith('/workspace/') ? value.slice(11) : null));
+    const rows = timeline.apply({
+      id: 'u1',
+      sessionId: 's1',
+      timestamp: '2026-10-26T10:00:00.000Z',
+      provider: 'claude',
+      kind: 'text',
+      role: 'user',
+      content: 'see attached',
+      images: [{ data: 'data:image/png;base64,AAAA' }],
+      files: [{ path: '/workspace/uploads/a.xlsx', name: 'a.xlsx', size: 12 }],
+    } as never);
+    paseoHub.emit('event', { type: 'timeline', sessionId: 's1', rows, epoch: timeline.epoch, turnId: 'turn-2' });
+    await flush();
+    assert.equal(socket.sent.length, 1);
+    expectValid(socket.sent[0]!);
+    const item = socket.sent[0]!.message.payload.event.item;
+    assert.equal(item.images[0].mimeType, 'image/png');
+    assert.equal(item.attachments[0].path, 'uploads/a.xlsx');
+  });
 });

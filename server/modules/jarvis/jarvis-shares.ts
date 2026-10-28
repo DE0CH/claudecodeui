@@ -8,7 +8,8 @@
  *   never show on an earlier link. Every share is a new link; each can be revoked on its own ("Stop sharing").
  * - **Audience**: instance users only. The whole site is behind Cloudflare Access and the router's `users` check, so
  *   a link opens only for signed-in staff; the id (128 random bits) is the only way to a share. Not public.
- * - **The shared page** is read-only: the owner's messages (with their images), tool steps and the sent-file cards.
+ * - **The shared page** is read-only and renders with the chat's own view (timeline rows, `shareView`): the owner's
+ *   messages with their images and files, tool steps, the sent-file cards.
  *   Downloads: the files Claude sent (SendUserFile) and the uploads, never other workspace files.
  * - **Continue conversation**: a new conversation of the viewer's with the snapshot's title, Claude Code's
  *   transcript (new session id and message ids, so Claude has the whole context) and every /workspace file. The
@@ -36,7 +37,9 @@ import {
   jarvisOwner,
   jarvisUntitledName,
 } from '@/modules/jarvis/jarvis-config.js';
-import { readSentFiles, transcriptPathFor } from '@/modules/jarvis/jarvis-sent-files.js';
+import { readSentFiles, sentPathToWorkspaceRelative, transcriptPathFor } from '@/modules/jarvis/jarvis-sent-files.js';
+import { SessionTimeline, type PaseoTimelineRow } from '@/modules/paseo/index.js';
+import type { NormalizedMessage } from '@/shared/types.js';
 
 export class ShareError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -323,31 +326,36 @@ async function requireShare(id: string): Promise<ShareRow> {
   return row;
 }
 
-/** The shared page: who shared it, when, its title, the frozen history and the files it may hand out. */
+/**
+ * The shared page: who shared it, when, its title, and the frozen history as the chat view's timeline rows (built by
+ * the same SessionTimeline a live conversation uses, so the page renders with the chat's own components). File paths
+ * in the rows are relative to the snapshot's /workspace; the page reads them through `/shares/:id/files/raw`, which
+ * hands out only the share's `files`.
+ */
 export async function shareView(id: string): Promise<{
   id: string;
   title: string;
   ownerName: string;
   isOwner: boolean;
   createdAt: string;
-  messages: unknown[];
-  files: string[];
+  timeline: PaseoTimelineRow[];
 }> {
   const row = await requireShare(id);
-  let messages: unknown[] = [];
+  let messages: NormalizedMessage[] = [];
   try {
     messages = JSON.parse(await readFile(path.join(row.dir, 'messages.json'), 'utf8'));
   } catch {
     throw new ShareError(404, 'SHARE_NOT_FOUND', 'This link is no longer available.');
   }
+  const timeline = new SessionTimeline((value) => sentPathToWorkspaceRelative(value));
+  for (const message of Array.isArray(messages) ? messages : []) timeline.apply(message);
   return {
     id: row.id,
     title: row.title,
     ownerName: row.owner_name,
     isOwner: row.owner === jarvisOwner(),
     createdAt: iso(row.created_at),
-    messages,
-    files: row.files,
+    timeline: timeline.rows,
   };
 }
 

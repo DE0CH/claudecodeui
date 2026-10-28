@@ -255,6 +255,11 @@ class PaseoHub extends EventEmitter {
         kind: 'text',
         role: 'user',
         content: text,
+        // the same images and files the history will show for this message (paseo-timeline.ts userImagesOf/userFilesOf)
+        images: (sent.images ?? []).map((image) => ({ data: `data:${image.mimeType};base64,${image.data}` })),
+        files: (sent.attachments ?? [])
+          .filter((attachment) => attachment.type === 'uploaded_file' && typeof attachment.path === 'string')
+          .map((attachment) => ({ path: attachment.path, name: attachment.fileName, mimeType: attachment.mimeType, size: attachment.size })),
       } as NormalizedMessage,
       turnId,
     );
