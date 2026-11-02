@@ -19,7 +19,9 @@
 // still need the token and `users`, checked here on every call.
 //
 // GET /api/jarvis/me is answered by the router too (no CloudCLI process): {firstName}, the Access identity's first
-// name or null, for the empty chat's greeting.
+// name or null, for the empty chat's greeting. /api/jarvis/relay too: the person's relay tokens for running Claude
+// Code on their own computer on this instance's models (Router #relay; jarvis3 docs/CLAUDE-CODE.md "Relay"; env
+// JARVIS_RELAY_URL, JARVIS_RELAY_ACCESS_ID, JARVIS_RELAY_ACCESS_SECRET).
 //
 // Several router replicas run side by side (stateless). Each person's process lives on one replica, picked by
 // rendezvous hashing over the ready replicas (a headless Service's DNS): a request that lands on another replica is
@@ -101,6 +103,7 @@ const SENT_FILES_PATH = "/__jarvis/sent-files/snapshot";
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 export const VIEW_AS_PATH = "/api/jarvis/view-as";
+export const RELAY_PATH = "/api/jarvis/relay";
 export const VIEW_AS_PARAM = "jarvis_view_as";
 const VIEW_AS_HEADER = "x-jarvis-view-as";
 const VIEWER_HEADER = "x-jarvis-viewer";
@@ -385,6 +388,29 @@ function page(res, status, title, text) {
   res.end(`<!doctype html><html lang="zh-HK"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body style="font-family:system-ui,sans-serif;padding:24px 16px;max-width:560px;margin:auto"><h1 style="font-size:20px">${title}</h1><p>${text}</p></body></html>`);
 }
 
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+/** The relay token page (Router #relay): plain, no script; forms post back to the same path. */
+export function relayPage({ owner, tokens, created, setup, product }) {
+  const when = (v) => (v ? esc(new Date(v).toISOString().slice(0, 16).replace("T", " ")) + " UTC" : "—");
+  const rows = tokens.map((t) => `<li style="border-top:1px solid #ddd;padding:10px 0;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+<span><b>${esc(t.label || "(no label)")}</b><br><small>建立 Created ${when(t.createdAt)} · 最後使用 Last used ${when(t.lastUsedAt)}</small></span>
+<form method="post" style="margin:0"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="${esc(t.id)}"><button>撤銷 Revoke</button></form></li>`).join("");
+  const fresh = created ? `<section style="border:2px solid #1A1A1E;padding:12px;margin:16px 0">
+<p><b>新權杖只會顯示這一次。This token is shown only once.</b> 在終端機貼上以下內容，便會以 ${esc(owner)} 的身份使用 Claude Code。Paste this in a terminal to run Claude Code as ${esc(owner)}:</p>
+<pre style="white-space:pre-wrap;word-break:break-all;background:#F4F4F5;padding:10px;font-size:13px">${esc(setup)}</pre></section>` : "";
+  return `<!doctype html><html lang="zh-HK"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><title>Claude Code relay</title></head>
+<body style="font-family:system-ui,sans-serif;padding:24px 16px;max-width:720px;margin:auto;color:#1A1A1E">
+<h1 style="font-size:20px">Claude Code relay</h1>
+<p>在自己的電腦上用 Claude Code，使用 ${esc(product)} 的模型；用量計入共用預算並記在你的名下（${esc(owner)}）。Run Claude Code on your own computer on ${esc(product)}'s models; usage counts toward the shared budget under your name.</p>
+${fresh}
+<form method="post" style="display:flex;gap:8px;flex-wrap:wrap;margin:16px 0"><input type="hidden" name="action" value="create">
+<input name="label" maxlength="80" placeholder="名稱 Label (e.g. MacBook)" style="flex:1;min-width:180px;padding:6px">
+<button>建立新權杖 New token</button></form>
+<ul style="list-style:none;padding:0;margin:0">${rows || "<li><small>未有權杖。No tokens yet.</small></li>"}</ul>
+</body></html>`;
+}
+
 function rejectUpgrade(socket, status, text) {
   if (socket.destroyed) return;
   socket.end(`HTTP/1.1 ${status} ${http.STATUS_CODES[status] || ""}\r\ncontent-type: text/plain\r\nconnection: close\r\ncontent-length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
@@ -596,6 +622,12 @@ export class Router {
     this.admins = new Set((this.config.admins ?? []).map((u) => String(u).trim().toLowerCase()));
     this.webUrl = o.webUrl ?? process.env.JARVIS_WEB_URL ?? "";
     this.ccToken = o.ccToken ?? process.env.JARVIS_CC_TOKEN ?? "";
+    // Relay tokens (jarvis3 docs/CLAUDE-CODE.md "Relay"; the page at RELAY_PATH): the relay host and the Access service
+    // token every relay client sends; no JARVIS_RELAY_URL = the page is off
+    this.relayUrl = String(o.relayUrl ?? process.env.JARVIS_RELAY_URL ?? "").replace(/\/$/, "");
+    this.relayAccessId = o.relayAccessId ?? process.env.JARVIS_RELAY_ACCESS_ID ?? "";
+    this.relayAccessSecret = o.relayAccessSecret ?? process.env.JARVIS_RELAY_ACCESS_SECRET ?? "";
+    this.relayTokens = o.relayTokens ?? ((body) => this.#postRelayTokens(body));
     this.serverEntry = o.serverEntry ?? process.env.JARVIS_UI_SERVER ?? path.join(HERE, "..", "dist-server", "server", "index.js");
     this.homeRoot = o.homeRoot ?? process.env.JARVIS_UI_HOME_ROOT ?? "/var/lib/cloudcli/home";
     this.jfsRoot = o.jfsRoot ?? process.env.JARVIS_JFS_ROOT ?? "/jfs";
@@ -963,6 +995,7 @@ export class Router {
     if (url === "/ops" || url.startsWith("/ops/") || url.startsWith("/ops?")) return this.#ops(req, res, who.actor);
     const pathname = url.split("?")[0];
     if (pathname === VIEW_AS_PATH) return this.#viewAsStart(req, res, who.actor);
+    if (pathname === RELAY_PATH) return this.#relay(req, res, who);
     if (pathname === "/api/jarvis/me") return this.#me(req, res, who);
     if (url === "/api/jarvis/app-signin" || url.startsWith("/api/jarvis/app-signin?")) return this.#appSignin(req, res);
     if (url === "/api/jarvis/signin" || url.startsWith("/api/jarvis/signin?")) return this.#signin(req, res);
@@ -1049,6 +1082,80 @@ export class Router {
     log("info", "view-as started", { admin: userKey(actor), user: userKey(user), session: claims.s });
     res.writeHead(303, { location: `/#jarvis-view-as=${signViewAs(this.viewAsKey, claims)}`, "cache-control": "no-store", "referrer-policy": "no-referrer" });
     res.end();
+  }
+
+  /**
+   * GET/POST /api/jarvis/relay: the signed-in person's relay tokens, for running Claude Code on their own computer on
+   * this instance's models (jarvis3 docs/CLAUDE-CODE.md "Relay"). GET lists them; POST (same-origin form) `action`
+   * create (`label`) shows the new token once with the setup lines, revoke (`id`) answers 303 back to the list. Never
+   * while viewing as someone.
+   */
+  async #relay(req, res, who) {
+    const refuse = (status, text) => { req.resume(); return page(res, status, "Claude Code relay", text); };
+    if (!this.relayUrl || !this.webUrl || !this.ccToken) return refuse(404, "The relay is not set up on this instance.");
+    if (who.viewAs) return refuse(403, "Not available while viewing as someone else.");
+    const owner = who.email;
+    let created = null;
+    if (req.method === "POST") {
+      const site = String(req.headers["sec-fetch-site"] || "");
+      let originHost = "";
+      try { originHost = new URL(String(req.headers.origin || "")).host; } catch { /* none */ }
+      if (site ? site !== "same-origin" : originHost !== String(req.headers.host || "")) return refuse(403, "Use the form on this page.");
+      let form;
+      try { form = new URLSearchParams(await readLimited(req, 4096)); } catch { return refuse(400, "Bad form."); }
+      const action = form.get("action");
+      try {
+        if (action === "revoke") {
+          await this.relayTokens({ owner, action: "revoke", id: String(form.get("id") || "") });
+          res.writeHead(303, { location: RELAY_PATH, "cache-control": "no-store" });
+          return res.end();
+        }
+        if (action !== "create") return page(res, 400, "Claude Code relay", "Unknown action.");
+        created = await this.relayTokens({ owner, action: "create", label: String(form.get("label") || "") });
+        log("info", "relay token created", { user: userKey(owner) });
+      } catch (e) {
+        return page(res, 502, "Claude Code relay", esc(String(e.message || e)));
+      }
+    } else if (req.method !== "GET" && req.method !== "HEAD") {
+      return refuse(405, "Method not allowed.");
+    }
+    let tokens = [];
+    try { tokens = (await this.relayTokens({ owner, action: "list" })).tokens ?? []; } catch (e) {
+      return page(res, 502, "Claude Code relay", esc(String(e.message || e)));
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" });
+    res.end(relayPage({ owner, tokens, created, setup: created ? this.#relaySetup(created.token) : null, product: this.productName }));
+  }
+
+  /** The shell lines that point Claude Code at the relay (the token page shows them once, with the new token). */
+  #relaySetup(token) {
+    const models = (this.config.models ?? []).map((m) => m.id);
+    const model = this.config.defaultModel ?? models[0] ?? "";
+    const ctx = (this.config.models ?? []).find((m) => m.id === model)?.contextWindow;
+    const q = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
+    return [
+      `export ANTHROPIC_BASE_URL=${q(`${this.relayUrl}/x/claude`)}`,
+      `export ANTHROPIC_AUTH_TOKEN=${q(token)}`,
+      `export ANTHROPIC_CUSTOM_HEADERS=$'CF-Access-Client-Id: ${this.relayAccessId}\\nCF-Access-Client-Secret: ${this.relayAccessSecret}'`,
+      `export ANTHROPIC_MODEL=${q(model)}`,
+      `export ANTHROPIC_SMALL_FAST_MODEL=${q(this.config.titleModel ?? model)}`,
+      ...(ctx ? [`export CLAUDE_CODE_MAX_CONTEXT_TOKENS=${ctx}`] : []),
+      `# models: ${models.join(", ")} (claude --model <id>)`,
+      "claude",
+    ].join("\n");
+  }
+
+  /** web's POST /internal/cc/relay-tokens; throws with web's error text when it answers otherwise than 200. */
+  async #postRelayTokens(body) {
+    const r = await fetch(new URL("/internal/cc/relay-tokens", this.webUrl), {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.ccToken}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5000),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `web answered ${r.status}`);
+    return j;
   }
 
   /** Records a view-as event in web's ops_events (POST /internal/cc/view-as); throws when it isn't recorded. */

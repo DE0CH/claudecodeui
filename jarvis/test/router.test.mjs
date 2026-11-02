@@ -768,3 +768,49 @@ test("view as: a replica passes the token on and the owner checks it again", asy
   // and refuses a stolen token there as well
   assert.equal((await get(entry, `/api/x?jarvis_view_as=${token}`, auth(BOB))).status, 403);
 });
+
+test("relay page: the signed-in person's own tokens only; create shows the token and setup once; same-origin forms", async () => {
+  const calls = [];
+  const store = [];
+  const relayTokens = async (b) => {
+    calls.push(b);
+    if (b.action === "list") return { tokens: store.filter((t) => t.owner === b.owner).map(({ owner, ...t }) => t) };
+    if (b.action === "create") { const t = { id: randomUUID(), owner: b.owner, label: b.label, createdAt: new Date().toISOString(), lastUsedAt: null }; store.push(t); return { id: t.id, token: "jrelay_secret<1>" }; }
+    if (b.action === "revoke") { const i = store.findIndex((t) => t.id === b.id && t.owner === b.owner); if (i < 0) throw new Error("not found"); store.splice(i, 1); return { ok: true }; }
+  };
+  const off = makeRouter({ webUrl: "http://web.test", ccToken: "cc", relayTokens });
+  await off.listen();
+  assert.equal((await get(off, "/api/jarvis/relay", auth(ALICE))).status, 404, "no JARVIS_RELAY_URL: off");
+  const r = makeRouter({
+    config: { access: { teamDomain: TEAM, audience: AUD }, users: [ALICE, BOB], models: [{ id: "z-ai/glm-5.3", contextWindow: 1048576 }, { id: "deepseek/x" }], defaultModel: "z-ai/glm-5.3", titleModel: "deepseek/x" },
+    webUrl: "http://web.test", ccToken: "cc", relayUrl: "https://relay.example/", relayAccessId: "cid.access", relayAccessSecret: "csecret", relayTokens,
+  });
+  await r.listen();
+  assert.equal((await get(r, "/api/jarvis/relay")).status, 401);
+  const empty = await get(r, "/api/jarvis/relay", auth(ALICE));
+  assert.equal(empty.status, 200);
+  assert.match(empty.body, /No tokens yet/);
+  assert.equal((await get(r, "/api/jarvis/relay", { ...auth(ALICE), ...sameOrigin, "sec-fetch-site": "cross-site" }, "POST", "action=create")).status, 403);
+  const made = await get(r, "/api/jarvis/relay", { ...auth(ALICE), ...sameOrigin }, "POST", "action=create&label=Mac");
+  assert.equal(made.status, 200);
+  assert.deepEqual(calls.find((c) => c.action === "create"), { owner: ALICE, action: "create", label: "Mac" });
+  assert.match(made.body, /jrelay_secret&lt;1&gt;/, "the token, escaped");
+  assert.match(made.body, /export ANTHROPIC_BASE_URL=&#39;https:\/\/relay\.example\/x\/claude&#39;/);
+  assert.match(made.body, /CF-Access-Client-Id: cid\.access\\nCF-Access-Client-Secret: csecret/);
+  assert.match(made.body, /export ANTHROPIC_MODEL=&#39;z-ai\/glm-5\.3&#39;/);
+  assert.match(made.body, /ANTHROPIC_SMALL_FAST_MODEL=&#39;deepseek\/x&#39;/);
+  assert.match(made.body, /CLAUDE_CODE_MAX_CONTEXT_TOKENS=1048576/);
+  // the list never shows a token again; Bob sees none of Alice's
+  const listed = await get(r, "/api/jarvis/relay", auth(ALICE));
+  assert.match(listed.body, /<b>Mac<\/b>/);
+  assert.doesNotMatch(listed.body, /jrelay_secret/);
+  assert.doesNotMatch((await get(r, "/api/jarvis/relay", auth(BOB))).body, /<b>Mac<\/b>/);
+  const id = store[0].id;
+  const bobRevoke = await get(r, "/api/jarvis/relay", { ...auth(BOB), ...sameOrigin }, "POST", `action=revoke&id=${id}`);
+  assert.equal(bobRevoke.status, 502);
+  assert.equal(store.length, 1);
+  const rev = await get(r, "/api/jarvis/relay", { ...auth(ALICE), ...sameOrigin }, "POST", `action=revoke&id=${id}`);
+  assert.equal(rev.status, 303);
+  assert.equal(rev.headers.location, "/api/jarvis/relay");
+  assert.equal(store.length, 0);
+});
