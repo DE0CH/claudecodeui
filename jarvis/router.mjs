@@ -593,6 +593,32 @@ class UserProcess {
     });
   }
 
+  /**
+   * For the switch module's restart: CloudCLI's GET /api/jarvis/switch/busy (jarvis-switch.routes.ts), the session ids
+   * running (the running list), held by a Claude Code process (holds the running list misses), preparing a sandbox or
+   * with a Paseo message pending; null when it can't tell.
+   */
+  switchBusy() {
+    return new Promise((resolve) => {
+      const q = http.get({ host: "127.0.0.1", port: this.port, path: "/api/jarvis/switch/busy", timeout: 5000,
+                          headers: { "x-jarvis-user": this.email } }, (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => { if (body.length < 1 << 20) body += c; });
+        res.on("end", () => {
+          if (res.statusCode !== 200) return resolve(null);
+          try {
+            const j = JSON.parse(body);
+            const keys = ["running", "processes", "preparing", "pending"];
+            resolve(keys.every((k) => Array.isArray(j?.[k])) ? Object.fromEntries(keys.map((k) => [k, j[k].length])) : null);
+          } catch { resolve(null); }
+        });
+      });
+      q.on("timeout", () => q.destroy());
+      q.on("error", () => resolve(null));
+    });
+  }
+
   async stop(reason) {
     if (this.stopping) return this.exitedPromise;
     this.stopping = true;
@@ -1415,8 +1441,8 @@ export class Router {
 //   upstream; the header never reaches a process (upstreamHeaders). LU sockets are never moved or refused.
 // - Frame reader: on every upgraded socket a reader runs after the bytes are piped (a later 'data' listener, inside
 //   try/catch), in both directions. It follows frame headers and runs a streaming scan (JsonScan) over each text
-//   message, unmasking byte by byte and copying nothing but `type`, `message.type`, `message.requestId` (client) and
-//   `message.payload.requestId` (server). A client message is read up to its `message.requestId`, at most
+//   message (masked bytes unmasked 64 KB at a time into one scratch buffer the next window overwrites), keeping
+//   nothing but `type`, `message.type`, `message.requestId` (client) and `message.payload.requestId` (server). A client message is read up to its `message.requestId`, at most
 //   SWITCH_CLIENT_LIMIT bytes: Paseo's client builds requests with zod, which emits keys in schema order, and
 //   `workspace.create.request` has `agent` (the first prompt, inline images, attachments) before `requestId`
 //   (paseo/packages/protocol/src/messages.ts WorkspaceCreateRequestSchema; daemon-client.ts
@@ -1428,34 +1454,42 @@ export class Router {
 //   longest is 300 s, daemon-client.ts) is one the process will not answer (a handler that threw: paseo-connection.ts
 //   only logs it) or one the client waits for without a timeout (workspace/agent create, plugin reload). It leaves the
 //   outstanding set for the socket's stale set: the socket is reported opaque (`stale`, logged at warn, counted) and
-//   never moved while it has one, and `restart` no longer waits for it. An answer that comes later clears it.
+//   never moved while it has one. `restart` still waits for it (DESIGN 9.6: no LU request outstanding), since a request
+//   the client waits on with no timeout may still be worked on. An answer that comes later clears it.
 // - Opaque: a 101 with Sec-WebSocket-Extensions, a non-WebSocket upgrade, RSV bits, a fragmented message, a lost
 //   continuation, a client binary message, a client `requestId` that may lie beyond the scan limit, an unparseable
 //   message or a reader exception makes the socket opaque for its lifetime: busy, never moved, reported, logged at warn.
+//   The reader runs on every upgraded path, so a non-empty client text message must be a JSON object on every path or
+//   the socket turns opaque: CloudCLI's /ws, /paseo-ws and /desktop-notifications all take JSON objects only. An empty
+//   text message is no request (ignored).
 // - GET /__jarvis/sockets: per person, this replica's first-hop sockets that are not LU (`sockets`: outstanding and
 //   stale counts, last inbound time, opaque), LU sockets (`lu`, `luOutstanding`, `luOpaque` with its reasons),
-//   sockets another replica passed on (`hop`), in-flight HTTP that is not LU; totals (`opaque` counts every opaque
-//   socket, LU and hop ones included); `generatedAt`.
+//   sockets another replica passed on (`hop`: id, path, opaque, outstanding, stale; whether it is LU is known only on
+//   the first hop), in-flight HTTP that is not LU; totals (`opaque` counts this replica's opaque first-hop sockets, LU
+//   ones included; hop sockets only in `hopSockets`/`hopOpaque`, so `opaque` adds up across replicas); `generatedAt`.
 // - POST /__jarvis/move[?person=<email>]: the first call arms the refusal of new non-LU upgrades (503 before the 101)
 //   and the pass-on of non-LU HTTP to JARVIS_UI_PASS_ON_URL, unchanged (409 and nothing armed while that is unset).
-//   RELAY_PATH stays here: pigeon does not serve the relay token page (spec-pigeon), and it needs no process. With
+//   RELAY_PATH stays here: it is router-served (no process) and no package of the design serves it on the new side
+//   (the page is newer than the design; a recorded gap: it must move before A6, when this router goes). With
 //   `person`, each of that person's non-LU, non-opaque first-hop sockets is closed at an instant when it has no
 //   outstanding request id, no inbound frame for SWITCH_QUIET_MS and the call is under SWITCH_MOVE_MS old (re-checked
 //   at the close, and on every server frame and every SWITCH_TICK_MS while the call is fresh): both pipes stop, a close
 //   frame 1012 is sent, the socket is read for SWITCH_TAIL_MS more and a request frame read then is counted
 //   (`inflightCloses`) and not forwarded.
 // - POST /__jarvis/admit: undoes the arming (a rollback before the gate).
-// - POST /__jarvis/restart?person=<email>: stops the person's process here unless a chat, hold or background task runs
-//   (CloudCLI's running list), HTTP is in flight or a socket of theirs has a request outstanding (stale ones aside) or
-//   is opaque (`busy`).
+// - POST /__jarvis/restart?person=<email>: stops the person's process here unless it is busy: HTTP in flight, a socket
+//   of theirs with a request outstanding (stale ones included) or opaque, or CloudCLI's GET /api/jarvis/switch/busy
+//   (jarvis-switch.routes.ts) lists anything: running (chats, tracked background work, CLI turns), a Claude Code
+//   process (holds, also those with no tracked task), a sandbox preparing, a Paseo message pending; can't tell = busy.
 // - JARVIS_UI_PURGE=off: purgeWake does nothing and each process gets JARVIS_UI_PURGE=off (jarvis-purge.ts: no purge).
 // The endpoints take `Authorization: Bearer <JARVIS_UI_SWITCH_TOKEN>`; anything else is 404.
 //
 // Environment:
 //   JARVIS_UI_SWITCH_TOKEN [unset]    bearer of the switch endpoints; unset: the module is off
 //   JARVIS_UI_LU_TOKEN [unset]        pigeon's pair token in x-aviary-lu; unset: no socket is LU
-//   JARVIS_UI_PASS_ON_URL [unset]     where non-LU HTTP goes once armed (pigeon's Service; the deployment sets it);
-//                                     unset: move answers 409 and nothing is armed
+//   JARVIS_UI_PASS_ON_URL [unset]     where non-LU HTTP goes once armed (pigeon's Service; the deployment sets it):
+//                                     exactly `http://<host>:<port>` (parsePassOnUrl); unset or anything else: logged at
+//                                     error, move answers 409 and nothing is armed
 //   JARVIS_UI_PURGE [on]              off: no Recently-deleted purge (purgeWake and the processes')
 const LU_HEADER = "x-aviary-lu";
 const SWITCH_PATHS = ["/__jarvis/sockets", "/__jarvis/move", "/__jarvis/admit", "/__jarvis/restart"];
@@ -1466,7 +1500,21 @@ export const SWITCH_CLIENT_LIMIT = 100 * 1024 * 1024;
 const SWITCH_MAX_OUTSTANDING = 1024;
 const SWITCH_STALE_MS = 6 * 60_000;
 const CLOSE_1012 = Buffer.from([0x88, 0x02, 0x03, 0xf4]);
-const NO_MASK = Buffer.alloc(4);
+
+/** JsonScan's unmasking window (one per process: the scan is synchronous). */
+const SCRATCH = Buffer.allocUnsafeSlow(64 * 1024);
+const SCRATCH32 = new Uint32Array(SCRATCH.buffer, SCRATCH.byteOffset, SCRATCH.length >>> 2);
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+/** SCRATCH[0..n) = buf[start..start+n) unmasked, the first byte at payload position `pos`. */
+function unmaskInto(buf, start, n, mask, pos) {
+  buf.copy(SCRATCH, 0, start, start + n);
+  const o = pos & 3;
+  const m0 = mask[o], m1 = mask[(o + 1) & 3], m2 = mask[(o + 2) & 3], m3 = mask[(o + 3) & 3];
+  const word = LITTLE_ENDIAN ? (m0 | (m1 << 8) | (m2 << 16) | (m3 << 24)) >>> 0 : ((m0 << 24) | (m1 << 16) | (m2 << 8) | m3) >>> 0;
+  const words = n >>> 2;
+  for (let i = 0; i < words; i++) SCRATCH32[i] ^= word;
+  for (let i = words << 2; i < n; i++) SCRATCH[i] ^= mask[(pos + i) & 3];
+}
 
 // JsonScan states
 const J_VALUE = 0, J_OBJ_FIRST = 1, J_KEY = 2, J_KEY_STR = 3, J_KEY_ESC = 4, J_COLON = 5, J_AFTER = 6, J_ARR_FIRST = 7,
@@ -1478,31 +1526,51 @@ const isLitByte = (c) => (c >= 48 && c <= 57) || (c >= 97 && c <= 122) || c === 
 /**
  * A streaming scan of one JSON message, fed in pieces (masked or not): the string values of `type`, `message.type`,
  * `message.requestId` and `message.payload.requestId`, kept raw (escapes not decoded, at most J_STR_MAX bytes). It
- * copies nothing else: other strings, however long, are only stepped over. `stop` "client" ends the scan at
+ * keeps nothing else: other strings, however long, are only stepped over. `stop` "client" ends the scan at
  * `message.requestId`, "server" at `message.payload.requestId`, null reads it all; `done` says it ended so. `error`
  * for JSON that is invalid as far as it was read. finish(complete) also sets `requestIdPossible`: no
  * `message.requestId` yet, but one could still follow (the top object and `message` both still open, a session frame).
  */
 export class JsonScan {
   topType = null; msgType = null; requestId = null; payloadRequestId = null; error = null; done = false;
-  topClosed = false; msgClosed = false; requestIdPossible = false;
+  topClosed = false; msgClosed = false; requestIdPossible = false; empty = false;
   #stop; #ctx = []; #arr = []; #st = J_VALUE; #started = false;
   #key = ""; #keyOk = true; #next = 0; #cap = 0; #s = ""; #lit = "";
   constructor(stop = null) { this.#stop = stop; }
   #fail(why) { if (!this.error) this.error = why; }
-  /** Bytes buf[start..end), the first at payload position `pos` (for the mask). */
+  /**
+   * Bytes buf[start..end), the first at payload position `pos` (for the mask). Masked bytes are unmasked a window
+   * at a time into one shared scratch buffer (overwritten by the next window, never kept), 32 bits at a step, so the
+   * scan itself always reads plain bytes and steps over unwanted strings with Buffer#indexOf.
+   */
   feed(buf, start = 0, end = buf.length, mask = null, pos = 0) {
-    const m = mask ?? NO_MASK;
-    const base = pos - start; // the mask index of buf[j] is (j + base) & 3
+    if (!mask) return this.#feedPlain(buf, start, end);
+    while (start < end && !this.done && !this.error) {
+      const n = Math.min(end - start, SCRATCH.length);
+      unmaskInto(buf, start, n, mask, pos);
+      this.#feedPlain(SCRATCH, 0, n);
+      start += n;
+      pos += n;
+    }
+  }
+  #feedPlain(buf, start, end) {
     let j = start;
     while (j < end && !this.done && !this.error) {
       const st = this.#st;
-      if (st === J_STR && this.#cap === 0) {
-        // a string nobody wants: straight to its next quote or backslash
-        while (j < end) { const c = buf[j] ^ m[(j + base) & 3]; if (c === 34 || c === 92) break; j++; }
+      if ((st === J_STR && this.#cap === 0) || (st === J_KEY_STR && !this.#keyOk)) {
+        // a string or key nobody wants: straight to its next quote or backslash (a short run byte by byte, a long
+        // one with memchr; a match past `end` is no match)
+        const short = Math.min(end, j + 64);
+        while (j < short) { const c = buf[j]; if (c === 34 || c === 92) break; j++; }
+        if (j === short && j < end) {
+          let q = buf.indexOf(34, j);
+          if (q < 0 || q > end) q = end;
+          const b = buf.indexOf(92, j);
+          j = b >= 0 && b < q ? b : q;
+        }
         if (j >= end) break;
       }
-      const c = buf[j] ^ m[(j + base) & 3];
+      const c = buf[j];
       if (st === J_STR) {
         j++;
         if (c === 34) this.#strEnd();
@@ -1520,9 +1588,11 @@ export class JsonScan {
       if (st === J_KEY_ESC) { j++; this.#st = J_KEY_STR; continue; }
       if (st === J_LIT) {
         if (isLitByte(c)) {
-          if (this.#lit.length >= J_LIT_MAX) { this.#fail("unexpected value"); break; }
-          this.#lit += String.fromCharCode(c);
-          j++;
+          let k = j + 1;
+          while (k < end && isLitByte(buf[k])) k++;
+          if (this.#lit.length + (k - j) > J_LIT_MAX) { this.#fail("unexpected value"); break; }
+          this.#lit += buf.toString("latin1", j, k);
+          j = k;
           continue;
         }
         if (!LIT_RE.test(this.#lit)) { this.#fail("unexpected value"); break; }
@@ -1548,7 +1618,8 @@ export class JsonScan {
         // falls through
         case J_KEY:
           if (c !== 34) { this.#fail("expected a key"); break; }
-          this.#key = ""; this.#keyOk = true; this.#st = J_KEY_STR;
+          // only keys of the top object, `message` and `payload` matter (#setNext); deeper ones are stepped over
+          this.#key = ""; this.#keyOk = this.#ctx[this.#ctx.length - 1] !== 3; this.#st = J_KEY_STR;
           break;
         case J_COLON:
           if (c !== 58) { this.#fail("expected :"); break; }
@@ -1603,6 +1674,8 @@ export class JsonScan {
   }
   /** `complete`: the whole message was fed. */
   finish(complete) {
+    // an empty (or all-whitespace) text message is no request and nothing unreadable
+    if (complete && !this.#started && !this.error) { this.empty = true; return this; }
     if (!this.error && !this.done && complete && this.#st !== J_END) this.error = "message cut short";
     this.requestIdPossible = !this.requestId && !this.topClosed && !this.msgClosed && (this.topType === null || this.topType === "session");
     return this;
@@ -1707,6 +1780,30 @@ const eqSecret = (given, want) => {
   return timingSafeEqual(a, b);
 };
 
+/**
+ * JARVIS_UI_PASS_ON_URL checked once: `http://<host>:<port>` with nothing after it but an optional `/` (pigeon's
+ * Service; requests keep their own path). {host, port}, or {error} for anything else: no scheme (`host:port`, which
+ * `new URL` reads as a scheme), another scheme (https is not supported: the pass-on stays inside the cluster), no
+ * explicit port, a path, a query, a fragment or credentials.
+ */
+export function parsePassOnUrl(raw) {
+  const s = String(raw ?? "").trim();
+  if (!/^http:\/\//i.test(s)) return { error: "it must start with http://" };
+  let u;
+  try { u = new URL(s); } catch { return { error: "not a URL" }; }
+  if (u.protocol !== "http:") return { error: "it must start with http://" };
+  if (!u.hostname) return { error: "no host" };
+  if (u.username || u.password) return { error: "credentials are not allowed" };
+  if (u.pathname !== "/" || u.search || u.hash || /[?#]/.test(s)) return { error: "a path, query or fragment is not allowed" };
+  // an explicit port (URL drops a written :80, so read it from the text)
+  const auth = s.slice(7).split("/")[0];
+  const m = /:(\d{1,5})$/.exec(auth);
+  if (!m) return { error: "no port" };
+  const port = Number(m[1]);
+  if (!(port >= 1 && port <= 65535)) return { error: "port out of range" };
+  return { host: u.hostname.replace(/^\[(.*)\]$/, "$1"), port };
+}
+
 class SwitchWindow {
   constructor(router, o) {
     this.r = router;
@@ -1720,12 +1817,18 @@ class SwitchWindow {
     this.tickMs = o.switchTickMs ?? 100;
     this.staleMs = o.switchStaleMs ?? SWITCH_STALE_MS;
     this.clientLimit = o.switchClientLimit ?? SWITCH_CLIENT_LIMIT;
+    this.timings = o.switchTimings ?? null; // tests: {ms, bytes, dir} per chunk the module's 'data' handlers read
     this.enabled = !!this.token;
     if (this.enabled && router.peersName && !router.peerAuth) {
       this.enabled = false;
       log("error", "switch: module off: peers are set (JARVIS_UI_PEERS) but there is no peer key (JARVIS_CC_TOKEN)", { peers: router.peersName });
     }
-    if (this.enabled && !this.passOnUrl) log("error", "switch: JARVIS_UI_PASS_ON_URL is not set: move answers 409 and nothing is armed");
+    this.passOn = null; // {host, port} of passOnUrl once it checks out
+    if (this.passOnUrl) {
+      const t = parsePassOnUrl(this.passOnUrl);
+      if (t.error) log("error", `switch: JARVIS_UI_PASS_ON_URL is not usable (${t.error}): move answers 409 and nothing is armed`, { passOn: this.passOnUrl });
+      else this.passOn = t;
+    } else if (this.enabled) log("error", "switch: JARVIS_UI_PASS_ON_URL is not set: move answers 409 and nothing is armed");
     this.armed = false;
     this.recs = new Set();          // every upgraded socket's record (first hop or not)
     this.moveCalls = new Map();     // person -> when move?person= was last called
@@ -1733,11 +1836,11 @@ class SwitchWindow {
     this.luHttp = new Map();        // person -> in-flight LU HTTP (first hop)
     this.passOnInFlight = 0;
     this.nextId = 1;
-    this.counters = { movedTotal: 0, inflightClosesTotal: 0, opaqueSocketsTotal: 0, staleRequestsTotal: 0, refusedUpgradesTotal: 0, passedOnTotal: 0 };
+    this.counters = { movedTotal: 0, inflightClosesTotal: 0, opaqueSocketsTotal: 0, hopOpaqueSocketsTotal: 0, staleRequestsTotal: 0, refusedUpgradesTotal: 0, passedOnTotal: 0, closeErrorsTotal: 0 };
     this.ticker = null;
     this.ager = null;
     if (this.enabled) {
-      this.ager = setInterval(() => this.#ageAll(), Math.max(10, Math.min(10_000, Math.floor(this.staleMs / 4))));
+      this.ager = setInterval(() => { try { this.#ageAll(); } catch (e) { log("error", "switch: ageing failed", { error: String(e?.message || e) }); } }, Math.max(10, Math.min(10_000, Math.floor(this.staleMs / 4))));
       this.ager.unref?.();
     }
   }
@@ -1753,9 +1856,18 @@ class SwitchWindow {
   /** The switch endpoints and, once armed, the pass-on; true when the request was handled here. */
   handles(req, res) {
     const pathname = (req.url || "/").split("?")[0];
-    if (SWITCH_PATHS.includes(pathname)) { void this.#endpoint(req, res, pathname); return true; }
+    if (SWITCH_PATHS.includes(pathname)) {
+      this.#endpoint(req, res, pathname).catch((e) => {
+        log("error", "switch: endpoint failed", { path: pathname, error: String(e?.message || e).slice(0, 200) });
+        if (!res.headersSent) { res.writeHead(500, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "internal error" })); } else res.destroy();
+      });
+      return true;
+    }
     if (!this.enabled || !this.armed || pathname.startsWith("/__jarvis") || pathname === RELAY_PATH || this.isHop(req) || this.isLu(req)) return false;
-    this.#passOn(req, res);
+    try { this.#passOn(req, res); } catch (e) {
+      log("error", "switch: pass-on failed", { error: String(e?.message || e).slice(0, 200) });
+      if (!res.headersSent) { res.setHeader("retry-after", "1"); page(res, 502, "請重新整理", "請重新整理頁面。Reload the page."); } else res.destroy();
+    }
     return true;
   }
 
@@ -1795,7 +1907,8 @@ class SwitchWindow {
     if (!this.enabled) return;
     const now = this.r.now();
     const rec = {
-      id: `s${this.nextId++}`, person: who.email, viewAs: who.viewAs ? who.viewAs.a : null, lu: this.isLu(req),
+      // LU is known on the first hop only: it strips x-aviary-lu before passing the socket on (upstreamHeaders)
+      id: `s${this.nextId++}`, person: who.email, viewAs: who.viewAs ? who.viewAs.a : null, lu: !this.isHop(req) && this.isLu(req),
       firstHop: !this.isHop(req), path: (req.url || "/").split("?")[0], openedAt: now, lastInboundAt: now,
       outstanding: new Map(), stale: new Map(), opaque: null, closing: false, socket, usock, p,
     };
@@ -1812,11 +1925,18 @@ class SwitchWindow {
     if (uhead?.length) feed(rec.sr, uhead);
     if (head?.length) feed(rec.cr, head);
     // after socket.pipe(usock).pipe(socket): these listeners run after the bytes are written on
-    socket.on("data", (d) => feed(rec.cr, d));
-    usock.on("data", (d) => {
+    const fromServer = (d) => {
       feed(rec.sr, d);
-      if (this.moveCalls.has(rec.person)) this.#tryClose(rec);
-    });
+      if (this.moveCalls.has(rec.person)) this.#safeClose(rec);
+    };
+    if (!this.timings) {
+      socket.on("data", (d) => feed(rec.cr, d));
+      usock.on("data", fromServer);
+    } else {
+      const timed = (dir, fn) => (d) => { const t0 = process.hrtime.bigint(); fn(d); this.timings.push({ ms: Number(process.hrtime.bigint() - t0) / 1e6, bytes: d.length, dir }); };
+      socket.on("data", timed("c2s", (d) => feed(rec.cr, d)));
+      usock.on("data", timed("s2c", fromServer));
+    }
   }
 
   #opaque(rec, why) {
@@ -1824,13 +1944,14 @@ class SwitchWindow {
     rec.opaque = why;
     rec.cr?.opaque(why);
     rec.sr?.opaque(why);
-    this.counters.opaqueSocketsTotal++;
-    log("warn", "switch: opaque socket", { user: userKey(rec.person), socket: rec.id, lu: rec.lu, firstHop: rec.firstHop, why });
+    if (rec.firstHop) this.counters.opaqueSocketsTotal++; else this.counters.hopOpaqueSocketsTotal++;
+    log("warn", "switch: opaque socket", { user: userKey(rec.person), socket: rec.id, ...(rec.firstHop ? { lu: rec.lu } : {}), firstHop: rec.firstHop, why });
   }
 
   #clientFrame(rec, op, m) {
     if (op >= 8) return; // ping, pong, close: not activity
     if (op === 2) return this.#opaque(rec, "binary message from the client");
+    if (m.empty) return; // an empty text message: no request, no activity
     if (m.error) return this.#opaque(rec, `unreadable message: ${m.error}`);
     if (rec.closing) {
       if (m.requestId) {
@@ -1859,7 +1980,7 @@ class SwitchWindow {
       rec.outstanding.delete(id);
       rec.stale.set(id, v);
       this.counters.staleRequestsTotal++;
-      log("warn", "switch: a request has had no answer for longer than the client waits", { user: userKey(rec.person), socket: rec.id, lu: rec.lu, firstHop: rec.firstHop, type: v.type, ageMs: now - v.at });
+      log("warn", "switch: a request has had no answer for longer than the client waits", { user: userKey(rec.person), socket: rec.id, ...(rec.firstHop ? { lu: rec.lu } : {}), firstHop: rec.firstHop, type: v.type, ageMs: now - v.at });
     }
   }
 
@@ -1894,11 +2015,23 @@ class SwitchWindow {
     return true;
   }
 
+  /** #tryClose that never throws (it runs from stream events and timers): an error makes the socket opaque. */
+  #safeClose(rec) {
+    try { return this.#tryClose(rec); } catch (e) {
+      this.counters.closeErrorsTotal++;
+      log("error", "switch: closing a socket failed", { user: userKey(rec.person), socket: rec.id, error: String(e?.message || e).slice(0, 200) });
+      try { this.#opaque(rec, `close failed: ${String(e?.message || e).slice(0, 120)}`); } catch { /* nothing more to do */ }
+      return false;
+    }
+  }
+
   #tick() {
-    const now = this.r.now();
-    for (const [person, at] of this.moveCalls) if (now - at >= this.moveMs) this.moveCalls.delete(person);
-    if (!this.moveCalls.size) { clearInterval(this.ticker); this.ticker = null; return; }
-    for (const rec of this.recs) if (this.moveCalls.has(rec.person)) this.#tryClose(rec);
+    try {
+      const now = this.r.now();
+      for (const [person, at] of this.moveCalls) if (now - at >= this.moveMs) this.moveCalls.delete(person);
+      if (!this.moveCalls.size) { clearInterval(this.ticker); this.ticker = null; return; }
+      for (const rec of this.recs) if (this.moveCalls.has(rec.person)) this.#safeClose(rec);
+    } catch (e) { log("error", "switch: tick failed", { error: String(e?.message || e).slice(0, 200) }); }
   }
 
   stop() { clearInterval(this.ticker); this.ticker = null; clearInterval(this.ager); this.ager = null; for (const rec of this.recs) clearTimeout(rec.tail); }
@@ -1923,13 +2056,14 @@ class SwitchWindow {
       if (rec.socket.destroyed) continue;
       const e = of(rec.person);
       const why = this.#opaqueReason(rec);
-      if (why) opaque++;
       if (!rec.firstHop) {
+        // the first hop counts this socket in its own totals; the owner reports it apart (hopSockets, hopOpaque)
         hop++;
         if (why) hopOpaque++;
-        e.hop.push({ id: rec.id, path: rec.path, lu: rec.lu, opaque: !!why, opaqueReason: why, outstanding: rec.outstanding.size, stale: rec.stale.size, openedAt: iso(rec.openedAt) });
+        e.hop.push({ id: rec.id, path: rec.path, opaque: !!why, opaqueReason: why, outstanding: rec.outstanding.size, stale: rec.stale.size, openedAt: iso(rec.openedAt) });
         continue;
       }
+      if (why) opaque++;
       if (rec.lu) {
         e.lu++;
         e.luOutstanding += rec.outstanding.size;
@@ -1963,7 +2097,7 @@ class SwitchWindow {
       for (const rec of this.recs) {
         if (rec.person !== person || !rec.firstHop || rec.lu || rec.closing || rec.socket.destroyed) continue;
         if (rec.opaque || rec.stale.size) opaque++;
-        else if (this.#tryClose(rec)) closed++;
+        else if (this.#safeClose(rec)) closed++;
         else waiting++;
       }
       if (!this.ticker) { this.ticker = setInterval(() => this.#tick(), this.tickMs); this.ticker.unref?.(); }
@@ -1980,14 +2114,21 @@ class SwitchWindow {
       for (const rec of this.recs) {
         if (rec.person !== person || rec.socket.destroyed) continue;
         if (rec.outstanding.size) return "request outstanding";
+        // a stale id still holds the restart (DESIGN 9.6: no request outstanding): it may be a request the client
+        // waits on without a timeout (workspace/agent create, plugin reload) that is still being worked on
+        if (rec.stale.size) return "stale request outstanding";
         if (rec.opaque) return "opaque socket";
       }
       return null;
     };
     let busy = why();
     if (busy) return { result: "busy", why: busy };
-    const running = await p.runningChats();
-    if (running !== 0) return { result: "busy", why: running === null ? "running state unknown" : "running" };
+    const b = await p.switchBusy();
+    if (b === null) return { result: "busy", why: "running state unknown" };
+    if (b.running) return { result: "busy", why: "running" };
+    if (b.processes) return { result: "busy", why: "claude process held" };
+    if (b.preparing) return { result: "busy", why: "preparing" };
+    if (b.pending) return { result: "busy", why: "message pending" };
     busy = why();
     if (busy || p.stopping) return { result: "busy", why: busy ?? "stopping" };
     await p.stop("switch restart");
@@ -2007,6 +2148,7 @@ class SwitchWindow {
     if (pathname === "/__jarvis/sockets") return answer(200, this.report());
     if (pathname === "/__jarvis/move") {
       if (!this.passOnUrl) return answer(409, { error: "JARVIS_UI_PASS_ON_URL is not set: nothing armed" });
+      if (!this.passOn) return answer(409, { error: `JARVIS_UI_PASS_ON_URL is not usable (${parsePassOnUrl(this.passOnUrl).error}): nothing armed` });
       const first = !this.armed;
       const out = this.move(person);
       if (first) log("info", "switch: armed (new non-LU upgrades refused, non-LU HTTP passed on)", { passOn: this.passOnUrl });
@@ -2024,14 +2166,14 @@ class SwitchWindow {
 
   /** A non-LU request once armed: to pigeon unchanged (Access headers included); only hop-by-hop headers dropped. */
   #passOn(req, res) {
-    const target = new URL(this.passOnUrl);
+    const target = this.passOn;
     const headers = { ...req.headers };
     for (const k of ["connection", "keep-alive", "proxy-connection", "te", "trailer", "upgrade"]) delete headers[k];
     this.passOnInFlight++;
     this.counters.passedOnTotal++;
     let done = false;
     const finish = () => { if (!done) { done = true; this.passOnInFlight--; } };
-    const up = http.request({ host: target.hostname, port: target.port || 80, method: req.method, path: req.url, headers }, (ures) => {
+    const up = http.request({ host: target.host, port: target.port, method: req.method, path: req.url, headers }, (ures) => {
       res.writeHead(ures.statusCode || 502, ures.statusMessage, responseHeaders(ures));
       ures.pipe(res);
     });

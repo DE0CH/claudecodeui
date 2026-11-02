@@ -49,6 +49,7 @@ import { createJarvisFilesRouter } from './modules/jarvis/jarvis-files.routes.js
 import { createJarvisSharesRouter } from './modules/jarvis/jarvis-shares.routes.js';
 import { jarvisApiGuard } from './modules/jarvis/jarvis-guard.js';
 import { createJarvisWarmRouter } from './modules/jarvis/jarvis-warm.routes.js';
+import { createJarvisSwitchRouter } from './modules/jarvis/jarvis-switch.routes.js';
 
 const __dirname = getModuleDirectory(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
@@ -128,6 +129,8 @@ if (jarvisEnabled()) {
     app.use('/api/jarvis', authenticateToken, createJarvisFilesRouter());
     // typing in the composer warms a sandbox host (jarvis-warm.routes.ts)
     app.use('/api/jarvis', authenticateToken, createJarvisWarmRouter());
+    // the old router's switch module: is this process idle enough to restart (jarvis-switch.routes.ts)
+    app.use('/api/jarvis', authenticateToken, createJarvisSwitchRouter());
     // shared conversations: share, view, continue, stop sharing (jarvis-shares.routes.ts)
     app.use('/api/jarvis', authenticateToken, createJarvisSharesRouter());
     // the greeting's name: the router answers this in sandbox mode (from the Access identity); local mode here, where

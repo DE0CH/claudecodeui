@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
-import { AccessVerifier, FrameReader, JsonScan, RELAY_PATH, Router, SWITCH_PREFIX, log, needsSignIn, scanMessage, TeamsVerifier, ownerOf, pickFirstName, userKey, workspaceRelative } from "../router.mjs";
+import { AccessVerifier, FrameReader, JsonScan, RELAY_PATH, Router, SWITCH_PREFIX, log, needsSignIn, parsePassOnUrl, scanMessage, TeamsVerifier, ownerOf, pickFirstName, userKey, workspaceRelative } from "../router.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE = path.join(HERE, "fake-cloudcli.mjs");
@@ -1167,6 +1167,19 @@ test("switch window: restart stops an idle person's process only; busy while a c
   setRunning(r, ALICE, 1);
   assert.deepEqual(await restart(ALICE), { result: "busy", why: "running" });
   setRunning(r, ALICE, 0);
+  // CloudCLI's /api/jarvis/switch/busy beyond the running list: a held Claude Code process, a sandbox preparing, a
+  // Paseo message pending; an answer the router can't read keeps the process
+  const busyFile = path.join(r.homeRoot, userKey(ALICE), "busy");
+  const none = { running: [], processes: [], preparing: [], pending: [] };
+  for (const [k, why] of [["processes", "claude process held"], ["preparing", "preparing"], ["pending", "message pending"]]) {
+    writeFileSync(busyFile, JSON.stringify({ ...none, [k]: ["c1"] }));
+    assert.deepEqual(await restart(ALICE), { result: "busy", why }, k);
+  }
+  writeFileSync(busyFile, JSON.stringify("error"));
+  assert.deepEqual(await restart(ALICE), { result: "busy", why: "running state unknown" });
+  writeFileSync(busyFile, JSON.stringify({ running: [] }));
+  assert.deepEqual(await restart(ALICE), { result: "busy", why: "running state unknown" }, "a partial answer");
+  unlinkSync(busyFile);
   const lu = await wsOpen(r, ALICE, { headers: { "x-aviary-lu": LU } });
   lu.s.write(req("fetch_agent_timeline_request", "q1", { delayMs: 600 }));
   await wait(100);
@@ -1216,8 +1229,11 @@ test("switch window: a socket passed on to another replica is the first hop's; t
   assert.equal(rb.persons[email].hop.length, 2);
   assert.equal(rb.totals.hopSockets, 2);
   assert.equal(rb.totals.hopOpaque, 1, "an opaque passed-on socket is reported by the owner too");
-  assert.equal(rb.totals.opaque, 1);
+  assert.equal(rb.totals.opaque, 0, "but counted in the totals by the first hop only, so totals add up across pods");
+  assert.equal(ra.totals.opaque + rb.totals.opaque, 1);
+  assert.deepEqual([ra.counters.opaqueSocketsTotal, rb.counters.opaqueSocketsTotal, rb.counters.hopOpaqueSocketsTotal], [1, 0, 1]);
   assert.match(rb.persons[email].hop.find((h) => h.opaque).opaqueReason, /fragmented/);
+  assert.ok(rb.persons[email].hop.every((h) => !("lu" in h)), "the owner cannot know whether a hop is LU");
   frag.s.destroy();
   await wait(100);
   // armed: b still serves what a passes on
@@ -1248,7 +1264,7 @@ test("switch window: a socket an LU upstream made opaque is reported per person 
   lu.s.destroy();
 });
 
-test("switch window: a request the process never answers turns stale: reported opaque, never moved, restart no longer waits on it; a late answer clears it", async () => {
+test("switch window: a request the process never answers turns stale: reported opaque, never moved, restart still waits on it; a late answer clears it", async () => {
   const r = swRouter({ switchStaleMs: 400 });
   await r.listen();
   const restart = async () => (await get(r, `/__jarvis/restart?person=${encodeURIComponent(BOB)}`, swAuth, "POST")).json;
@@ -1283,8 +1299,11 @@ test("switch window: a request the process never answers turns stale: reported o
   assert.deepEqual(rep.persons[BOB].sockets.map((s) => s.stale), [1]);
   assert.equal(rep.totals.opaque, 1);
   assert.ok(!never.closed);
-  assert.deepEqual(await restart(), { result: "stopped" }, "the stale request does not hold the restart");
+  assert.deepEqual(await restart(), { result: "busy", why: "stale request outstanding" }, "a stale request still holds the restart");
   never.s.destroy();
+  await never.done;
+  await until(async () => (await sockets(r)).totals.opaque === 0, 2000, "the stale socket to go");
+  assert.deepEqual(await restart(), { result: "stopped" });
   late.s.destroy();
 });
 
@@ -1301,6 +1320,74 @@ test("switch window: off on a replica with peers but no peer key; move refuses t
   const c = await wsOpen(noPassOn, ALICE);
   assert.match(c.head, /^HTTP\/1.1 101/, "nothing refused");
   c.s.destroy();
+});
+
+test("switch window: JARVIS_UI_PASS_ON_URL must be http://host:port; anything else is treated as unset (409, nothing armed)", async () => {
+  assert.deepEqual(parsePassOnUrl("http://pigeon.yyc-ai.svc:8080"), { host: "pigeon.yyc-ai.svc", port: 8080 });
+  assert.deepEqual(parsePassOnUrl("http://pigeon.yyc-ai.svc:8080/"), { host: "pigeon.yyc-ai.svc", port: 8080 });
+  assert.deepEqual(parsePassOnUrl("http://pigeon:80"), { host: "pigeon", port: 80 }, "a written :80, which URL drops");
+  assert.deepEqual(parsePassOnUrl("http://[fd00::1]:8080"), { host: "fd00::1", port: 8080 });
+  for (const bad of ["pigeon.yyc-ai.svc:8080", "http//x", "https://pigeon:8443", "http://pigeon", "http://pigeon:8080/app",
+    "http://pigeon:8080?x=1", "http://pigeon:8080#x", "http://u:p@pigeon:8080", "http://:8080", "http://pigeon:0", "http://pigeon:99999", "ftp://pigeon:21"]) {
+    assert.ok(parsePassOnUrl(bad).error, bad);
+  }
+  // `host:port` parses as a URL with an empty host (the scheme is the host): refused, not armed
+  for (const bad of ["pigeon.yyc-ai.svc:8080", "http//x"]) {
+    const r = swRouter({ passOnUrl: bad });
+    await r.listen();
+    const m = await get(r, "/__jarvis/move", swAuth, "POST");
+    assert.equal(m.status, 409, bad);
+    assert.match(m.json.error, /not usable/);
+    assert.equal((await sockets(r)).armed, false);
+    const page = await get(r, "/", auth(ALICE));
+    assert.equal(page.status, 200, "served here, as before");
+    assert.ok(page.json.pid);
+    await r.drain();
+  }
+});
+
+test("switch window: an empty text message is no request; a plain-text message makes the socket opaque", async () => {
+  const r = swRouter();
+  await r.listen();
+  const a = await wsOpen(r, ALICE);
+  a.s.write(cframe(1, ""));
+  a.s.write(req("fetch_agent_request", "e1"));
+  await until(() => sframes(a.rx).length === 1, 2000, "the answer");
+  const b = await wsOpen(r, ALICE, { path: "/ws-echo" });
+  b.s.write(cframe(1, "hello"));
+  await wait(150);
+  const rep = await sockets(r);
+  const [sa, sb] = rep.persons[ALICE].sockets;
+  assert.deepEqual([sa.opaque, sa.outstanding], [false, 0]);
+  assert.equal(sb.opaque, true);
+  assert.match(sb.opaqueReason, /unreadable message/);
+  a.s.destroy();
+  b.s.destroy();
+});
+
+test("switch window: an exception while closing a socket marks it opaque and the router keeps running", async () => {
+  const r = swRouter();
+  await r.listen();
+  const c = await wsOpen(r, ALICE);
+  const c2 = await wsOpen(r, ALICE);
+  c.s.write(req("fetch_agent_request", "x1", { delayMs: 500 }));
+  await wait(400);
+  for (const rec of r.sw.recs) rec.socket.unpipe = () => { throw new Error("boom"); };
+  const unpatch = () => { for (const rec of r.sw.recs) delete rec.socket.unpipe; };
+  // c2 is quiet: move tries it at once (from the endpoint); c is tried when its answer arrives (from a 'data' event)
+  const out = await move(r, ALICE);
+  assert.equal(out.closed, 0);
+  await until(() => sframes(c.rx).length === 1, 2000, "the answer");
+  await wait(100);
+  const rep = await sockets(r);
+  assert.ok(rep.persons[ALICE].sockets.every((s) => s.opaque && /close failed: boom/.test(s.opaqueReason)), JSON.stringify(rep.persons[ALICE].sockets));
+  assert.equal(rep.counters.closeErrorsTotal, 2);
+  unpatch(); // stream internals unpipe on close
+  assert.equal((await get(r, "/healthz")).status, 200);
+  await get(r, "/__jarvis/admit", swAuth, "POST");
+  assert.equal((await get(r, "/", auth(ALICE))).status, 200);
+  c.s.destroy();
+  c2.s.destroy();
 });
 
 // ------------------------------------- the captured Paseo web session (jarvis/test/capture) -------------------------------------
@@ -1398,15 +1485,19 @@ test("switch window: the captured Paseo web session goes through the router byte
   }
 });
 
-test("switch window: per-frame latency through the router added by the module is under 1 ms (captured session, module on vs off)", async () => {
+test("switch window: per-frame latency through the router added by the module is under 1 ms at p99 (captured session, module on vs off)", async () => {
   const { steps } = loadCapture();
-  const on = swRouter(), off = makeRouter();
-  await on.listen();
-  await off.listen();
-  const reps = 25;
+  // one router and one process for both: "off" is the module disabled (as with no JARVIS_UI_SWITCH_TOKEN), so the
+  // only difference between the two is the module (two processes differ by more than it costs)
+  const timings = [];
+  const r1 = swRouter({ switchTimings: timings });
+  await r1.listen();
+  const on = { r: r1, enabled: true }, off = { r: r1, enabled: false };
+  const reps = 40;
   const t = { on: steps.map(() => []), off: steps.map(() => []) };
-  const run = async (r, k) => {
-    const c = await wsOpen(r, CAROL.toLowerCase(), { path: replayPath(null) });
+  const run = async (m, k) => {
+    m.r.sw.enabled = m.enabled;
+    const c = await wsOpen(m.r, CAROL.toLowerCase(), { path: replayPath(null) });
     c.s.setNoDelay(true);
     let prev = 0;
     for (const [i, st] of steps.entries()) {
@@ -1416,9 +1507,11 @@ test("switch window: per-frame latency through the router added by the module is
       prev = st.until;
     }
     await c.done;
+    m.r.sw.enabled = true;
   };
   for (let i = 0; i < 3; i++) { await run(on, "on"); await run(off, "off"); } // warm up
   for (const k of ["on", "off"]) for (const a of t[k]) a.length = 0;
+  timings.length = 0;
   for (let i = 0; i < reps; i++) {
     if (i % 2) { await run(on, "on"); await run(off, "off"); } else { await run(off, "off"); await run(on, "on"); }
   }
@@ -1432,10 +1525,21 @@ test("switch window: per-frame latency through the router added by the module is
   const all = { on: t.on.flat(), off: t.off.flat() };
   log("info", "router latency per step, module on vs off (ms)", {
     steps: added.map((a) => ({ ...a, on: +a.on.toFixed(3), off: +a.off.toFixed(3), added: +a.added.toFixed(3) })),
+    samples: all.on.length,
     p50: { on: +pct(all.on, 0.5).toFixed(3), off: +pct(all.off, 0.5).toFixed(3) }, p99: { on: +pct(all.on, 0.99).toFixed(3), off: +pct(all.off, 0.99).toFixed(3) },
   });
-  // each frame kind's added latency (median of its round trips on minus off) is under 1 ms, so the p99 over the
-  // session's frames is; the raw p99s are logged (they are the large frames' round trips, noisy either way)
+  // The acceptance, per-frame added latency at p99 within 1 ms, measured where the latency is added: the module's
+  // work is its synchronous 'data' handlers on the router's event loop (the bytes are already written on when they
+  // run), so the time spent in them is what it adds to whatever the loop forwards next. Their p99 per chunk (a
+  // chunk holds one frame or more, so per frame it is no more) over the module-on runs is under 1 ms. The end-to-end
+  // round trips cannot show a p99 that small: their own p99 moves by more than 1 ms between identical runs (the
+  // 1.1 MB timeline response), so the per-step medians are checked against 1 ms too and the raw p99s are logged.
+  const ms = timings.map((x) => x.ms);
+  const pt = (q) => pct(ms, q);
+  log("info", "module time per chunk (ms)", { chunks: ms.length, p50: +pt(0.5).toFixed(4), p99: +pt(0.99).toFixed(4), max: +pt(1).toFixed(4),
+    slowest: [...timings].sort((a, b) => b.ms - a.ms).slice(0, 12).map((x) => `${x.dir} ${x.bytes} B ${x.ms.toFixed(3)} ms`) });
+  assert.ok(timings.length >= 40 * 8, `${timings.length} chunks`);
+  assert.ok(pt(0.99) < 1, `the module's p99 per chunk is ${pt(0.99).toFixed(3)} ms`);
   assert.ok(added.length >= 6);
   for (const a of added) assert.ok(a.added < 1, `step ${a.step} (${a.bytes} bytes) adds ${a.added.toFixed(3)} ms`);
 });

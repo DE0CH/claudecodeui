@@ -176,6 +176,11 @@ class PaseoHub extends EventEmitter {
     return rows.filter((row): row is NonNullable<typeof row> => !!row) as SessionRowLite[];
   }
 
+  /** Conversations whose sandbox is being made, and those with a Paseo message not yet completed (jarvis-switch.routes.ts). */
+  busyState(): { preparing: string[]; pending: string[] } {
+    return { preparing: [...this.preparing], pending: [...this.pendingUserMessages.keys()] };
+  }
+
   isRunning(sessionId: string): boolean {
     return chatRunRegistry.isProcessing(sessionId);
   }
@@ -341,6 +346,8 @@ class PaseoHub extends EventEmitter {
         return;
       case 'protocol_error': {
         if (!sessionId) return;
+        // a send that was refused before it ran gets no `complete`: its message is no longer pending
+        if (!this.isRunning(sessionId)) this.pendingUserMessages.delete(sessionId);
         const message = typeof frame.message === 'string' ? frame.message : typeof frame.error === 'string' ? frame.error : 'The message could not be sent.';
         void this.appendLive(sessionId, { ...(frame as object), kind: 'error', content: message } as NormalizedMessage);
         this.emitEvent({ type: 'turn', sessionId, phase: 'failed', turnId: this.turnIdFor(sessionId), error: message });

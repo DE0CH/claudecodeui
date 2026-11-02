@@ -1,5 +1,6 @@
 // A stand-in for CloudCLI's server in the router tests: /health, /api/providers/sessions/running (the count in
-// $HOME/running), /slow?ms= (answers after that long), an echo of the request and its contract env, and upgrades: a raw
+// $HOME/running), /api/jarvis/switch/busy ($HOME/busy, else that count as `running`), /slow?ms= (answers after that
+// long), an echo of the request and its contract env, and upgrades: a raw
 // one that echoes bytes; a real WebSocket handshake (`Upgrade: websocket`) that echoes bytes on /ws-echo and answers
 // like a tiny Paseo host on /paseo-ws (each request id answered after its message's `delayMs`, `{"type":"ping"}` with a
 // pong; every message it read is appended to $HOME/paseo-seen). `?ext=1` negotiates an extension in the 101.
@@ -17,6 +18,14 @@ const server = http.createServer((req, res) => {
   if (req.url === "/api/providers/sessions/running") {
     res.setHeader("content-type", "application/json");
     return res.end(JSON.stringify({ success: true, data: { sessions: Array.from({ length: running() }, (_, i) => ({ sessionId: String(i) })) } }));
+  }
+  if (req.url === "/api/jarvis/switch/busy") {
+    // $HOME/busy (JSON, the endpoint's shape) when present, else the running count as `running`
+    res.setHeader("content-type", "application/json");
+    let busy;
+    try { busy = JSON.parse(readFileSync(path.join(process.env.HOME, "busy"), "utf8")); } catch { busy = null; }
+    if (busy === "error") { res.statusCode = 500; return res.end("{}"); }
+    return res.end(JSON.stringify(busy ?? { running: Array.from({ length: running() }, (_, i) => String(i)), processes: [], preparing: [], pending: [] }));
   }
   let body = "";
   req.on("data", (c) => (body += c));
@@ -67,6 +76,7 @@ server.on("upgrade", (req, socket) => {
     socket.on("error", () => {});
     if (req.url.startsWith("/ws-echo")) { socket.on("data", (d) => socket.write(d)); return; }
     if (req.url.startsWith("/paseo-replay")) return replay(socket, new URL(req.url, "http://x").searchParams);
+    socket.on("end", () => socket.destroy()); // as CloudCLI's `ws` server: a client's FIN ends the socket
     frames(socket, (opcode, payload) => {
       if (opcode !== 1) return;
       appendFileSync(path.join(process.env.HOME, "paseo-seen"), payload.toString("utf8") + "\n");
