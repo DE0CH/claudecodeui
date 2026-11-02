@@ -139,8 +139,8 @@ jobs:
           # GitHub's published host key
           echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$RUNNER_TEMP/known_hosts"
           export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/yyc-key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+          # a blobless clone: pins.mjs fetches the kustomizations it reads, with the key
           git clone -q --bare --filter=blob:none git@github.com:DE0CH/YYC.git "$RUNNER_TEMP/yyc.git"
-          rm -f "$RUNNER_TEMP/yyc-key"
           echo "yyc-ai-ui (the seeds):"
           node scripts/pigeon-app/pins.mjs --repo "$RUNNER_TEMP/yyc.git" --image yyc-ai-ui --hours 720 | tee "$RUNNER_TEMP/pins.txt"
           [ -s "$RUNNER_TEMP/pins.txt" ] || { echo "::error::no yyc-ai-ui pin in DE0CH/YYC's history"; exit 1; }
@@ -153,6 +153,7 @@ jobs:
               || { echo "::error::pigeon-app tag $tag is not a single claudecodeui commit"; exit 1; }
             echo "$commit" >> "$RUNNER_TEMP/served-builds.txt"
           done < "$RUNNER_TEMP/app-pins.txt"
+          rm -f "$RUNNER_TEMP/yyc-key"
 
       # while the ui image is still built (jarvis-image.yml, until the switch's cleanup), the ui image of this commit is
       # seeded too: at A1 it is the image YYC is about to pin, and pigeon-app stays at this commit until A5
