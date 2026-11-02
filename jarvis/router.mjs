@@ -84,6 +84,8 @@
 //   JARVIS_SENT_FILES_TOKEN [unset]   bearer of POST /__jarvis/sent-files/snapshot (egress's sent-files route); unset: off
 //   JARVIS_JUICEFS [/usr/local/bin/juicefs]   the client used for copy-on-write clones (absent: a plain copy)
 //   JARVIS_VIEW_AS_HOURS [12]         how long a view-as token lasts
+//   JARVIS_UI_SWITCH_TOKEN, JARVIS_UI_LU_TOKEN, JARVIS_UI_PASS_ON_URL, JARVIS_UI_PURGE: the switch window (its section
+//                                     at the end of this file)
 //   passed to every process: DATABASE_URL, JWT_SECRET, JARVIS_WEB_URL, JARVIS_CC_TOKEN (plus the per-user contract env)
 import { createHash, createHmac, createPublicKey, randomUUID, timingSafeEqual, verify as cryptoVerify } from "node:crypto";
 import { execFile, spawn as nodeSpawn } from "node:child_process";
@@ -448,7 +450,7 @@ function readLimited(req, max) {
  */
 function upstreamHeaders(req, email, extra = {}, viewer = null) {
   const h = { ...req.headers };
-  for (const k of ["x-jarvis-user", VIEWER_HEADER, VIEWER_SESSION_HEADER, HOP, PEER_AUTH, "proxy-connection", "keep-alive", "te", "trailer"]) delete h[k];
+  for (const k of ["x-jarvis-user", VIEWER_HEADER, VIEWER_SESSION_HEADER, HOP, PEER_AUTH, LU_HEADER /* switch window */, "proxy-connection", "keep-alive", "te", "trailer"]) delete h[k];
   if (!req.headers.upgrade) delete h.connection;
   if (email) {
     h["x-jarvis-user"] = email;
@@ -518,6 +520,7 @@ class UserProcess {
       JARVIS_CC_TOKEN: process.env.JARVIS_CC_TOKEN || "",
       JARVIS_CC_OWNER: this.email,
       JARVIS_JFS_ROOT: r.jfsRoot,
+      ...r.sw.childEnv(), // switch window
     };
     const args = [`--max-old-space-size=${r.childHeapMb}`, r.serverEntry];
     log("info", "process start", { user: this.key, port: this.port });
@@ -674,6 +677,7 @@ export class Router {
     const peerSecret = o.peerSecret ?? this.ccToken;
     this.peerAuth = peerSecret ? createHash("sha256").update(`jarvis-ui-peer|${peerSecret}`).digest("hex") : "";
     this.draining = false;
+    this.sw = new SwitchWindow(this, o); // switch window
     this.server = http.createServer((req, res) => this.#onRequest(req, res));
     this.server.on("upgrade", (req, socket, head) => this.#onUpgrade(req, socket, head));
     this.server.keepAliveTimeout = 65_000;
@@ -950,7 +954,7 @@ export class Router {
    * deleted and no process: it purges them on start (jarvis-purge.ts) and stops again when idle, like any other.
    */
   async purgeWake() {
-    if (this.draining) return;
+    if (this.draining || !this.sw.purgeOn) return; // switch window: JARVIS_UI_PURGE=off
     for (const email of this.users) {
       if (this.procs.has(email) || this.ownerFor(email)) continue;
       let expired = false;
@@ -982,7 +986,9 @@ export class Router {
     }
     if (url.startsWith(PEER_PATH)) return this.#peerHolds(req, res);
     if (url === SENT_FILES_PATH || url.startsWith(SENT_FILES_PATH + "?")) return this.#sentFilesSnapshot(req, res);
+    if (this.sw.handles(req, res)) return; // switch window: its endpoints, and the pass-on once armed
     const who = await this.#identify(req);
+    this.sw.httpStarted(req, res, who); // switch window
     if (who.status === 401 && this.distDir && (req.method === "GET" || req.method === "HEAD")) {
       if (await this.#shell(req, res)) return;
     }
@@ -1265,7 +1271,7 @@ export class Router {
   }
 
   #forwardHttp(req, res, owner, hop, email) {
-    const up = http.request({ host: owner, port: this.port, method: req.method, path: req.url, headers: { ...upstreamHeaders(req, null), [HOP]: hop } }, (ures) => {
+    const up = http.request({ host: owner, port: this.port, method: req.method, path: req.url, headers: { ...upstreamHeaders(req, null), [HOP]: hop, ...this.#peerKey() /* switch window */ } }, (ures) => {
       res.writeHead(ures.statusCode || 502, ures.statusMessage, responseHeaders(ures));
       ures.pipe(res);
     });
@@ -1280,8 +1286,12 @@ export class Router {
     req.pipe(up);
   }
 
+  /** switch window: a request passed on to another replica carries the peer key, so it knows it is not a first hop. */
+  #peerKey() { return this.peerAuth ? { [PEER_AUTH]: this.peerAuth } : {}; }
+
   async #onUpgrade(req, socket, head) {
     socket.on("error", () => {});
+    if (this.sw.refuseUpgrade(req, socket)) return; // switch window: 503 before the 101 once armed
     const who = await this.#identify(req);
     if (who.status !== 200) return rejectUpgrade(socket, who.status, "not allowed\n");
     // viewing as someone: only the Paseo socket, whose bridge records what is sent (top of this file)
@@ -1290,13 +1300,14 @@ export class Router {
     const owner = route.peer ?? null;
     let target, p = null;
     if (owner) {
-      target = { host: owner, port: this.port, headers: { ...upstreamHeaders(req, null), [HOP]: route.hop } };
+      target = { host: owner, port: this.port, headers: { ...upstreamHeaders(req, null), [HOP]: route.hop, ...this.#peerKey() /* switch window */ } };
     } else {
       try { p = await this.#process(who.email); } catch { return rejectUpgrade(socket, 503, "busy\n"); }
       target = { host: "127.0.0.1", port: p.port, headers: upstreamHeaders(req, who.email, {}, who.viewAs), path: withoutViewAs(req.url || "/") };
     }
     const up = http.request({ path: req.url, ...target, method: req.method });
     up.on("upgrade", (ures, usock, uhead) => {
+      if (this.sw.refuseLate(req, socket, usock)) return; // switch window
       let raw = `HTTP/1.1 101 Switching Protocols\r\n`;
       for (let i = 0; i < ures.rawHeaders.length; i += 2) raw += `${ures.rawHeaders[i]}: ${ures.rawHeaders[i + 1]}\r\n`;
       socket.write(raw + "\r\n");
@@ -1317,6 +1328,7 @@ export class Router {
         socket.on("close", () => this.forwarded.delete(f));
       }
       socket.pipe(usock).pipe(socket);
+      this.sw.track({ req, socket, usock, ures, head, uhead, who, p }); // switch window: after the pipes
       socket.on("close", () => usock.destroy());
       usock.on("close", () => socket.destroy());
     });
@@ -1369,6 +1381,7 @@ export class Router {
     clearTimeout(this.purgeFirst);
     clearInterval(this.purgeTimer);
     clearInterval(this.peerTimer);
+    this.sw.stop(); // switch window
     log("info", "drained");
   }
 
@@ -1391,6 +1404,519 @@ export class Router {
     return busy;
   }
 }
+
+// ==================================== switch window (DESIGN 9.3, 9.5, 9.6) ====================================
+// The old side of the switch to the new stack (DE0CH/aviary pigeon), shipped in the A1 ui rollout and deleted with
+// this router in A6. Off unless JARVIS_UI_SWITCH_TOKEN is set (then: taps on every upgraded socket, the endpoints).
+//
+// - LU sockets: an upgrade or request whose `x-aviary-lu` equals JARVIS_UI_LU_TOKEN (constant-time) is pigeon's legacy
+//   upstream; the header never reaches a process (upstreamHeaders). LU sockets are never moved or refused.
+// - Frame reader: on every upgraded socket a reader runs after the bytes are piped (a later 'data' listener, inside
+//   try/catch), in both directions. It follows frame headers and keeps only the first SWITCH_PREFIX bytes of each text
+//   message (unmasked), from which a bounded scan takes `type`, `message.type`, `message.requestId` (client) and
+//   `message.payload.requestId` (server). A client request id is outstanding until the server sends a message whose
+//   payload names it (its response, or `rpc_error`). Every inbound frame other than a ping (control or `{"type":"ping"}`)
+//   and `client_heartbeat` sets the socket's last inbound time.
+// - Opaque: a 101 with Sec-WebSocket-Extensions, a non-WebSocket upgrade, RSV bits, a fragmented message, a lost
+//   continuation, a client binary message, a client `requestId` that may lie beyond the prefix, an unparseable message
+//   or a reader exception makes the socket opaque for its lifetime: busy, never moved, reported, logged at warn.
+// - GET /__jarvis/sockets: per person, this replica's first-hop sockets that are not LU (outstanding count, last
+//   inbound time, opaque), LU sockets, in-flight HTTP that is not LU; `generatedAt`.
+// - POST /__jarvis/move[?person=<email>]: the first call arms the refusal of new non-LU upgrades (503 before the 101)
+//   and the pass-on of non-LU HTTP to JARVIS_UI_PASS_ON_URL, unchanged. With `person`, each of that person's non-LU,
+//   non-opaque first-hop sockets is closed at an instant when it has no outstanding request id, no inbound frame for
+//   SWITCH_QUIET_MS and the call is under SWITCH_MOVE_MS old (re-checked at the close, and on every server frame and
+//   every SWITCH_TICK_MS while the call is fresh): both pipes stop, a close frame 1012 is sent, the socket is read for
+//   SWITCH_TAIL_MS more and a request frame read then is counted (`inflightCloses`) and not forwarded.
+// - POST /__jarvis/admit: undoes the arming (a rollback before the gate).
+// - POST /__jarvis/restart?person=<email>: stops the person's process here unless a chat, hold or background task runs
+//   (CloudCLI's running list), HTTP is in flight or a socket of theirs has a request outstanding or is opaque (`busy`).
+// - JARVIS_UI_PURGE=off: purgeWake does nothing and each process gets JARVIS_UI_PURGE=off (jarvis-purge.ts: no purge).
+// The endpoints take `Authorization: Bearer <JARVIS_UI_SWITCH_TOKEN>`; anything else is 404.
+//
+// Environment:
+//   JARVIS_UI_SWITCH_TOKEN [unset]    bearer of the switch endpoints; unset: the module is off
+//   JARVIS_UI_LU_TOKEN [unset]        pigeon's pair token in x-aviary-lu; unset: no socket is LU
+//   JARVIS_UI_PASS_ON_URL [http://pigeon.yyc-ai.svc:8080]   where non-LU HTTP goes once armed
+//   JARVIS_UI_PURGE [on]              off: no Recently-deleted purge (purgeWake and the processes')
+const LU_HEADER = "x-aviary-lu";
+const SWITCH_PATHS = ["/__jarvis/sockets", "/__jarvis/move", "/__jarvis/admit", "/__jarvis/restart"];
+export const SWITCH_PREFIX = 8192;
+const SWITCH_MAX_OUTSTANDING = 1024;
+const CLOSE_1012 = Buffer.from([0x88, 0x02, 0x03, 0xf4]);
+
+/**
+ * A WebSocket frame follower for one direction of a byte stream (RFC 6455 framing, masked or not). `onFrame(opcode,
+ * prefix, complete)` gets each whole frame: the first SWITCH_PREFIX payload bytes of a data frame (unmasked; null for a
+ * control frame) and whether that is all of it. `onOpaque(reason)` is called once for anything it cannot follow, after
+ * which it reads nothing more. It copies at most SWITCH_PREFIX bytes per frame and never touches the input buffers.
+ */
+export class FrameReader {
+  #hdr = Buffer.alloc(14); #hdrLen = 0; #need = 2; #inPayload = false; #remaining = 0; #pos = 0; #mask = null;
+  #opcode = 0; #prefix = null; #prefixLen = 0; #len = 0; #onFrame; #onOpaque;
+  dead = false;
+  constructor(onFrame, onOpaque, prefixMax = SWITCH_PREFIX) { this.#onFrame = onFrame; this.#onOpaque = onOpaque; this.prefixMax = prefixMax; }
+  /** No partial frame read: a frame written now would not split another. */
+  get atBoundary() { return !this.#inPayload && this.#hdrLen === 0; }
+  opaque(reason) {
+    if (this.dead) return;
+    this.dead = true;
+    this.#prefix = null;
+    this.#onOpaque(reason);
+  }
+  feed(buf) {
+    let off = 0;
+    while (off < buf.length && !this.dead) {
+      if (!this.#inPayload) {
+        const take = Math.min(this.#need - this.#hdrLen, buf.length - off);
+        buf.copy(this.#hdr, this.#hdrLen, off, off + take);
+        this.#hdrLen += take;
+        off += take;
+        if (this.#hdrLen === 2 && this.#need === 2) {
+          const l7 = this.#hdr[1] & 0x7f;
+          this.#need = 2 + (l7 === 126 ? 2 : l7 === 127 ? 8 : 0) + (this.#hdr[1] & 0x80 ? 4 : 0);
+        }
+        if (this.#hdrLen === this.#need) this.#header();
+        continue;
+      }
+      const n = Math.min(this.#remaining, buf.length - off);
+      if (this.#prefix && this.#prefixLen < this.#prefix.length) {
+        const k = Math.min(n, this.#prefix.length - this.#prefixLen);
+        buf.copy(this.#prefix, this.#prefixLen, off, off + k);
+        if (this.#mask) for (let i = 0; i < k; i++) this.#prefix[this.#prefixLen + i] ^= this.#mask[(this.#pos + i) & 3];
+        this.#prefixLen += k;
+      }
+      this.#pos += n;
+      this.#remaining -= n;
+      off += n;
+      if (this.#remaining === 0) this.#end();
+    }
+  }
+  #header() {
+    const h = this.#hdr;
+    const fin = (h[0] & 0x80) !== 0, rsv = h[0] & 0x70, opcode = h[0] & 0x0f, masked = (h[1] & 0x80) !== 0, l7 = h[1] & 0x7f;
+    let len = l7;
+    if (l7 === 126) len = h.readUInt16BE(2);
+    else if (l7 === 127) {
+      const hi = h.readUInt32BE(2);
+      if (hi > 0x1fffff) return this.opaque("frame length out of range");
+      len = hi * 2 ** 32 + h.readUInt32BE(6);
+    }
+    this.#mask = masked ? Buffer.from(h.subarray(this.#need - 4, this.#need)) : null;
+    this.#hdrLen = 0;
+    this.#need = 2;
+    if (rsv) return this.opaque("extension bits in a frame");
+    if (opcode >= 8) {
+      if (opcode > 10 || !fin || len > 125) return this.opaque("bad control frame");
+    } else if (opcode === 0) return this.opaque("continuation frame");
+    else if (opcode !== 1 && opcode !== 2) return this.opaque("unknown opcode");
+    else if (!fin) return this.opaque("fragmented message");
+    this.#opcode = opcode;
+    this.#len = len;
+    this.#prefix = opcode < 8 ? Buffer.allocUnsafe(Math.min(len, this.prefixMax)) : null;
+    this.#prefixLen = 0;
+    this.#pos = 0;
+    this.#remaining = len;
+    this.#inPayload = true;
+    if (len === 0) this.#end();
+  }
+  #end() {
+    this.#inPayload = false;
+    const prefix = this.#prefix ? this.#prefix.subarray(0, this.#prefixLen) : null;
+    const complete = this.#prefixLen === this.#len;
+    this.#prefix = null;
+    this.#onFrame(this.#opcode, prefix, complete);
+  }
+}
+
+/**
+ * A bounded scan of a message's JSON prefix (latin1 text: every structural character is ASCII): the string values of
+ * `type`, `message.type`, `message.requestId` and `message.payload.requestId`, and whether `message.requestId` could
+ * still follow the prefix (`requestIdPossible`). `error` for JSON that is invalid within the prefix (or a message that
+ * is complete but cut short). Strings are kept raw (escapes are not decoded).
+ */
+export function scanMessage(s, complete) {
+  const out = { topType: null, msgType: null, requestId: null, payloadRequestId: null, requestIdPossible: false, error: null };
+  const n = s.length;
+  const EOF = {};
+  let i = 0, msgClosed = false, topClosed = false;
+  const ws = () => {
+    while (i < n) { const c = s.charCodeAt(i); if (c === 32 || c === 10 || c === 13 || c === 9) i++; else return; }
+    throw EOF;
+  };
+  const str = () => {
+    let j = i + 1;
+    for (;;) {
+      if (j >= n) throw EOF;
+      const c = s.charCodeAt(j);
+      if (c === 92) j += 2;
+      else if (c === 34) break;
+      else j++;
+    }
+    const v = s.slice(i + 1, j);
+    i = j + 1;
+    return v;
+  };
+  const fail = (why) => { throw new Error(why); };
+  // ctx: 0 top, 1 message, 2 message.payload, 3 anything else
+  const value = (ctx, depth) => {
+    ws();
+    const c = s.charCodeAt(i);
+    if (c === 123) return obj(ctx, depth + 1), undefined;
+    if (c === 91) return arr(depth + 1), undefined;
+    if (c === 34) return str();
+    const start = i;
+    while (i < n && /[-+.0-9a-zE]/.test(s[i])) i++;
+    if (i >= n) throw EOF;
+    const lit = s.slice(start, i);
+    if (lit !== "true" && lit !== "false" && lit !== "null" && !/^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?$/.test(lit)) fail("unexpected value");
+    return undefined;
+  };
+  const arr = (depth) => {
+    if (depth > 64) fail("too deep");
+    i++;
+    ws();
+    if (s.charCodeAt(i) === 93) { i++; return; }
+    for (;;) {
+      value(3, depth);
+      ws();
+      const c = s.charCodeAt(i++);
+      if (c === 93) return;
+      if (c !== 44) fail("expected , or ]");
+    }
+  };
+  const obj = (ctx, depth) => {
+    if (depth > 64) fail("too deep");
+    i++;
+    ws();
+    if (s.charCodeAt(i) === 125) { i++; return close(ctx); }
+    for (;;) {
+      ws();
+      if (s.charCodeAt(i) !== 34) fail("expected a key");
+      const key = str();
+      ws();
+      if (s.charCodeAt(i++) !== 58) fail("expected :");
+      const child = ctx === 0 && key === "message" ? 1 : ctx === 1 && key === "payload" ? 2 : 3;
+      const v = value(child, depth);
+      if (typeof v === "string") {
+        if (ctx === 0 && key === "type") out.topType = v;
+        else if (ctx === 1 && key === "type") out.msgType = v;
+        else if (ctx === 1 && key === "requestId") out.requestId = v;
+        else if (ctx === 2 && key === "requestId") out.payloadRequestId = v;
+      }
+      ws();
+      const c = s.charCodeAt(i++);
+      if (c === 125) return close(ctx);
+      if (c !== 44) fail("expected , or }");
+    }
+  };
+  const close = (ctx) => { if (ctx === 0) topClosed = true; else if (ctx === 1) msgClosed = true; };
+  try {
+    ws();
+    if (s.charCodeAt(i) !== 123) fail("not an object");
+    obj(0, 0);
+  } catch (e) {
+    if (e !== EOF) out.error = String(e.message || e);
+    else if (complete) out.error = "message cut short";
+  }
+  out.requestIdPossible = !out.requestId && !topClosed && !msgClosed && (out.topType === null || out.topType === "session");
+  return out;
+}
+
+const eqSecret = (given, want) => {
+  if (!want || typeof given !== "string" || !given) return false;
+  const a = createHash("sha256").update(given).digest(), b = createHash("sha256").update(want).digest();
+  return timingSafeEqual(a, b);
+};
+
+class SwitchWindow {
+  constructor(router, o) {
+    this.r = router;
+    this.token = o.switchToken ?? process.env.JARVIS_UI_SWITCH_TOKEN ?? "";
+    this.luToken = o.luToken ?? process.env.JARVIS_UI_LU_TOKEN ?? "";
+    this.passOnUrl = o.passOnUrl ?? process.env.JARVIS_UI_PASS_ON_URL ?? "http://pigeon.yyc-ai.svc:8080";
+    this.purgeOn = String(o.purge ?? process.env.JARVIS_UI_PURGE ?? "on").toLowerCase() !== "off";
+    this.quietMs = o.switchQuietMs ?? 5000;
+    this.moveMs = o.switchMoveMs ?? 10_000;
+    this.tailMs = o.switchTailMs ?? 2000;
+    this.tickMs = o.switchTickMs ?? 100;
+    this.enabled = !!this.token;
+    this.armed = false;
+    this.recs = new Set();          // every upgraded socket's record (first hop or not)
+    this.moveCalls = new Map();     // person -> when move?person= was last called
+    this.http = new Map();          // person -> in-flight non-LU HTTP (first hop)
+    this.luHttp = new Map();        // person -> in-flight LU HTTP (first hop)
+    this.passOnInFlight = 0;
+    this.nextId = 1;
+    this.counters = { movedTotal: 0, inflightClosesTotal: 0, opaqueSocketsTotal: 0, refusedUpgradesTotal: 0, passedOnTotal: 0 };
+    this.ticker = null;
+  }
+
+  /** Env for each CloudCLI process. */
+  childEnv() { return this.purgeOn ? {} : { JARVIS_UI_PURGE: "off" }; }
+
+  isLu(req) { return eqSecret(req.headers[LU_HEADER], this.luToken); }
+
+  /** Passed on by another replica (hop header with the peer key), i.e. not a first hop. */
+  isHop(req) { return !!req.headers[HOP] && eqSecret(req.headers[PEER_AUTH], this.r.peerAuth); }
+
+  /** The switch endpoints and, once armed, the pass-on; true when the request was handled here. */
+  handles(req, res) {
+    const pathname = (req.url || "/").split("?")[0];
+    if (SWITCH_PATHS.includes(pathname)) { void this.#endpoint(req, res, pathname); return true; }
+    if (!this.enabled || !this.armed || pathname.startsWith("/__jarvis") || this.isHop(req) || this.isLu(req)) return false;
+    this.#passOn(req, res);
+    return true;
+  }
+
+  /** Counts a signed-in first-hop request while it is in flight. */
+  httpStarted(req, res, who) {
+    if (!this.enabled || who.status !== 200 || this.isHop(req)) return;
+    const m = this.isLu(req) ? this.luHttp : this.http;
+    const person = who.email;
+    m.set(person, (m.get(person) || 0) + 1);
+    let done = false;
+    res.on("close", () => {
+      if (done) return;
+      done = true;
+      const v = (m.get(person) || 1) - 1;
+      if (v) m.set(person, v); else m.delete(person);
+    });
+  }
+
+  /** Once armed: a new non-LU first-hop upgrade is answered 503 before any 101. */
+  refuseUpgrade(req, socket) {
+    if (!this.enabled || !this.armed || this.isHop(req) || this.isLu(req)) return false;
+    this.counters.refusedUpgradesTotal++;
+    socket.on("error", () => {});
+    rejectUpgrade(socket, 503, "moved, reconnect\n");
+    return true;
+  }
+
+  /** The upstream answered 101: refused anyway if the arming came meanwhile (nothing has reached the client yet). */
+  refuseLate(req, socket, usock) {
+    if (!this.refuseUpgrade(req, socket)) return false;
+    usock.destroy();
+    return true;
+  }
+
+  /** Taps an upgraded socket (called right after the pipes are set up, before any 'data' event). */
+  track({ req, socket, usock, ures, head, uhead, who, p }) {
+    if (!this.enabled) return;
+    const now = this.r.now();
+    const rec = {
+      id: `s${this.nextId++}`, person: who.email, viewAs: who.viewAs ? who.viewAs.a : null, lu: this.isLu(req),
+      firstHop: !this.isHop(req), path: (req.url || "/").split("?")[0], openedAt: now, lastInboundAt: now,
+      outstanding: new Map(), opaque: null, closing: false, socket, usock, p,
+    };
+    rec.cr = new FrameReader((op, pre, complete) => this.#clientFrame(rec, op, pre, complete), (why) => this.#opaque(rec, why));
+    rec.sr = new FrameReader((op, pre, complete) => this.#serverFrame(rec, op, pre, complete), (why) => this.#opaque(rec, why));
+    this.recs.add(rec);
+    socket.on("close", () => { this.recs.delete(rec); clearTimeout(rec.tail); });
+    if (String(req.headers.upgrade || "").toLowerCase() !== "websocket") this.#opaque(rec, "not a WebSocket upgrade");
+    else if (ures.headers["sec-websocket-extensions"]) this.#opaque(rec, "extension negotiated");
+    const feed = (reader, d) => {
+      if (reader.dead) return;
+      try { reader.feed(d); } catch (e) { reader.opaque(`reader exception: ${String(e.message || e).slice(0, 120)}`); }
+    };
+    if (uhead?.length) feed(rec.sr, uhead);
+    if (head?.length) feed(rec.cr, head);
+    // after socket.pipe(usock).pipe(socket): these listeners run after the bytes are written on
+    socket.on("data", (d) => feed(rec.cr, d));
+    usock.on("data", (d) => {
+      feed(rec.sr, d);
+      if (this.moveCalls.has(rec.person)) this.#tryClose(rec);
+    });
+  }
+
+  #opaque(rec, why) {
+    if (rec.opaque) return;
+    rec.opaque = why;
+    rec.cr?.opaque(why);
+    rec.sr?.opaque(why);
+    this.counters.opaqueSocketsTotal++;
+    log("warn", "switch: opaque socket", { user: userKey(rec.person), socket: rec.id, lu: rec.lu, firstHop: rec.firstHop, why });
+  }
+
+  #clientFrame(rec, op, pre, complete) {
+    if (op >= 8) return; // ping, pong, close: not activity
+    if (op === 2) return this.#opaque(rec, "binary message from the client");
+    let m;
+    try { m = scanMessage(pre.toString("latin1"), complete); } catch (e) { return this.#opaque(rec, `reader exception: ${String(e.message || e).slice(0, 120)}`); }
+    if (m.error) return this.#opaque(rec, `unreadable message: ${m.error}`);
+    if (rec.closing) {
+      if (m.requestId) {
+        this.counters.inflightClosesTotal++;
+        log("warn", "switch: a request arrived after the close decision", { user: userKey(rec.person), socket: rec.id, type: m.msgType });
+      }
+      return;
+    }
+    if (!(m.topType === "ping" || m.msgType === "client_heartbeat")) rec.lastInboundAt = this.r.now();
+    if (m.requestId) {
+      rec.outstanding.set(m.requestId, { type: m.msgType, at: this.r.now() });
+      if (rec.outstanding.size > SWITCH_MAX_OUTSTANDING) this.#opaque(rec, "too many outstanding requests");
+    } else if (!complete && m.requestIdPossible) this.#opaque(rec, "requestId beyond the prefix");
+  }
+
+  #serverFrame(rec, op, pre) {
+    if (op !== 1) return;
+    const m = scanMessage(pre.toString("latin1"), false);
+    if (m.payloadRequestId) rec.outstanding.delete(m.payloadRequestId);
+  }
+
+  #eligible(rec, now) {
+    if (!rec.firstHop || rec.lu || rec.opaque || rec.closing || rec.socket.destroyed) return false;
+    const at = this.moveCalls.get(rec.person);
+    return at !== undefined && now - at < this.moveMs && rec.outstanding.size === 0 && now - rec.lastInboundAt >= this.quietMs &&
+      rec.cr.atBoundary && rec.sr.atBoundary;
+  }
+
+  /** Closes the socket if the move rule holds at this instant. */
+  #tryClose(rec) {
+    const now = this.r.now();
+    if (!this.#eligible(rec, now)) return false;
+    rec.closing = true;
+    this.counters.movedTotal++;
+    const { socket, usock } = rec;
+    socket.unpipe(usock);
+    usock.unpipe(socket);
+    usock.pause();
+    socket.write(CLOSE_1012);
+    socket.resume(); // keep reading the client for the tail
+    socket.once("end", () => socket.destroy());
+    rec.tail = setTimeout(() => socket.destroy(), this.tailMs);
+    rec.tail.unref?.();
+    log("info", "switch: socket moved", { user: userKey(rec.person), socket: rec.id });
+    return true;
+  }
+
+  #tick() {
+    const now = this.r.now();
+    for (const [person, at] of this.moveCalls) if (now - at >= this.moveMs) this.moveCalls.delete(person);
+    if (!this.moveCalls.size) { clearInterval(this.ticker); this.ticker = null; return; }
+    for (const rec of this.recs) if (this.moveCalls.has(rec.person)) this.#tryClose(rec);
+  }
+
+  stop() { clearInterval(this.ticker); this.ticker = null; for (const rec of this.recs) clearTimeout(rec.tail); }
+
+  report() {
+    const persons = {};
+    const of = (email) => (persons[email] ??= { sockets: [], lu: 0, luOutstanding: 0, http: 0, luHttp: 0 });
+    const iso = (ms) => new Date(ms).toISOString();
+    let sockets = 0, opaque = 0, lu = 0, hop = 0;
+    for (const rec of this.recs) {
+      if (rec.socket.destroyed) continue;
+      if (!rec.firstHop) { hop++; continue; }
+      const e = of(rec.person);
+      if (rec.lu) { e.lu++; e.luOutstanding += rec.outstanding.size; lu++; continue; }
+      sockets++;
+      if (rec.opaque) opaque++;
+      let oldest = null;
+      for (const v of rec.outstanding.values()) if (oldest === null || v.at < oldest) oldest = v.at;
+      e.sockets.push({
+        id: rec.id, path: rec.path, viewAs: rec.viewAs, opaque: !!rec.opaque, opaqueReason: rec.opaque, outstanding: rec.outstanding.size,
+        oldestOutstandingAt: oldest === null ? null : iso(oldest), lastInboundAt: iso(rec.lastInboundAt), openedAt: iso(rec.openedAt), closing: rec.closing,
+      });
+    }
+    let http = 0;
+    for (const [person, n] of this.http) { of(person).http = n; http += n; }
+    for (const [person, n] of this.luHttp) of(person).luHttp = n;
+    return {
+      generatedAt: iso(this.r.now()), armed: this.armed, pod: this.r.selfIp || null, persons,
+      totals: { sockets, opaque, lu, http, passOnInFlight: this.passOnInFlight, hopSockets: hop },
+      counters: { ...this.counters },
+    };
+  }
+
+  move(person) {
+    this.armed = true;
+    let closed = 0, waiting = 0, opaque = 0;
+    if (person) {
+      this.moveCalls.set(person, this.r.now());
+      for (const rec of this.recs) {
+        if (rec.person !== person || !rec.firstHop || rec.lu || rec.closing || rec.socket.destroyed) continue;
+        if (rec.opaque) opaque++;
+        else if (this.#tryClose(rec)) closed++;
+        else waiting++;
+      }
+      if (!this.ticker) { this.ticker = setInterval(() => this.#tick(), this.tickMs); this.ticker.unref?.(); }
+    }
+    return { armed: true, person: person || null, closed, waiting, opaque, generatedAt: new Date(this.r.now()).toISOString() };
+  }
+
+  async restart(person) {
+    const p = this.r.procs.get(person);
+    if (!p || p.stopping || p.exited) return { result: "none" };
+    const why = () => {
+      if (p.inflight > 0) return "http in flight";
+      for (const rec of this.recs) {
+        if (rec.person !== person || rec.socket.destroyed) continue;
+        if (rec.outstanding.size) return "request outstanding";
+        if (rec.opaque) return "opaque socket";
+      }
+      return null;
+    };
+    let busy = why();
+    if (busy) return { result: "busy", why: busy };
+    const running = await p.runningChats();
+    if (running !== 0) return { result: "busy", why: running === null ? "running state unknown" : "running" };
+    busy = why();
+    if (busy || p.stopping) return { result: "busy", why: busy ?? "stopping" };
+    await p.stop("switch restart");
+    return { result: "stopped" };
+  }
+
+  async #endpoint(req, res, pathname) {
+    const answer = (status, body) => {
+      res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(body));
+    };
+    req.resume();
+    if (!this.enabled || !eqSecret(String(req.headers.authorization || ""), `Bearer ${this.token}`)) return answer(404, { error: "not found" });
+    const want = pathname === "/__jarvis/sockets" ? "GET" : "POST";
+    if (req.method !== want) return answer(405, { error: `${want} only` });
+    const person = String(new URL(req.url, "http://x").searchParams.get("person") || "").trim().toLowerCase();
+    if (pathname === "/__jarvis/sockets") return answer(200, this.report());
+    if (pathname === "/__jarvis/move") {
+      const first = !this.armed;
+      const out = this.move(person);
+      if (first) log("info", "switch: armed (new non-LU upgrades refused, non-LU HTTP passed on)", { passOn: this.passOnUrl });
+      return answer(200, out);
+    }
+    if (pathname === "/__jarvis/admit") {
+      this.armed = false;
+      this.moveCalls.clear();
+      log("info", "switch: admitted (arming undone)");
+      return answer(200, { armed: false });
+    }
+    if (!person) return answer(400, { error: "person is required" });
+    try { return answer(200, await this.restart(person)); } catch (e) { return answer(500, { error: String(e.message || e) }); }
+  }
+
+  /** A non-LU request once armed: to pigeon unchanged (Access headers included); only hop-by-hop headers dropped. */
+  #passOn(req, res) {
+    const target = new URL(this.passOnUrl);
+    const headers = { ...req.headers };
+    for (const k of ["connection", "keep-alive", "proxy-connection", "te", "trailer", "upgrade"]) delete headers[k];
+    this.passOnInFlight++;
+    this.counters.passedOnTotal++;
+    let done = false;
+    const finish = () => { if (!done) { done = true; this.passOnInFlight--; } };
+    const up = http.request({ host: target.hostname, port: target.port || 80, method: req.method, path: req.url, headers }, (ures) => {
+      res.writeHead(ures.statusCode || 502, ures.statusMessage, responseHeaders(ures));
+      ures.pipe(res);
+    });
+    res.on("close", () => { finish(); if (!res.writableFinished) up.destroy(); });
+    up.on("error", (e) => {
+      finish();
+      log("warn", "switch: pass-on error", { error: e.message });
+      if (!res.headersSent) { res.setHeader("retry-after", "1"); page(res, 502, "請重新整理", "請重新整理頁面。Reload the page."); }
+      else res.destroy();
+    });
+    req.pipe(up);
+  }
+}
+// ================================== end of the switch window section ==================================
 
 async function main() {
   const r = new Router();

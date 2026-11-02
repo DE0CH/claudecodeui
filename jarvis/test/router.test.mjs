@@ -1,6 +1,6 @@
 // Router tests with fake CloudCLI children (test/fake-cloudcli.mjs): `node --test jarvis/test/`.
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign, randomUUID } from "node:crypto";
+import { generateKeyPairSync, sign, randomUUID, randomBytes } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readlinkSync, existsSync, readFileSync, symlinkSync, unlinkSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -9,7 +9,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { AccessVerifier, Router, needsSignIn, TeamsVerifier, ownerOf, pickFirstName, userKey, workspaceRelative } from "../router.mjs";
+import { AccessVerifier, FrameReader, Router, SWITCH_PREFIX, log, needsSignIn, scanMessage, TeamsVerifier, ownerOf, pickFirstName, userKey, workspaceRelative } from "../router.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE = path.join(HERE, "fake-cloudcli.mjs");
@@ -813,4 +813,402 @@ test("relay page: the signed-in person's own tokens only; create shows the token
   assert.equal(rev.status, 303);
   assert.equal(rev.headers.location, "/api/jarvis/relay");
   assert.equal(store.length, 0);
+});
+
+// ------------------------------------------------ switch window ------------------------------------------------
+const SW = "switch-test-token";
+const LU = "lu-pair-token";
+const swAuth = { authorization: `Bearer ${SW}` };
+function swRouter(o = {}) {
+  return makeRouter({ switchToken: SW, luToken: LU, switchQuietMs: 300, switchMoveMs: 2000, switchTailMs: 300, switchTickMs: 20, ...o });
+}
+const wait = (ms) => new Promise((x) => setTimeout(x, ms));
+async function until(pred, ms = 3000, what = "condition") {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { if (await pred()) return; await wait(10); }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+/** A masked client frame. */
+function cframe(opcode, payload, { fin = true, rsv = 0, mask = true } = {}) {
+  const p = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+  const n = p.length;
+  const b0 = (fin ? 0x80 : 0) | rsv | opcode;
+  const m = mask ? 0x80 : 0;
+  let head;
+  if (n < 126) head = Buffer.from([b0, m | n]);
+  else if (n < 65536) head = Buffer.from([b0, m | 126, n >> 8, n & 255]);
+  else { head = Buffer.alloc(10); head[0] = b0; head[1] = m | 127; head.writeBigUInt64BE(BigInt(n), 2); }
+  if (!mask) return Buffer.concat([head, p]);
+  const key = randomBytes(4);
+  const out = Buffer.from(p);
+  for (let i = 0; i < n; i++) out[i] ^= key[i & 3];
+  return Buffer.concat([head, key, out]);
+}
+const cmsg = (obj) => cframe(1, JSON.stringify(obj));
+const req = (type, requestId, extra = {}) => cmsg({ type: "session", message: { type, requestId, ...extra } });
+const heartbeat = () => cmsg({ type: "session", message: { type: "client_heartbeat", deviceType: "web", focusedAgentId: null, lastActivityAt: new Date().toISOString(), appVisible: true } });
+
+/** A WebSocket client through the router: raw bytes after the 101 in `rx`, closed when the TCP socket closes. */
+function wsOpen(r, email, { path: p = "/paseo-ws", headers = {}, expect101 = true } = {}) {
+  return new Promise((resolve, reject) => {
+    const s = net.connect(r.port, r.host ?? "127.0.0.1");
+    s.on("error", () => {});
+    const extra = Object.entries({ "cf-access-jwt-assertion": jwt({ email }), ...headers }).map(([k, v]) => `${k}: ${v}\r\n`).join("");
+    s.write(`GET ${p} HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${randomBytes(16).toString("base64")}\r\n${extra}\r\n`);
+    let buf = Buffer.alloc(0);
+    const c = { s, head: null, rx: Buffer.alloc(0), closed: false };
+    c.done = new Promise((res) => s.on("close", () => { c.closed = true; res(); }));
+    s.on("data", (d) => {
+      if (c.head !== null) { c.rx = Buffer.concat([c.rx, d]); return; }
+      buf = Buffer.concat([buf, d]);
+      const i = buf.indexOf("\r\n\r\n");
+      if (i < 0) return;
+      c.head = buf.subarray(0, i).toString("latin1");
+      c.rx = buf.subarray(i + 4);
+      if (expect101 && !/^HTTP\/1.1 101/.test(c.head)) return reject(new Error(c.head));
+      resolve(c);
+    });
+    s.on("close", () => { if (c.head === null) reject(new Error("closed before an answer")); });
+  });
+}
+/** The unmasked server frames in a byte buffer: [{opcode, text}]. */
+function sframes(buf) {
+  const out = [];
+  let off = 0;
+  while (off + 2 <= buf.length) {
+    let len = buf[off + 1] & 0x7f, h = 2;
+    if (len === 126) { len = buf.readUInt16BE(off + 2); h = 4; } else if (len === 127) { len = Number(buf.readBigUInt64BE(off + 2)); h = 10; }
+    if (off + h + len > buf.length) break;
+    out.push({ opcode: buf[off] & 0x0f, text: buf.subarray(off + h, off + h + len).toString("utf8"), raw: buf.subarray(off + h, off + h + len) });
+    off += h + len;
+  }
+  return out;
+}
+const isMoved = (c) => sframes(c.rx).some((f) => f.opcode === 8 && f.raw.readUInt16BE(0) === 1012);
+const sockets = async (r) => (await get(r, "/__jarvis/sockets", swAuth)).json;
+const move = async (r, person) => (await get(r, `/__jarvis/move${person ? `?person=${encodeURIComponent(person)}` : ""}`, swAuth, "POST")).json;
+const paseoSeen = (r, email) => { try { return readFileSync(path.join(r.homeRoot, userKey(email), "paseo-seen"), "utf8"); } catch { return ""; } };
+
+/** Writes `bytes` in pieces of 1..maxPiece bytes, yielding between writes so TCP delivers them as separate chunks. */
+async function writeInPieces(s, bytes, maxPiece) {
+  let off = 0, i = 0;
+  while (off < bytes.length) {
+    const n = 1 + ((i++ * 7919) % maxPiece);
+    s.write(bytes.subarray(off, off + n));
+    off += n;
+    if (i % 4 === 0) await new Promise((x) => setImmediate(x));
+  }
+}
+
+test("switch window: bytes through the router are identical with and without the module (pieces, pings, 1 MB, fragments, close)", async () => {
+  const session = Buffer.concat([
+    cmsg({ type: "hello", clientId: "c1" }),
+    cframe(9, "ping!"),
+    req("fetch_agents_request", "r1"),
+    cframe(1, JSON.stringify({ type: "session", message: { type: "send_agent_message_request", requestId: "r2", text: "x".repeat(1 << 20) } })),
+    cframe(10, ""),
+    heartbeat(),
+    cframe(1, '{"type":"session","mess', { fin: false }), cframe(9, "mid"), cframe(0, 'age":{"type":"x"}}'),
+    cframe(2, randomBytes(70_000)),
+    cframe(8, Buffer.from([0x03, 0xe8])),
+  ]);
+  for (const on of [true, false]) {
+    const r = on ? swRouter() : makeRouter();
+    await r.listen();
+    const c = await wsOpen(r, ALICE, { path: "/ws-echo" });
+    await writeInPieces(c.s, session, 9000);
+    await until(() => c.rx.length >= session.length, 10_000, "the echo");
+    assert.equal(c.rx.length, session.length);
+    assert.ok(c.rx.equals(session), `bytes differ with the module ${on ? "on" : "off"}`);
+    if (on) {
+      const rep = await sockets(r);
+      assert.equal(rep.persons[ALICE].sockets.length, 1);
+      assert.equal(rep.persons[ALICE].sockets[0].opaque, true, "the fragmented message made it opaque");
+    }
+    c.s.destroy();
+    await r.drain();
+  }
+});
+
+test("switch window: the frame reader adds under 1 ms per frame at p99 (prefix only, 1 MB messages skipped)", () => {
+  const sizes = [];
+  for (let i = 0; i < 3000; i++) sizes.push(i % 150 === 0 ? 1 << 20 : i % 20 === 0 ? 64 * 1024 : i % 5 === 0 ? 8 * 1024 : 200);
+  const frames = sizes.map((n, i) => cframe(1, JSON.stringify({ type: "session", message: { type: "send_agent_message_request", requestId: `r${i}`, text: "y".repeat(n) } })));
+  let seen = 0;
+  const reader = new FrameReader((op, pre, complete) => { const m = scanMessage(pre.toString("latin1"), complete); if (m.requestId) seen++; }, (why) => { throw new Error(why); });
+  const times = [];
+  for (const f of frames) {
+    const t = process.hrtime.bigint();
+    for (let off = 0; off < f.length; off += 65536) reader.feed(f.subarray(off, off + 65536));
+    times.push(Number(process.hrtime.bigint() - t) / 1e6);
+  }
+  assert.equal(seen, frames.length);
+  times.sort((a, b) => a - b);
+  const p99 = times[Math.floor(times.length * 0.99)];
+  log("info", "frame reader cost", { p50: times[Math.floor(times.length / 2)], p99, max: times[times.length - 1] });
+  assert.ok(p99 < 1, `p99 ${p99} ms`);
+});
+
+test("switch window: the prefix scan finds type and request ids and says when one may lie beyond the prefix", () => {
+  const m = scanMessage('{"type":"session","message":{"type":"x_request","requestId":"a1","filter":{"requestId":"no"}}}', true);
+  assert.deepEqual([m.topType, m.msgType, m.requestId, m.error], ["session", "x_request", "a1", null]);
+  const s = scanMessage('{"type":"session","message":{"type":"x_response","payload":{"requestId":"a1","rows":[1,2,{"a":"}"}]}}}', true);
+  assert.equal(s.payloadRequestId, "a1");
+  assert.equal(scanMessage('{"type":"session","message":{"type":"y","text":"lo', false).requestIdPossible, true);
+  assert.equal(scanMessage('{"type":"session","message":{"type":"y"},"pad":"lo', false).requestIdPossible, false);
+  assert.equal(scanMessage('{"type":"ping","pad":"lo', false).requestIdPossible, false);
+  assert.ok(scanMessage('{"type":"session","message":{"type":x}}', true).error);
+  assert.equal(scanMessage('{"a":[true,false,null,-1.5e3,2E-2,{"b":0}],"type":"ping"}', true).error, null);
+  assert.ok(scanMessage('{"type":"session"', true).error);
+  assert.equal(scanMessage('{"type":"session"', false).error, null);
+});
+
+test("switch window: move closes quiet sockets with 1012, waits for an outstanding request and inbound quiet, never an LU socket", async () => {
+  const r = swRouter();
+  await r.listen();
+  const idle = await wsOpen(r, ALICE);
+  const slow = await wsOpen(r, ALICE);
+  const lu = await wsOpen(r, ALICE, { headers: { "x-aviary-lu": LU } });
+  const chatty = await wsOpen(r, ALICE);
+  const beating = await wsOpen(r, ALICE);
+  assert.match(lu.head, /X-Lu-Seen: \r\n/i, "the LU header never reaches the process");
+  const chat = setInterval(() => chatty.s.write(cmsg({ type: "session", message: { type: "audio_played" } })), 80);
+  const beat = setInterval(() => beating.s.write(heartbeat()), 80);
+  lu.s.write(req("fetch_agents_request", "lu1", { delayMs: 5000 }));
+  await wait(350);
+  slow.s.write(req("fetch_agent_timeline_request", "t1", { delayMs: 900 }));
+  await wait(400); // the request is 400 ms old: quiet by then, but outstanding
+  let rep = await sockets(r);
+  const mine = rep.persons[ALICE];
+  assert.equal(mine.sockets.length, 4);
+  assert.equal(mine.lu, 1);
+  assert.equal(mine.luOutstanding, 1);
+  assert.equal(mine.sockets.reduce((n, s) => n + s.outstanding, 0), 1);
+  const t0 = Date.now();
+  const out = await move(r, ALICE);
+  assert.equal(out.closed, 2, "the idle and the heartbeat-only socket close at once");
+  await until(() => idle.closed && beating.closed, 2000, "the quiet sockets to close");
+  assert.ok(isMoved(idle) && isMoved(beating));
+  await until(() => slow.closed, 3000, "the slow socket to close once answered");
+  const fs = sframes(slow.rx);
+  assert.match(fs[0].text, /"requestId":"t1"/, "the response came first");
+  assert.equal(fs[1].opcode, 8, "then the close frame");
+  assert.ok(Date.now() - t0 >= 400, "not before its response");
+  await wait(2200); // the call is stale now
+  assert.ok(!chatty.closed, "a socket with inbound frames in the last quiet period stays");
+  clearInterval(chat);
+  await wait(500);
+  assert.ok(!chatty.closed, "nor is it closed after the call is 2 s old");
+  assert.ok(!lu.closed);
+  assert.equal((await move(r, ALICE)).closed, 1);
+  await until(() => chatty.closed, 2000, "the chatty socket on the next call");
+  assert.ok(!lu.closed, "LU is never moved");
+  rep = await sockets(r);
+  assert.equal(rep.persons[ALICE].sockets.length, 0);
+  assert.equal(rep.persons[ALICE].lu, 1);
+  assert.equal(rep.counters.movedTotal, 4);
+  clearInterval(beat);
+  lu.s.destroy();
+});
+
+test("switch window: a request read after the close decision is counted and not forwarded", async () => {
+  const r = swRouter({ switchTailMs: 600 });
+  await r.listen();
+  const c = await wsOpen(r, BOB);
+  c.s.write(cmsg({ type: "hello", clientId: "b" }));
+  await wait(350);
+  await move(r, BOB);
+  await until(() => isMoved(c), 2000, "the close frame");
+  c.s.write(req("send_agent_message_request", "late1", { text: "hi" }));
+  await c.done;
+  assert.equal((await sockets(r)).counters.inflightClosesTotal, 1);
+  assert.ok(!paseoSeen(r, BOB).includes("late1"), "the late request never reached the process");
+});
+
+test("switch window: fragmented, continuation, beyond-prefix, unreadable, binary, extension and reader-exception sockets are opaque and never moved", async () => {
+  const r = swRouter();
+  await r.listen();
+  const orig = FrameReader.prototype.feed;
+  FrameReader.prototype.feed = function (b) { if (b.includes("BOOM")) throw new Error("boom"); return orig.call(this, b); };
+  try {
+    const cases = {
+      fragmented: cframe(1, '{"type":"session","message":', { fin: false }),
+      continuation: cframe(0, '{"x":1}'),
+      beyondPrefix: cmsg({ type: "session", message: { type: "send_agent_message_request", text: "z".repeat(SWITCH_PREFIX + 10), requestId: "late" } }),
+      unreadable: cframe(1, '{"type":"session","message":{"type":x}}'),
+      binary: cframe(2, randomBytes(10)),
+      exception: cframe(1, "BOOM", { mask: false }),
+    };
+    const open = {};
+    for (const [k, bytes] of Object.entries(cases)) { open[k] = await wsOpen(r, CAROL.toLowerCase()); open[k].s.write(bytes); }
+    open.extension = await wsOpen(r, CAROL.toLowerCase(), { path: "/paseo-ws?ext=1" });
+    await wait(350);
+    const rep = await sockets(r);
+    const socks = rep.persons[CAROL.toLowerCase()].sockets;
+    assert.equal(socks.length, 7);
+    for (const s of socks) assert.equal(s.opaque, true, JSON.stringify(s));
+    const reasons = socks.map((s) => s.opaqueReason).join("|");
+    for (const w of ["fragmented", "continuation", "beyond the prefix", "unreadable", "binary", "extension", "reader exception"]) assert.ok(reasons.includes(w), `${w} in ${reasons}`);
+    assert.equal(rep.totals.opaque, 7);
+    const out = await move(r, CAROL.toLowerCase());
+    assert.equal(out.closed, 0);
+    assert.equal(out.opaque, 7);
+    await wait(500);
+    for (const c of Object.values(open)) { assert.ok(!c.closed); c.s.destroy(); }
+  } finally {
+    FrameReader.prototype.feed = orig;
+  }
+});
+
+test("switch window: after the first move new non-LU upgrades get 503 before the 101 and non-LU HTTP reaches pigeon unchanged; admit undoes it", async () => {
+  const got = [];
+  const pigeon = http.createServer((q, s) => {
+    let body = Buffer.alloc(0);
+    q.on("data", (d) => (body = Buffer.concat([body, d])));
+    q.on("end", () => { got.push({ method: q.method, url: q.url, headers: q.headers, body }); s.writeHead(207, { "x-pigeon": "1" }); s.end("from pigeon"); });
+  });
+  await new Promise((x) => pigeon.listen(0, "127.0.0.1", x));
+  const r = swRouter({ passOnUrl: `http://127.0.0.1:${pigeon.address().port}` });
+  await r.listen();
+  try {
+    const before = await wsOpen(r, ALICE);
+    assert.equal((await move(r)).armed, true);
+    // a socket open before the arming is untouched by it
+    assert.ok(!before.closed);
+    const refused = await wsOpen(r, ALICE, { expect101: false });
+    assert.match(refused.head, /^HTTP\/1.1 503/);
+    await refused.done;
+    const unauth = await wsOpen(r, "nobody@else.com", { expect101: false });
+    assert.match(unauth.head, /^HTTP\/1.1 503/);
+    const wrongLu = await wsOpen(r, ALICE, { headers: { "x-aviary-lu": "wrong" }, expect101: false });
+    assert.match(wrongLu.head, /^HTTP\/1.1 503/);
+    const lu = await wsOpen(r, ALICE, { headers: { "x-aviary-lu": LU } });
+    assert.match(lu.head, /^HTTP\/1.1 101/);
+    // non-LU HTTP: to pigeon byte for byte, its answer back
+    const body = randomBytes(300_000);
+    const headers = { ...auth(ALICE), "content-type": "application/octet-stream", "x-custom": "v", cookie: "CF_Authorization=abc", "content-length": String(body.length) };
+    const res = await new Promise((resolve, reject) => {
+      const q = http.request({ host: "127.0.0.1", port: r.port, path: "/api/assets/files?x=1", method: "POST", headers }, (s) => {
+        let b = ""; s.on("data", (d) => (b += d)); s.on("end", () => resolve({ status: s.statusCode, headers: s.headers, body: b }));
+      });
+      q.on("error", reject);
+      q.end(body);
+    });
+    assert.equal(res.status, 207);
+    assert.equal(res.body, "from pigeon");
+    assert.equal(res.headers["x-pigeon"], "1");
+    assert.equal(got.length, 1);
+    assert.equal(got[0].method, "POST");
+    assert.equal(got[0].url, "/api/assets/files?x=1");
+    assert.ok(got[0].body.equals(body));
+    for (const [k, v] of Object.entries(headers)) assert.equal(got[0].headers[k], v, k);
+    assert.equal(got[0].headers.host, `127.0.0.1:${r.port}`);
+    // signed out too (pigeon answers it as the edge would)
+    assert.equal((await get(r, "/")).status, 207);
+    // LU HTTP stays here, and the header is stripped
+    const luRes = await get(r, "/api/x", { ...auth(ALICE), "x-aviary-lu": LU });
+    assert.equal(luRes.status, 200);
+    assert.equal(luRes.json.headers["x-aviary-lu"], undefined);
+    assert.equal(got.length, 2);
+    // the switch endpoints and health stay here
+    assert.equal((await get(r, "/healthz")).status, 200);
+    assert.equal((await sockets(r)).armed, true);
+    // admit
+    assert.equal((await get(r, "/__jarvis/admit", swAuth, "POST")).json.armed, false);
+    const again = await wsOpen(r, ALICE);
+    assert.match(again.head, /^HTTP\/1.1 101/);
+    assert.equal((await get(r, "/api/y", auth(ALICE))).json.url, "/api/y");
+    assert.equal(got.length, 2);
+    for (const c of [before, lu, again]) c.s.destroy();
+  } finally {
+    pigeon.close();
+  }
+});
+
+test("switch window: GET /__jarvis/sockets counts in-flight HTTP per person (LU apart) and needs the switch token", async () => {
+  const r = swRouter();
+  await r.listen();
+  assert.equal((await get(r, "/__jarvis/sockets")).status, 404);
+  assert.equal((await get(r, "/__jarvis/sockets", { authorization: "Bearer nope" })).status, 404);
+  assert.equal((await get(r, "/__jarvis/move", { authorization: "Bearer nope" }, "POST")).status, 404);
+  assert.equal((await get(r, "/__jarvis/move", swAuth, "GET")).status, 405);
+  assert.equal((await sockets(r)).armed, false, "a 405 does not arm");
+  const slow = get(r, "/slow?ms=700", auth(BOB));
+  const luSlow = get(r, "/slow?ms=700", { ...auth(BOB), "x-aviary-lu": LU });
+  await wait(300);
+  const rep = await sockets(r);
+  assert.equal(rep.persons[BOB].http, 1);
+  assert.equal(rep.persons[BOB].luHttp, 1);
+  assert.equal(rep.totals.http, 1);
+  assert.ok(Date.parse(rep.generatedAt) > 0);
+  await Promise.all([slow, luSlow]);
+  const after = await sockets(r);
+  assert.equal(after.persons[BOB], undefined);
+  assert.equal(after.totals.http, 0);
+  // the module off (no switch token): no endpoints
+  const off = makeRouter({ luToken: LU });
+  await off.listen();
+  assert.equal((await get(off, "/__jarvis/sockets", swAuth)).status, 404);
+});
+
+test("switch window: restart stops an idle person's process only; busy while a chat (hold, background task) runs or an LU request is outstanding", async () => {
+  const r = swRouter();
+  await r.listen();
+  const restart = async (who) => (await get(r, `/__jarvis/restart?person=${encodeURIComponent(who)}`, swAuth, "POST")).json;
+  assert.deepEqual(await restart(ALICE), { result: "none" });
+  const pid = (await get(r, "/", auth(ALICE))).json.pid;
+  setRunning(r, ALICE, 1);
+  assert.deepEqual(await restart(ALICE), { result: "busy", why: "running" });
+  setRunning(r, ALICE, 0);
+  const lu = await wsOpen(r, ALICE, { headers: { "x-aviary-lu": LU } });
+  lu.s.write(req("fetch_agent_timeline_request", "q1", { delayMs: 600 }));
+  await wait(100);
+  assert.deepEqual(await restart(ALICE), { result: "busy", why: "request outstanding" });
+  await until(() => sframes(lu.rx).length === 1, 2000, "the LU answer");
+  assert.deepEqual(await restart(ALICE), { result: "stopped" });
+  assert.ok(!r.procs.has(ALICE));
+  await lu.done;
+  // the next (LU) request starts a fresh process
+  const next = await get(r, "/", { ...auth(ALICE), "x-aviary-lu": LU });
+  assert.notEqual(next.json.pid, pid);
+  assert.equal((await get(r, "/__jarvis/restart", swAuth, "POST")).status, 400);
+});
+
+test("switch window: JARVIS_UI_PURGE=off: purgeWake starts no process and each process gets the flag", async () => {
+  const r = swRouter({ purge: "off", expiredCheck: async () => true });
+  await r.listen();
+  await r.purgeWake();
+  assert.equal(r.procs.size, 0);
+  assert.equal((await get(r, "/", auth(ALICE))).json.env.JARVIS_UI_PURGE, "off");
+  const on = swRouter();
+  await on.listen();
+  assert.equal((await get(on, "/", auth(ALICE))).json.env.JARVIS_UI_PURGE, undefined);
+});
+
+test("switch window: a socket passed on to another replica is the first hop's; the owner counts it as a hop", async () => {
+  const { rs: [a, b], refresh } = await (async () => {
+    const port = await freeTestPort();
+    const ready = { list: ["127.0.0.1", "127.0.0.2"] };
+    const rs = ["127.0.0.1", "127.0.0.2"].map((ip) => swRouter({ host: ip, port, peers: "ui-peers", selfIp: ip, ccToken: "peer-test-token", resolve: async () => ready.list }));
+    for (const r of rs) await r.listen();
+    return { rs, refresh: async () => { for (const r of rs) await r.refreshPeers(); } };
+  })();
+  await refresh();
+  const email = userWhere([a, b], (two) => two === "127.0.0.2");
+  const c = await wsOpen(a, email);
+  assert.ok(b.procs.has(email));
+  assert.equal((await sockets(a)).persons[email].sockets.length, 1);
+  const rb = await sockets(b);
+  assert.equal(rb.persons[email], undefined);
+  assert.equal(rb.totals.hopSockets, 1);
+  // armed: b still serves what a passes on
+  await move(b);
+  await move(a);
+  const c2 = await wsOpen(a, email, { expect101: false });
+  assert.match(c2.head, /^HTTP\/1.1 503/);
+  await wait(350);
+  assert.equal((await move(a, email)).closed, 1);
+  await until(() => c.closed, 2000, "the forwarded socket to move");
+  assert.ok(isMoved(c));
 });
