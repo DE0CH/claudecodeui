@@ -3,9 +3,12 @@
 // one that echoes bytes; a real WebSocket handshake (`Upgrade: websocket`) that echoes bytes on /ws-echo and answers
 // like a tiny Paseo host on /paseo-ws (each request id answered after its message's `delayMs`, `{"type":"ping"}` with a
 // pong; every message it read is appended to $HOME/paseo-seen). `?ext=1` negotiates an extension in the 101.
+// /paseo-replay?f=<fixture>&id=<n> replays a captured session (jarvis/test/capture): each server chunk is written once
+// the client bytes captured before it have all arrived; the client bytes it reads go to $HOME/replay-rx-<n>.
 import http from "node:http";
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import path from "node:path";
 
 const running = () => { try { return Number(readFileSync(path.join(process.env.HOME, "running"), "utf8")) || 0; } catch { return 0; } };
@@ -63,6 +66,7 @@ server.on("upgrade", (req, socket) => {
       `X-Lu-Seen: ${req.headers["x-aviary-lu"] || ""}\r\nX-Jarvis-User-Seen: ${req.headers["x-jarvis-user"] || ""}\r\n\r\n`);
     socket.on("error", () => {});
     if (req.url.startsWith("/ws-echo")) { socket.on("data", (d) => socket.write(d)); return; }
+    if (req.url.startsWith("/paseo-replay")) return replay(socket, new URL(req.url, "http://x").searchParams);
     frames(socket, (opcode, payload) => {
       if (opcode !== 1) return;
       appendFileSync(path.join(process.env.HOME, "paseo-seen"), payload.toString("utf8") + "\n");
@@ -80,6 +84,43 @@ server.on("upgrade", (req, socket) => {
     "\r\nX-Jarvis-Viewer-Seen: " + (req.headers["x-jarvis-viewer"] || "") + "\r\nX-Url-Seen: " + req.url + "\r\n\r\n");
   socket.on("data", (d) => socket.write(d));
 });
+const fixtures = new Map();
+/** The captured session's chunks: [{dir, buf, before}] (`before`: client bytes captured before this chunk). */
+function fixture(file) {
+  if (!fixtures.has(file)) {
+    let before = 0;
+    const events = gunzipSync(readFileSync(file)).toString("utf8").trim().split("\n").slice(1).map((l) => {
+      const e = JSON.parse(l);
+      const out = { dir: e.dir, buf: Buffer.from(e.b64, "base64"), before };
+      if (e.dir === "c2s") before += out.buf.length;
+      return out;
+    });
+    fixtures.set(file, events);
+  }
+  return fixtures.get(file);
+}
+function replay(socket, q) {
+  const events = fixture(q.get("f"));
+  const rxFile = q.get("id") ? path.join(process.env.HOME, `replay-rx-${q.get("id")}`) : null;
+  socket.setNoDelay(true);
+  let got = 0, i = 0;
+  const flush = () => {
+    for (; i < events.length; i++) {
+      const e = events[i];
+      if (e.dir === "c2s") continue;
+      if (e.before > got) return;
+      socket.write(e.buf);
+      if (e.buf[0] === 0x88) socket.end(); // the server's close frame: then the TCP close, as ws does
+    }
+  };
+  socket.on("data", (d) => {
+    got += d.length;
+    if (rxFile) appendFileSync(rxFile, d);
+    flush();
+  });
+  flush();
+}
+
 if (process.env.FAKE_SLOW_START) await new Promise((r) => setTimeout(r, Number(process.env.FAKE_SLOW_START)));
 server.listen(Number(process.env.SERVER_PORT), process.env.HOST);
 process.on("SIGTERM", () => process.exit(0));

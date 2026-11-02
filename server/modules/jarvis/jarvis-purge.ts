@@ -10,13 +10,15 @@ import { sessionsService } from '@/modules/providers/services/sessions.service.j
 const FIRST_AFTER_MS = 30_000;
 const EVERY_MS = 60 * 60_000;
 
-export function startRecentlyDeletedPurge(): () => void {
+/** `timing` is for tests (jarvis-purge.test.ts); the server uses the defaults. */
+export function startRecentlyDeletedPurge(timing: { firstAfterMs?: number; everyMs?: number } = {}): () => void {
   if (process.env.JARVIS_UI_PURGE === 'off') return () => {};
+  const { firstAfterMs = FIRST_AFTER_MS, everyMs = EVERY_MS } = timing;
   const run = () => void sessionsService.purgeExpiredDeletedSessions().catch((error) => {
     console.warn('[jarvis] purge of Recently deleted failed', { error: error instanceof Error ? error.message : String(error) });
   });
-  const first = setTimeout(run, FIRST_AFTER_MS);
-  const every = setInterval(run, EVERY_MS);
+  const first = setTimeout(run, firstAfterMs);
+  const every = setInterval(run, everyMs);
   first.unref?.();
   every.unref?.();
   return () => {

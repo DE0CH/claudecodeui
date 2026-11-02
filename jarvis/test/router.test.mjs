@@ -8,8 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 
-import { AccessVerifier, FrameReader, Router, SWITCH_PREFIX, log, needsSignIn, scanMessage, TeamsVerifier, ownerOf, pickFirstName, userKey, workspaceRelative } from "../router.mjs";
+import { AccessVerifier, FrameReader, JsonScan, RELAY_PATH, Router, SWITCH_PREFIX, log, needsSignIn, scanMessage, TeamsVerifier, ownerOf, pickFirstName, userKey, workspaceRelative } from "../router.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE = path.join(HERE, "fake-cloudcli.mjs");
@@ -820,7 +821,7 @@ const SW = "switch-test-token";
 const LU = "lu-pair-token";
 const swAuth = { authorization: `Bearer ${SW}` };
 function swRouter(o = {}) {
-  return makeRouter({ switchToken: SW, luToken: LU, switchQuietMs: 300, switchMoveMs: 2000, switchTailMs: 300, switchTickMs: 20, ...o });
+  return makeRouter({ switchToken: SW, luToken: LU, passOnUrl: "http://127.0.0.1:9", switchQuietMs: 300, switchMoveMs: 2000, switchTailMs: 300, switchTickMs: 20, ...o });
 }
 const wait = (ms) => new Promise((x) => setTimeout(x, ms));
 async function until(pred, ms = 3000, what = "condition") {
@@ -931,12 +932,12 @@ test("switch window: bytes through the router are identical with and without the
   }
 });
 
-test("switch window: the frame reader adds under 1 ms per frame at p99 (prefix only, 1 MB messages skipped)", () => {
+test("switch window: the frame reader costs under 1 ms per frame at p99 (client direction: read to the requestId)", () => {
   const sizes = [];
   for (let i = 0; i < 3000; i++) sizes.push(i % 150 === 0 ? 1 << 20 : i % 20 === 0 ? 64 * 1024 : i % 5 === 0 ? 8 * 1024 : 200);
   const frames = sizes.map((n, i) => cframe(1, JSON.stringify({ type: "session", message: { type: "send_agent_message_request", requestId: `r${i}`, text: "y".repeat(n) } })));
   let seen = 0;
-  const reader = new FrameReader((op, pre, complete) => { const m = scanMessage(pre.toString("latin1"), complete); if (m.requestId) seen++; }, (why) => { throw new Error(why); });
+  const reader = new FrameReader((op, m) => { if (m.requestId) seen++; }, (why) => { throw new Error(why); }, { limit: 100 * 1024 * 1024, stop: "client" });
   const times = [];
   for (const f of frames) {
     const t = process.hrtime.bigint();
@@ -1026,8 +1027,8 @@ test("switch window: a request read after the close decision is counted and not 
   assert.ok(!paseoSeen(r, BOB).includes("late1"), "the late request never reached the process");
 });
 
-test("switch window: fragmented, continuation, beyond-prefix, unreadable, binary, extension and reader-exception sockets are opaque and never moved", async () => {
-  const r = swRouter();
+test("switch window: fragmented, continuation, beyond-limit, unreadable, binary, extension and reader-exception sockets are opaque and never moved", async () => {
+  const r = swRouter({ switchClientLimit: 16384 });
   await r.listen();
   const orig = FrameReader.prototype.feed;
   FrameReader.prototype.feed = function (b) { if (b.includes("BOOM")) throw new Error("boom"); return orig.call(this, b); };
@@ -1035,7 +1036,7 @@ test("switch window: fragmented, continuation, beyond-prefix, unreadable, binary
     const cases = {
       fragmented: cframe(1, '{"type":"session","message":', { fin: false }),
       continuation: cframe(0, '{"x":1}'),
-      beyondPrefix: cmsg({ type: "session", message: { type: "send_agent_message_request", text: "z".repeat(SWITCH_PREFIX + 10), requestId: "late" } }),
+      beyondLimit: cmsg({ type: "session", message: { type: "send_agent_message_request", text: "z".repeat(16384 + 10), requestId: "late" } }),
       unreadable: cframe(1, '{"type":"session","message":{"type":x}}'),
       binary: cframe(2, randomBytes(10)),
       exception: cframe(1, "BOOM", { mask: false }),
@@ -1049,7 +1050,7 @@ test("switch window: fragmented, continuation, beyond-prefix, unreadable, binary
     assert.equal(socks.length, 7);
     for (const s of socks) assert.equal(s.opaque, true, JSON.stringify(s));
     const reasons = socks.map((s) => s.opaqueReason).join("|");
-    for (const w of ["fragmented", "continuation", "beyond the prefix", "unreadable", "binary", "extension", "reader exception"]) assert.ok(reasons.includes(w), `${w} in ${reasons}`);
+    for (const w of ["fragmented", "continuation", "beyond the scan limit", "unreadable", "binary", "extension", "reader exception"]) assert.ok(reasons.includes(w), `${w} in ${reasons}`);
     assert.equal(rep.totals.opaque, 7);
     const out = await move(r, CAROL.toLowerCase());
     assert.equal(out.closed, 0);
@@ -1110,6 +1111,11 @@ test("switch window: after the first move new non-LU upgrades get 503 before the
     const luRes = await get(r, "/api/x", { ...auth(ALICE), "x-aviary-lu": LU });
     assert.equal(luRes.status, 200);
     assert.equal(luRes.json.headers["x-aviary-lu"], undefined);
+    assert.equal(got.length, 2);
+    // the relay token page stays here (pigeon does not serve it): the router's own answer, nothing passed on
+    const relay = await get(r, RELAY_PATH, auth(ALICE));
+    assert.equal(relay.status, 404);
+    assert.match(relay.body, /relay is not set up/);
     assert.equal(got.length, 2);
     // the switch endpoints and health stay here
     assert.equal((await get(r, "/healthz")).status, 200);
@@ -1199,9 +1205,21 @@ test("switch window: a socket passed on to another replica is the first hop's; t
   const c = await wsOpen(a, email);
   assert.ok(b.procs.has(email));
   assert.equal((await sockets(a)).persons[email].sockets.length, 1);
+  const frag = await wsOpen(a, email);
+  frag.s.write(cframe(1, '{"type":"session","message":', { fin: false }));
+  await wait(150);
+  const ra = await sockets(a);
+  assert.equal(ra.persons[email].sockets.length, 2);
+  assert.equal(ra.totals.opaque, 1);
   const rb = await sockets(b);
-  assert.equal(rb.persons[email], undefined);
-  assert.equal(rb.totals.hopSockets, 1);
+  assert.equal(rb.persons[email].sockets.length, 0, "the owner never counts a passed-on socket as its own");
+  assert.equal(rb.persons[email].hop.length, 2);
+  assert.equal(rb.totals.hopSockets, 2);
+  assert.equal(rb.totals.hopOpaque, 1, "an opaque passed-on socket is reported by the owner too");
+  assert.equal(rb.totals.opaque, 1);
+  assert.match(rb.persons[email].hop.find((h) => h.opaque).opaqueReason, /fragmented/);
+  frag.s.destroy();
+  await wait(100);
   // armed: b still serves what a passes on
   await move(b);
   await move(a);
@@ -1211,4 +1229,213 @@ test("switch window: a socket passed on to another replica is the first hop's; t
   assert.equal((await move(a, email)).closed, 1);
   await until(() => c.closed, 2000, "the forwarded socket to move");
   assert.ok(isMoved(c));
+});
+
+test("switch window: a socket an LU upstream made opaque is reported per person and counted, and restart waits on it", async () => {
+  const r = swRouter();
+  await r.listen();
+  await get(r, "/", auth(BOB)); // BOB's process
+  const lu = await wsOpen(r, BOB, { headers: { "x-aviary-lu": LU } });
+  lu.s.write(cframe(1, '{"type":"session","message":', { fin: false }));
+  await wait(150);
+  const rep = await sockets(r);
+  assert.equal(rep.persons[BOB].lu, 1);
+  assert.equal(rep.persons[BOB].luOpaque, 1);
+  assert.match(rep.persons[BOB].luOpaqueReasons[0], /fragmented/);
+  assert.equal(rep.totals.opaque, 1);
+  assert.equal(rep.totals.luOpaque, 1);
+  assert.deepEqual((await get(r, `/__jarvis/restart?person=${encodeURIComponent(BOB)}`, swAuth, "POST")).json, { result: "busy", why: "opaque socket" });
+  lu.s.destroy();
+});
+
+test("switch window: a request the process never answers turns stale: reported opaque, never moved, restart no longer waits on it; a late answer clears it", async () => {
+  const r = swRouter({ switchStaleMs: 400 });
+  await r.listen();
+  const restart = async () => (await get(r, `/__jarvis/restart?person=${encodeURIComponent(BOB)}`, swAuth, "POST")).json;
+  const never = await wsOpen(r, BOB);
+  const late = await wsOpen(r, BOB);
+  never.s.write(req("fetch_agent_timeline_request", "never1", { delayMs: 1e9 }));
+  late.s.write(req("fetch_agent_request", "late1", { delayMs: 1100 }));
+  await wait(150);
+  let rep = await sockets(r);
+  assert.equal(rep.persons[BOB].sockets.reduce((n, s) => n + s.outstanding, 0), 2);
+  assert.ok(rep.persons[BOB].sockets.every((s) => s.oldestOutstandingAt && !s.opaque));
+  assert.deepEqual(await restart(), { result: "busy", why: "request outstanding" });
+  await wait(450);
+  rep = await sockets(r);
+  for (const s of rep.persons[BOB].sockets) {
+    assert.equal(s.opaque, true);
+    assert.match(s.opaqueReason, /^stale: 1 request/);
+    assert.equal(s.stale, 1);
+    assert.equal(s.outstanding, 0);
+    assert.ok(s.oldestStaleAt);
+  }
+  assert.equal(rep.totals.opaque, 2);
+  assert.equal(rep.counters.staleRequestsTotal, 2);
+  const out = await move(r, BOB);
+  assert.deepEqual([out.closed, out.opaque], [0, 2]);
+  // the late answer clears its stale id, and the socket is then moved like any other (the call is still fresh)
+  await until(() => late.closed, 3000, "the late socket to move after its answer");
+  const lf = sframes(late.rx);
+  assert.match(lf[0].text, /"requestId":"late1"/);
+  assert.ok(isMoved(late));
+  rep = await sockets(r);
+  assert.deepEqual(rep.persons[BOB].sockets.map((s) => s.stale), [1]);
+  assert.equal(rep.totals.opaque, 1);
+  assert.ok(!never.closed);
+  assert.deepEqual(await restart(), { result: "stopped" }, "the stale request does not hold the restart");
+  never.s.destroy();
+  late.s.destroy();
+});
+
+test("switch window: off on a replica with peers but no peer key; move refuses to arm without JARVIS_UI_PASS_ON_URL", async () => {
+  const noKey = makeRouter({ switchToken: SW, luToken: LU, passOnUrl: "http://127.0.0.1:9", peers: "ui-peers", ccToken: "", resolve: async () => [] });
+  await noKey.listen();
+  assert.equal(noKey.sw.enabled, false);
+  assert.equal((await get(noKey, "/__jarvis/sockets", swAuth)).status, 404);
+  const noPassOn = swRouter({ passOnUrl: "" });
+  await noPassOn.listen();
+  const m = await get(noPassOn, "/__jarvis/move", swAuth, "POST");
+  assert.equal(m.status, 409);
+  assert.equal((await sockets(noPassOn)).armed, false);
+  const c = await wsOpen(noPassOn, ALICE);
+  assert.match(c.head, /^HTTP\/1.1 101/, "nothing refused");
+  c.s.destroy();
+});
+
+// ------------------------------------- the captured Paseo web session (jarvis/test/capture) -------------------------------------
+const CAPTURE = path.join(HERE, "fixtures", "paseo-web-session.ndjson.gz");
+function loadCapture() {
+  const lines = gunzipSync(readFileSync(CAPTURE)).toString("utf8").trim().split("\n");
+  const events = lines.slice(1).map((l) => { const e = JSON.parse(l); return { dir: e.dir, step: e.step, buf: Buffer.from(e.b64, "base64") }; });
+  // per client chunk: the server bytes the session has by the time the next client chunk was sent
+  const steps = [];
+  let s2c = 0;
+  for (const e of events) {
+    if (e.dir === "s2c") { s2c += e.buf.length; if (steps.length) steps[steps.length - 1].until = s2c; continue; }
+    steps.push({ buf: e.buf, until: s2c, close: e.buf[0] === 0x88 });
+  }
+  const cat = (d) => Buffer.concat(events.filter((e) => e.dir === d).map((e) => e.buf));
+  return { meta: JSON.parse(lines[0]).meta, steps, c2s: cat("c2s"), s2c: cat("s2c") };
+}
+/** The client frames of a byte stream, unmasked: [{opcode, payload}]. */
+function clientFrames(buf) {
+  const out = [];
+  let off = 0;
+  while (off + 2 <= buf.length) {
+    let len = buf[off + 1] & 0x7f, h = 2;
+    if (len === 126) { len = buf.readUInt16BE(off + 2); h = 4; } else if (len === 127) { len = Number(buf.readBigUInt64BE(off + 2)); h = 10; }
+    const mask = buf.subarray(off + h, off + h + 4);
+    const payload = Buffer.from(buf.subarray(off + h + 4, off + h + 4 + len));
+    for (let i = 0; i < len; i++) payload[i] ^= mask[i & 3];
+    out.push({ opcode: buf[off] & 0x0f, payload, raw: buf.subarray(off, off + h + 4 + len) });
+    off += h + 4 + len;
+  }
+  return out;
+}
+/** Resolves once c.rx holds n bytes (checked on every chunk, no polling). */
+const rxAt = (c, n) => new Promise((resolve, reject) => {
+  if (c.rx.length >= n) return resolve();
+  const t = setTimeout(() => { c.s.off("data", on); reject(new Error(`rx ${c.rx.length} of ${n}`)); }, 10_000);
+  const on = () => { if (c.rx.length >= n) { clearTimeout(t); c.s.off("data", on); resolve(); } };
+  c.s.on("data", on);
+});
+const replayPath = (id) => `/paseo-replay?f=${encodeURIComponent(CAPTURE)}${id ? `&id=${id}` : ""}`;
+
+test("switch window: the captured session has the real request shapes (workspace.create's requestId past 8 KB) and the client scan finds every requestId", () => {
+  const { meta, c2s, s2c } = loadCapture();
+  assert.ok(meta.timelinePageBytes > 1 << 20);
+  const frames = clientFrames(c2s);
+  const create = frames.find((f) => f.payload.includes('"workspace.create.request"'));
+  const at = create.payload.indexOf('"requestId"');
+  assert.ok(at > SWITCH_PREFIX, `workspace.create.request's requestId at ${at}`);
+  // the old 8 KB prefix would have called it opaque
+  assert.equal(scanMessage(create.payload.subarray(0, SWITCH_PREFIX).toString("latin1"), false).requestIdPossible, true);
+  const ids = [];
+  const reader = new FrameReader((op, m) => { if (m?.requestId) ids.push(m.requestId); else if (m?.requestIdPossible) throw new Error("possible"); }, (why) => { throw new Error(why); }, { limit: 100 * 1024 * 1024, stop: "client" });
+  for (let off = 0, i = 0; off < c2s.length; i++) { const n = 1 + ((i * 7919) % 5000); reader.feed(c2s.subarray(off, off + n)); off += n; }
+  const want = frames.map((f) => /"requestId":"([^"]+)"/.exec(f.payload.toString("latin1"))?.[1]).filter(Boolean);
+  assert.deepEqual(ids, want);
+  assert.ok(want.length >= 5);
+  // the server direction: each answer names its request within the first SWITCH_PREFIX bytes
+  const answered = [];
+  const sr = new FrameReader((op, m) => { if (m?.payloadRequestId) answered.push(m.payloadRequestId); }, (why) => { throw new Error(why); }, { stop: "server" });
+  for (let off = 0; off < s2c.length; off += 65536) sr.feed(s2c.subarray(off, off + 65536));
+  assert.deepEqual(answered, want);
+  // a direct check of the streaming scan against the whole create message, masked, in one-byte pieces
+  const sc = new JsonScan("client");
+  const mask = Buffer.from([1, 2, 3, 4]);
+  const masked = Buffer.from(create.payload);
+  for (let i = 0; i < masked.length; i++) masked[i] ^= mask[i & 3];
+  for (let i = 0; i < masked.length; i++) sc.feed(masked, i, i + 1, mask, i);
+  sc.finish(true);
+  assert.deepEqual([sc.topType, sc.msgType, sc.requestId, sc.error], ["session", "workspace.create.request", want[want.length - 2], null]);
+});
+
+test("switch window: the captured Paseo web session goes through the router byte for byte with and without the module; every request is tracked and answered", async () => {
+  const { steps, c2s, s2c } = loadCapture();
+  for (const on of [true, false]) {
+    const r = on ? swRouter() : makeRouter();
+    await r.listen();
+    const id = on ? "on" : "off";
+    const c = await wsOpen(r, ALICE, { path: replayPath(id) });
+    for (const st of steps) {
+      if (st.close && on) {
+        const rep = await sockets(r);
+        const [s] = rep.persons[ALICE].sockets;
+        assert.deepEqual([s.opaque, s.outstanding, s.stale], [false, 0, 0], JSON.stringify(s));
+        assert.equal(rep.counters.opaqueSocketsTotal, 0);
+      }
+      c.s.write(st.buf);
+      await rxAt(c, st.until);
+    }
+    await c.done;
+    assert.equal(c.rx.length, s2c.length);
+    assert.ok(c.rx.equals(s2c), `server bytes differ with the module ${on ? "on" : "off"}`);
+    const rx = readFileSync(path.join(r.homeRoot, userKey(ALICE), `replay-rx-${id}`));
+    assert.ok(rx.equals(c2s), `client bytes differ with the module ${on ? "on" : "off"}`);
+    await r.drain();
+  }
+});
+
+test("switch window: per-frame latency through the router added by the module is under 1 ms (captured session, module on vs off)", async () => {
+  const { steps } = loadCapture();
+  const on = swRouter(), off = makeRouter();
+  await on.listen();
+  await off.listen();
+  const reps = 25;
+  const t = { on: steps.map(() => []), off: steps.map(() => []) };
+  const run = async (r, k) => {
+    const c = await wsOpen(r, CAROL.toLowerCase(), { path: replayPath(null) });
+    c.s.setNoDelay(true);
+    let prev = 0;
+    for (const [i, st] of steps.entries()) {
+      const t0 = process.hrtime.bigint();
+      c.s.write(st.buf);
+      if (st.until > prev) { await rxAt(c, st.until); t[k][i].push(Number(process.hrtime.bigint() - t0) / 1e6); }
+      prev = st.until;
+    }
+    await c.done;
+  };
+  for (let i = 0; i < 3; i++) { await run(on, "on"); await run(off, "off"); } // warm up
+  for (const k of ["on", "off"]) for (const a of t[k]) a.length = 0;
+  for (let i = 0; i < reps; i++) {
+    if (i % 2) { await run(on, "on"); await run(off, "off"); } else { await run(off, "off"); await run(on, "on"); }
+  }
+  const median = (a) => { const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
+  const pct = (a, q) => { const b = [...a].sort((x, y) => x - y); return b[Math.min(b.length - 1, Math.floor(b.length * q))]; };
+  const added = [];
+  for (let i = 0; i < steps.length; i++) {
+    if (!t.on[i].length) continue;
+    added.push({ step: i, bytes: steps[i].buf.length, on: median(t.on[i]), off: median(t.off[i]), added: median(t.on[i]) - median(t.off[i]) });
+  }
+  const all = { on: t.on.flat(), off: t.off.flat() };
+  log("info", "router latency per step, module on vs off (ms)", {
+    steps: added.map((a) => ({ ...a, on: +a.on.toFixed(3), off: +a.off.toFixed(3), added: +a.added.toFixed(3) })),
+    p50: { on: +pct(all.on, 0.5).toFixed(3), off: +pct(all.off, 0.5).toFixed(3) }, p99: { on: +pct(all.on, 0.99).toFixed(3), off: +pct(all.off, 0.99).toFixed(3) },
+  });
+  // each frame kind's added latency (median of its round trips on minus off) is under 1 ms, so the p99 over the
+  // session's frames is; the raw p99s are logged (they are the large frames' round trips, noisy either way)
+  assert.ok(added.length >= 6);
+  for (const a of added) assert.ok(a.added < 1, `step ${a.step} (${a.bytes} bytes) adds ${a.added.toFixed(3)} ms`);
 });
