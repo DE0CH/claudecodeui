@@ -332,6 +332,43 @@ async function requireShare(id: string): Promise<ShareRow> {
 }
 
 /**
+ * A snapshot's history: its `messages.json`, or, for a snapshot written without one (a share made in aviary and
+ * exported back by `magpie import export`, which has Claude Code's files but not this fork's message format), the
+ * history the Claude provider reads from the snapshot's `transcript.jsonl` and `session/`, the same messages a live
+ * conversation's history gives. The transcript's own session id (its last line that carries one) selects its rows.
+ */
+export async function frozenHistory(dir: string): Promise<NormalizedMessage[]> {
+  try {
+    return JSON.parse(await readFile(path.join(dir, 'messages.json'), 'utf8'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const transcriptPath = path.join(dir, 'transcript.jsonl');
+  const text = await readFile(transcriptPath, 'utf8');
+  let providerSessionId = '';
+  for (const line of text.split('\n').reverse()) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as { sessionId?: unknown };
+      if (typeof entry.sessionId === 'string' && entry.sessionId) {
+        providerSessionId = entry.sessionId;
+        break;
+      }
+    } catch {
+      // not a whole line: the next one up
+    }
+  }
+  if (!providerSessionId) return [];
+  // loaded when used, as in defaultDeps (the providers import this module)
+  const { ClaudeSessionsProvider } = await import('@/modules/providers/list/claude/claude-sessions.provider.js');
+  const history = await new ClaudeSessionsProvider().fetchHistoryFromFiles(
+    { transcriptPath, sessionFolder: path.join(dir, 'session') },
+    providerSessionId,
+  );
+  return (history.messages ?? []) as NormalizedMessage[];
+}
+
+/**
  * The shared page: who shared it, when, its title, and the frozen history as the chat view's timeline rows (built by
  * the same SessionTimeline a live conversation uses, so the page renders with the chat's own components). File paths
  * in the rows are relative to the snapshot's /workspace; the page reads them through `/shares/:id/files/raw`, which
@@ -348,7 +385,7 @@ export async function shareView(id: string): Promise<{
   const row = await requireShare(id);
   let messages: NormalizedMessage[] = [];
   try {
-    messages = JSON.parse(await readFile(path.join(row.dir, 'messages.json'), 'utf8'));
+    messages = await frozenHistory(row.dir);
   } catch {
     throw new ShareError(404, 'SHARE_NOT_FOUND', 'This link is no longer available.');
   }

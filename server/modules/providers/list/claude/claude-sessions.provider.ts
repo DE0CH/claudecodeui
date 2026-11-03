@@ -227,13 +227,12 @@ async function readClaudeSubagentMeta(metaPath: string): Promise<ClaudeSubagentM
  * several CLI versions.
  */
 async function findClaudeSubagentTranscript(
-  projectDirectory: string,
-  providerSessionId: string,
+  files: ClaudeTranscriptFiles,
   agentId: string,
 ): Promise<{ transcriptPath: string; metaPath: string } | null> {
   const candidates = [
-    path.join(projectDirectory, providerSessionId, 'subagents', `agent-${agentId}.jsonl`),
-    path.join(projectDirectory, `agent-${agentId}.jsonl`),
+    path.join(files.sessionFolder, 'subagents', `agent-${agentId}.jsonl`),
+    path.join(path.dirname(files.transcriptPath), `agent-${agentId}.jsonl`),
   ];
 
   for (const transcriptPath of candidates) {
@@ -698,23 +697,32 @@ function dropSupersededPromptBranches(rows: AnyRecord[]): AnyRecord[] {
 /** When the CLI run behind a session started (epoch ms), or null when none is up. */
 type LiveRunStartTimeProbe = (sessionId: string) => number | null;
 
+/**
+ * Where a session's history is read from: its transcript and its session folder (sub-agent transcripts and saved
+ * tool output). A live session's folder sits beside its transcript, named by the provider-native id; a frozen copy
+ * (a shared conversation's snapshot, `transcript.jsonl` + `session/`) names both itself.
+ */
+export type ClaudeTranscriptFiles = { transcriptPath: string; sessionFolder: string };
+
 async function getSessionMessages(
   sessionId: string,
   providerSessionId: string,
   limit: number | null,
   offset: number,
   getLiveRunStartTime: LiveRunStartTimeProbe,
+  given?: ClaudeTranscriptFiles,
 ): Promise<ClaudeHistoryMessagesResult> {
   try {
     // The DB row is keyed by the app-facing session id, while the JSONL rows
     // on disk carry the provider-native id — both ids are needed here.
-    const jsonLPath = (await sessionsDb.getSessionById(sessionId))?.jsonl_path;
+    const jsonLPath = given?.transcriptPath ?? (await sessionsDb.getSessionById(sessionId))?.jsonl_path;
 
     if (!jsonLPath) {
       return { messages: [], total: 0, hasMore: false };
     }
 
-    const projectDir = path.dirname(jsonLPath);
+    const files: ClaudeTranscriptFiles = given
+      ?? { transcriptPath: jsonLPath, sessionFolder: path.join(path.dirname(jsonLPath), providerSessionId) };
 
     const messages = dropSupersededPromptBranches(
       await readTranscriptRows(jsonLPath, providerSessionId),
@@ -736,7 +744,7 @@ async function getSessionMessages(
       info: Omit<SubagentInfo, 'status'>;
     }>();
     for (const agentId of agentIds) {
-      const located = await findClaudeSubagentTranscript(projectDir, providerSessionId, agentId);
+      const located = await findClaudeSubagentTranscript(files, agentId);
       if (!located) {
         continue;
       }
@@ -1785,6 +1793,28 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     sessionId: string,
     options: FetchHistoryOptions = {},
   ): Promise<FetchHistoryResult> {
+    return this.historyOf(sessionId, options);
+  }
+
+  /**
+   * The history of a frozen copy of a session that has no sessions row of its own (a shared conversation's
+   * snapshot, `transcript.jsonl` + `session/`): the same messages `fetchHistory` gives for the live session, read from
+   * the named files. No run is live in a frozen copy.
+   */
+  async fetchHistoryFromFiles(
+    files: ClaudeTranscriptFiles,
+    providerSessionId: string,
+    sessionId: string = providerSessionId,
+  ): Promise<FetchHistoryResult> {
+    const frozen = new ClaudeSessionsProvider({ getLiveRunStartTime: () => null });
+    return frozen.historyOf(sessionId, { providerSessionId }, files);
+  }
+
+  private async historyOf(
+    sessionId: string,
+    options: FetchHistoryOptions,
+    files?: ClaudeTranscriptFiles,
+  ): Promise<FetchHistoryResult> {
     const { limit = null, offset = 0 } = options;
     const providerSessionId = options.providerSessionId ?? sessionId;
 
@@ -1792,7 +1822,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     try {
       // Load full history first so `total` reflects frontend-normalized messages,
       // not raw JSONL records.
-      result = await getSessionMessages(sessionId, providerSessionId, null, 0, this.getLiveRunStartTime);
+      result = await getSessionMessages(sessionId, providerSessionId, null, 0, this.getLiveRunStartTime, files);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[ClaudeProvider] Failed to load session ${sessionId}:`, message);

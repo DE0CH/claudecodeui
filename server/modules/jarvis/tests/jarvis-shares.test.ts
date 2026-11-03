@@ -254,3 +254,29 @@ test('nothing to share before an answer; a running turn is not in the link; dele
     await assert.rejects(shareView(second.id), { status: 404 });
   });
 });
+
+test('a snapshot without messages.json (a share exported back from aviary) renders from its transcript and session folder', async () => {
+  await withUsers(async ({ jfs, as }) => {
+    await as(OWNER);
+    const { sessionId, providerId } = await makeConversation(jfs);
+    const { ClaudeSessionsProvider } = await import('@/modules/providers/list/claude/claude-sessions.provider.js');
+    const provider = new ClaudeSessionsProvider({ getLiveRunStartTime: () => null });
+    const real = {
+      ...deps(),
+      history: async (id: string) => (await provider.fetchHistory(id, { providerSessionId: providerId })).messages,
+    };
+    const link = await createShare(sessionId, real);
+    const dir = (await shareDirOf(link.id))!;
+    await as(VIEWER);
+    const before = (await shareView(link.id)).timeline;
+    assert.deepEqual(before.map((r) => r.item.type), ['user_message', 'tool_call', 'assistant_message', 'user_message']);
+
+    await rm(path.join(dir, 'messages.json'));
+    const after = (await shareView(link.id)).timeline;
+    assert.deepEqual(after, before);
+
+    // a snapshot with neither file is gone
+    await rm(path.join(dir, 'transcript.jsonl'));
+    await assert.rejects(shareView(link.id), { status: 404 });
+  });
+});
