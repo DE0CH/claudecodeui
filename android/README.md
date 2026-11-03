@@ -15,5 +15,8 @@ the same UI as the browser. The site's address is the `YYC_SITE` build secret, n
   with the upload key (secrets `YYC_ANDROID_UPLOAD_KEYSTORE`, a base64 PKCS12 with alias `upload`, and
   `YYC_ANDROID_UPLOAD_KEYSTORE_PASSWORD`), then `emulator-test.sh` on a Pixel 7 emulator: the site loads signed out
   and 「登入」 opens Chrome. The APK and screenshots leave CI only as the age-encrypted artifact `yyc-android-encrypted`.
+- **Download:** a pushed build that passes goes to the bucket (secrets `YYC_S3_*`, object
+  `apps/yyc-ai-android.apk`); the router serves it to signed-in staff at `/api/jarvis/android.apk` (`JARVIS_APK_S3_*`),
+  the Download button in Settings → General.
 - **Local build:** `npm ci && YYC_SITE=https://… npm run prebuild && (cd android && ./gradlew assembleRelease)`;
   without `ANDROID_KEYSTORE` the release build is signed with the debug key.

@@ -92,6 +92,21 @@ jobs:
           working-directory: android
           script: ./emulator-test.sh "$GITHUB_WORKSPACE/out/yyc-ai.apk" "$GITHUB_WORKSPACE/out/screens"
 
+      # the download in YYC AI's Settings (router GET /api/jarvis/android.apk reads this object): only a pushed build
+      # that passed the emulator test
+      - name: Publish the APK to the download
+        if: github.event_name == 'push'
+        working-directory: .
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.YYC_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.YYC_S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: fsn1
+          BUCKET: ${{ secrets.YYC_S3_BUCKET }}
+        run: |
+          aws s3 cp out/yyc-ai.apk "s3://$BUCKET/apps/yyc-ai-android.apk" \
+            --endpoint-url https://fsn1.your-objectstorage.com \
+            --content-type application/vnd.android.package-archive --no-progress
+
       - name: Encrypt the APK and screenshots
         if: always()
         working-directory: .
