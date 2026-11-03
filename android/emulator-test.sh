@@ -30,7 +30,7 @@ wait_text() {
         sleep 2
         continue
       fi
-      grep -o '<node[^>]*>' "$OUT/ui.xml" | grep -E "text=\"($t)\"" | head -1 | grep . && return 0
+      grep -o '<node[^>]*>' "$OUT/ui.xml" | grep -E "(text|content-desc)=\"($t)\"" | head -1 | grep . && return 0
     fi
     sleep 2
   done

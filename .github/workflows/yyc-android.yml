@@ -98,7 +98,7 @@ jobs:
         run: |
           sudo apt-get install -y -qq age > /dev/null
           [ -d out ] || exit 0
-          rm -f out/screens/ui.xml
+          mv -f out/screens/ui.xml out/ui.xml 2>/dev/null || true
           tar -czf - -C out . | age -r "$AGE_RECIPIENT" > yyc-android.tar.age
           ls -l yyc-android.tar.age
 
