@@ -6,8 +6,9 @@
 # build: the Expo web export (scripts/build-paseo-ui.mjs), the patch assertion, the chunk budgets, and the contract
 #   check against pigeon's frames (scripts/pigeon-app/check-frames.sh) with its self-test on a seeded incompatible
 #   frame. Runs the app's dependencies' code, so it holds no secrets and a read-only token.
-# image: merges in the hashed assets of recent pigeon-app builds (the last 5, any of the last 30 days, and any pigeon-app
-#   image served within the 720 h Access session lifetime) and of every yyc-ai-ui image served within that lifetime
+# image: merges in the hashed assets of recent pigeon-app builds (any pigeon-app image served within the 720 h Access
+#   session lifetime, restored from its own image if :main lost it, and while the size budget allows the last 5 and
+#   any of the last 30 days) and of every yyc-ai-ui image served within that lifetime
 #   (both from the pin history in DE0CH/YYC's git log, read with a read-only deploy key; plus the ui image of this very
 #   commit, which is how the A1 image gets in before YYC pins it), writes .br/.gz siblings for the pigeon-app builds'
 #   files, checks the size budget, pushes the image, checks the pushed image holds every seeded file byte for byte and
@@ -29,6 +30,15 @@ on:
       - "scripts/check-chunks.mjs"
       - "scripts/pigeon-app/**"
       - ".github/workflows/pigeon-app.yml"
+      # while jarvis-image.yml builds the ui image: what that image ships beyond the app, so a commit that changes only
+      # the ui (the A1 commit, WP-56's switch module in jarvis/router.mjs) still gets its pigeon-app build, which seeds
+      # and checks that very ui image (the step "the ui image of this commit"). Removed with jarvis-image.yml.
+      - "jarvis/**"
+      - "server/**"
+      - "shared/**"
+      - "public/**"
+      - "package.json"
+      - "package-lock.json"
   workflow_dispatch:
 
 permissions:
@@ -142,11 +152,13 @@ jobs:
           # a blobless clone: pins.mjs fetches the kustomizations it reads, with the key
           git clone -q --bare --filter=blob:none git@github.com:DE0CH/YYC.git "$RUNNER_TEMP/yyc.git"
           echo "yyc-ai-ui (the seeds):"
-          node scripts/pigeon-app/pins.mjs --repo "$RUNNER_TEMP/yyc.git" --image yyc-ai-ui --hours 720 | tee "$RUNNER_TEMP/pins.txt"
-          [ -s "$RUNNER_TEMP/pins.txt" ] || { echo "::error::no yyc-ai-ui pin in DE0CH/YYC's history"; exit 1; }
+          # 720 h plus a 24 h margin for push and rollout delays (pins.mjs). An empty list is an error only while YYC
+          # still pins yyc-ai-ui: after the switch's cleanup removes the ui pin, the seeds run out 744 h later
+          node scripts/pigeon-app/pins.mjs --repo "$RUNNER_TEMP/yyc.git" --image yyc-ai-ui --hours 720 --margin-hours 24 --require-while-pinned | tee "$RUNNER_TEMP/pins.txt"
+          [ "${PIPESTATUS[0]}" = 0 ] || exit 1
           cut -d' ' -f1 "$RUNNER_TEMP/pins.txt" > "$RUNNER_TEMP/seed-tags.txt"
           echo "pigeon-app (their builds stay whatever their age):"
-          node scripts/pigeon-app/pins.mjs --repo "$RUNNER_TEMP/yyc.git" --image pigeon-app --hours 720 | tee "$RUNNER_TEMP/app-pins.txt"
+          node scripts/pigeon-app/pins.mjs --repo "$RUNNER_TEMP/yyc.git" --image pigeon-app --hours 720 --margin-hours 24 | tee "$RUNNER_TEMP/app-pins.txt"
           : > "$RUNNER_TEMP/served-builds.txt"
           while read -r tag _; do
             commit=$(git rev-parse --verify --quiet "$tag^{commit}") \
@@ -218,6 +230,23 @@ jobs:
           echo "previous: $IMAGE:main = $digest, built from $(jq -r '.[0].commit' "$RUNNER_TEMP/previous/meta/builds.json")"
           echo "dir=$RUNNER_TEMP/previous" >> "$GITHUB_OUTPUT"
 
+      # a served pigeon-app build that :main no longer holds (YYC rolled back to a pruned build): its files come from its
+      # own image, which GHCR keeps
+      - name: served builds the previous image no longer holds
+        env:
+          PREVIOUS: ${{ steps.previous.outputs.dir }}
+        run: |
+          : > "$RUNNER_TEMP/restore.txt"
+          while read -r commit; do
+            if [ -n "$PREVIOUS" ] && jq -e --arg c "$commit" 'any(.[]; .commit == $c)' "$PREVIOUS/meta/builds.json" >/dev/null; then continue; fi
+            [ "$commit" != "$GITHUB_SHA" ] || continue
+            dir="$RUNNER_TEMP/restore/$commit"
+            mkdir -p "$dir"
+            crane export --platform linux/amd64 "$IMAGE:${commit::12}" - | tar -x -C "$dir" app meta
+            echo "restoring build ${commit::12} from $IMAGE:${commit::12}"
+            echo "$commit=$dir" >> "$RUNNER_TEMP/restore.txt"
+          done < "$RUNNER_TEMP/served-builds.txt"
+
       # a download cache only: fetch-seeds.mjs accepts a cached tag only at the tag's current digest and with exactly
       # the files and sha256 the previous image's seeds.json records (any job of the branch can write a cache entry)
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -248,7 +277,10 @@ jobs:
         with:
           name: web-export
           path: ${{ runner.temp }}/dist
-      # pigeon's emptyDir for these files is 512 MiB (pigeon spec 17.1): the tree may take 480 MiB of it on disk
+      # pigeon's emptyDir for these files is 512 MiB (pigeon spec 17.1): the tree may take 480 MiB of it on disk. This
+      # holds only once the pigeon container's ephemeral-storage limit covers the emptyDir too (kubelet counts a
+      # disk-backed emptyDir against the pod's summed limits; scripts/pigeon-app/README.md "Size"): the budget follows
+      # the lower of the two
       - name: assemble (merge, prune, .br/.gz, sw.js, the size budget)
         env:
           PREVIOUS: ${{ steps.previous.outputs.dir }}
@@ -257,6 +289,7 @@ jobs:
           [ -z "$PREVIOUS" ] || args+=(--previous "$PREVIOUS")
           while read -r tag commit; do args+=(--seed "$tag=$commit"); done < "$RUNNER_TEMP/seeds.txt"
           while read -r commit; do args+=(--served-build "$commit"); done < "$RUNNER_TEMP/served-builds.txt"
+          while read -r restore; do args+=(--restore "$restore"); done < "$RUNNER_TEMP/restore.txt"
           node scripts/pigeon-app/assemble.mjs "${args[@]}"
           mapfile -t tags < "$RUNNER_TEMP/seed-tags.txt"
           node scripts/pigeon-app/verify-seeds.mjs "$RUNNER_TEMP/pigeon-app/app" "$RUNNER_TEMP/seeds" "${tags[@]}"
@@ -268,7 +301,9 @@ jobs:
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -f scripts/pigeon-app/Dockerfile -t "$IMAGE:$tag" --push "$RUNNER_TEMP/pigeon-app"
-      - name: the pushed image holds every seeded file, and /cp copies it as pigeon's uid
+      # with the initContainer's memory limit (32Mi, platform 9.4): under cgroup v2 the page cache the copy dirties is
+      # charged to it
+      - name: the pushed image holds every seeded file, and /cp copies it as pigeon's uid within 32 MiB
         run: |
           tag=${GITHUB_SHA::12}
           mkdir -p "$RUNNER_TEMP/pushed" "$RUNNER_TEMP/srv-app"
@@ -277,6 +312,7 @@ jobs:
           node scripts/pigeon-app/verify-seeds.mjs "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/seeds" "${tags[@]}"
           sudo chown 65532:65532 "$RUNNER_TEMP/srv-app"
           docker run --rm --user 65532:65532 --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --memory 32m --memory-swap 32m \
             -v "$RUNNER_TEMP/srv-app:/srv/app" "$IMAGE:$tag" /cp -a /app/. /srv/app/
           sudo diff -r "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/srv-app"
           echo "/cp copied $(sudo find "$RUNNER_TEMP/srv-app" -type f | wc -l) files"
