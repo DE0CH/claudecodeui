@@ -87,6 +87,17 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # a foldable profile from this runner's own device list (the names differ between cmdline-tools versions)
+      - name: Pick a foldable device
+        id: fold
+        run: |
+          avd="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+          "$avd" list device -c | tee "$RUNNER_TEMP/devices.txt"
+          dev=$(grep -i -m1 -E '^pixel_fold$' "$RUNNER_TEMP/devices.txt" || grep -i -m1 'fold' "$RUNNER_TEMP/devices.txt" || true)
+          [ -n "$dev" ] || { echo "::error title=emulator test::no foldable device profile on this runner"; exit 1; }
+          echo "::notice title=emulator test::foldable profile: $dev"
+          echo "device=$dev" >> "$GITHUB_OUTPUT"
+
       - name: Emulator test
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -94,7 +105,7 @@ jobs:
           target: google_apis_playstore
           arch: x86_64
           # a foldable: folded it is a phone, unfolded a small tablet (emulator-test.sh folds it both ways)
-          profile: pixel_fold
+          profile: ${{ steps.fold.outputs.device }}
           disable-animations: true
           working-directory: android
           script: ./emulator-test.sh "$GITHUB_WORKSPACE/out/yyc-ai.apk" "$RUNNER_TEMP/yyc-ai-test.apk" "$GITHUB_WORKSPACE/out/screens"
