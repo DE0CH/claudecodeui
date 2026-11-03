@@ -93,6 +93,7 @@ import { promises as dns } from "node:dns";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, readlink, symlink, unlink, chown, lstat, readFile, stat, realpath, copyFile, access } from "node:fs/promises";
 import http from "node:http";
+import https from "node:https";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -633,6 +634,25 @@ class UserProcess {
   }
 }
 
+/**
+ * The headers of an S3 request signed with AWS Signature V4 (path-style URL, no body): what the router needs to read
+ * one object from Hetzner Object Storage without an SDK.
+ */
+export function s3Sign(method, url, { region, accessKey, secretKey }, now = new Date()) {
+  const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const day = amzDate.slice(0, 8);
+  const payload = "UNSIGNED-PAYLOAD";
+  const headers = { host: url.host, "x-amz-content-sha256": payload, "x-amz-date": amzDate };
+  const names = Object.keys(headers).sort();
+  const canonical = [method, url.pathname, "", ...names.map((n) => `${n}:${headers[n]}`), "", names.join(";"), payload].join("\n");
+  const scope = `${day}/${region}/s3/aws4_request`;
+  const toSign = ["AWS4-HMAC-SHA256", amzDate, scope, createHash("sha256").update(canonical).digest("hex")].join("\n");
+  let k = createHmac("sha256", `AWS4${secretKey}`).update(day).digest();
+  for (const part of [region, "s3", "aws4_request"]) k = createHmac("sha256", k).update(part).digest();
+  const signature = createHmac("sha256", k).update(toSign).digest("hex");
+  return { ...headers, authorization: `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${names.join(";")}, Signature=${signature}` };
+}
+
 export class Router {
   constructor(o = {}) {
     const cfgPath = o.configPath ?? process.env.JARVIS_CONFIG ?? "/etc/jarvis/config.json";
@@ -681,6 +701,15 @@ export class Router {
     this.juicefs = o.juicefs ?? process.env.JARVIS_JUICEFS ?? "/usr/local/bin/juicefs";
     // The native app's sign-in callback scheme (GET /api/jarvis/app-signin); unset = the endpoint is off.
     this.appScheme = o.appScheme ?? process.env.JARVIS_APP_SCHEME ?? "";
+    // The Android app's APK in the object store (GET /api/jarvis/android.apk); no endpoint = the download is off
+    this.apk = o.apk ?? {
+      endpoint: process.env.JARVIS_APK_S3_ENDPOINT || "",
+      region: process.env.JARVIS_APK_S3_REGION || "fsn1",
+      bucket: process.env.JARVIS_APK_S3_BUCKET || "",
+      key: process.env.JARVIS_APK_S3_KEY || "",
+      accessKey: process.env.JARVIS_APK_S3_ACCESS_KEY || "",
+      secretKey: process.env.JARVIS_APK_S3_SECRET_KEY || "",
+    };
     // View as (top of this file): the token key (none without JARVIS_CC_TOKEN: view-as is off), lifetime, and how a
     // start is recorded (web's /internal/cc/view-as; tests pass their own)
     const viewAsSecret = o.viewAsSecret ?? this.ccToken;
@@ -1030,6 +1059,7 @@ export class Router {
     if (pathname === RELAY_PATH) return this.#relay(req, res, who);
     if (pathname === "/api/jarvis/me") return this.#me(req, res, who);
     if (url === "/api/jarvis/app-signin" || url.startsWith("/api/jarvis/app-signin?")) return this.#appSignin(req, res);
+    if (pathname === "/api/jarvis/android.apk") return this.#androidApk(req, res);
     if (url === "/api/jarvis/signin" || url.startsWith("/api/jarvis/signin?")) return this.#signin(req, res);
     // A bare signed-in prefix opened as a page lands on the app: Access sends a sign-in that started from its own login
     // page (not from 「登入」) back to the app's first path, /api, which CloudCLI answers 404 (Deyao, 2026-10-28)
@@ -1223,6 +1253,42 @@ export class Router {
       "referrer-policy": "no-referrer",
     });
     res.end();
+  }
+
+  /**
+   * GET /api/jarvis/android.apk: the newest signed APK of the Android app (android/README.md; its CI puts each one in
+   * the object store), streamed to signed-in staff from the bucket with a SigV4-signed GET. Settings → General links
+   * here. It is past the identity check like every /api path, so the file never reaches anyone signed out.
+   */
+  #androidApk(req, res) {
+    const a = this.apk;
+    if (!a.endpoint || !a.bucket || !a.key || !a.accessKey || !a.secretKey) return page(res, 404, "Not found", "Not found.");
+    if (req.method !== "GET" && req.method !== "HEAD") return page(res, 405, "Not allowed", "GET only.");
+    const target = new URL(`/${a.bucket}/${a.key.split("/").map(encodeURIComponent).join("/")}`, a.endpoint);
+    const headers = s3Sign(req.method, target, a, new Date(this.now()));
+    const up = (target.protocol === "https:" ? https : http).request(target, { method: req.method, headers, timeout: 30_000 }, (ures) => {
+      if (ures.statusCode !== 200) {
+        ures.resume();
+        log("warn", "apk fetch failed", { status: ures.statusCode });
+        return page(res, ures.statusCode === 404 ? 404 : 502, "未能下載", "暫時未能下載，請稍後再試。The download is not available right now.");
+      }
+      res.writeHead(200, {
+        "content-type": "application/vnd.android.package-archive",
+        "content-disposition": 'attachment; filename="YYC-AI.apk"',
+        "cache-control": "no-store",
+        ...(ures.headers["content-length"] ? { "content-length": ures.headers["content-length"] } : {}),
+        ...(ures.headers["last-modified"] ? { "last-modified": ures.headers["last-modified"] } : {}),
+      });
+      ures.pipe(res);
+    });
+    res.on("close", () => { if (!res.writableFinished) up.destroy(); });
+    up.on("timeout", () => up.destroy(new Error("timeout")));
+    up.on("error", (e) => {
+      log("warn", "apk fetch error", { error: e.message });
+      if (!res.headersSent) page(res, 502, "未能下載", "暫時未能下載，請稍後再試。The download is not available right now.");
+      else res.destroy();
+    });
+    up.end();
   }
 
   /**

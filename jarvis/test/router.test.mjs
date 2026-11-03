@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
-import { AccessVerifier, FrameReader, JsonScan, RELAY_PATH, Router, SWITCH_PREFIX, log, needsSignIn, parsePassOnUrl, scanMessage, TeamsVerifier, ownerOf, pickFirstName, userKey, workspaceRelative } from "../router.mjs";
+import { AccessVerifier, FrameReader, JsonScan, RELAY_PATH, Router, SWITCH_PREFIX, log, needsSignIn, parsePassOnUrl, scanMessage, TeamsVerifier, ownerOf, pickFirstName, s3Sign, userKey, workspaceRelative } from "../router.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE = path.join(HERE, "fake-cloudcli.mjs");
@@ -536,6 +536,48 @@ test("GET /api/jarvis/app-signin: redirects only to the configured app scheme, w
   assert.equal(viaCookie.status, 302);
   assert.ok(viaCookie.headers.location.startsWith("pwashell-test://signed-in?state=abcdefghijklmnop#token="), "the scheme is never the caller's");
   assert.equal(r.procs.size, 0, "no CloudCLI process for the sign-in");
+});
+
+test("s3Sign: AWS Signature V4 for a path-style GET, as botocore signs it", () => {
+  const h = s3Sign("GET", new URL("https://fsn1.your-objectstorage.com/yyc-ai-files/apps/yyc-ai-android.apk"),
+    { region: "fsn1", accessKey: "AKTEST", secretKey: "SECRETTEST" }, new Date("2026-11-03T04:00:00Z"));
+  assert.equal(h["x-amz-date"], "20261103T040000Z");
+  assert.equal(h.authorization, "AWS4-HMAC-SHA256 Credential=AKTEST/20261103/fsn1/s3/aws4_request, " +
+    "SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=229c8a3cfb7ef0da559e0e30b660eba0bd3f245cd0631cc0d7ddbd16c10b2bf4");
+});
+
+test("GET /api/jarvis/android.apk: staff get the APK streamed from the bucket, signed; off without a bucket", async () => {
+  const seen = [];
+  let status = 200;
+  const s3 = http.createServer((req, res) => {
+    seen.push({ method: req.method, url: req.url, auth: req.headers.authorization || "" });
+    if (status !== 200) { res.writeHead(status); return res.end("<Error/>"); }
+    res.writeHead(200, { "content-length": "7", "last-modified": "Mon, 03 Nov 2026 04:00:00 GMT" });
+    res.end("APKDATA");
+  });
+  await new Promise((ok) => s3.listen(0, "127.0.0.1", ok));
+  after(() => s3.close());
+  const off = makeRouter();
+  await off.listen();
+  assert.equal((await get(off, "/api/jarvis/android.apk", auth(ALICE))).status, 404, "off without JARVIS_APK_S3_*");
+  const r = makeRouter({ apk: { endpoint: `http://127.0.0.1:${s3.address().port}`, region: "fsn1", bucket: "b", key: "apps/yyc ai.apk", accessKey: "AK", secretKey: "SK" } });
+  await r.listen();
+  assert.equal((await get(r, "/api/jarvis/android.apk")).status, 401, "needs a signed-in caller");
+  assert.equal((await get(r, "/api/jarvis/android.apk", auth("mallory@yyc.hk"))).status, 403, "staff only");
+  assert.equal(seen.length, 0, "nothing fetched for them");
+  const ok = await get(r, "/api/jarvis/android.apk", auth(ALICE));
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body, "APKDATA");
+  assert.equal(ok.headers["content-type"], "application/vnd.android.package-archive");
+  assert.equal(ok.headers["content-disposition"], 'attachment; filename="YYC-AI.apk"');
+  assert.equal(ok.headers["content-length"], "7");
+  assert.equal(seen[0].url, "/b/apps/yyc%20ai.apk");
+  assert.match(seen[0].auth, /^AWS4-HMAC-SHA256 Credential=AK\/\d{8}\/fsn1\/s3\/aws4_request, /);
+  status = 404;
+  assert.equal((await get(r, "/api/jarvis/android.apk", auth(ALICE))).status, 404, "no APK uploaded yet");
+  status = 403;
+  assert.equal((await get(r, "/api/jarvis/android.apk", auth(ALICE))).status, 502);
+  assert.equal(r.procs.size, 0, "no CloudCLI process for the download");
 });
 
 test("purgeWake starts the process of a person with expired Recently deleted conversations, and only theirs", async () => {
