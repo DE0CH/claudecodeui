@@ -123,7 +123,11 @@ class PaseoHub extends EventEmitter {
   private lastSeq = new Map<string, number>();
   private turnIds = new Map<string, string>();
   private pendingUserMessages = new Map<string, { text: string; clientMessageId: string }>();
-  /** Conversations whose sandbox is being made (the app's "preparing" chip is showing). */
+  /**
+   * Conversations whose sandbox is being made. The app's "preparing" chip shows only while a message the person sent
+   * is waiting on it: a turn nobody is waiting for (a scheduled turn, Claude Code's own follow-up after background
+   * work) makes its sandbox out of sight (Deyao, 2026-11-03).
+   */
   private preparing = new Set<string>();
   readonly generation = randomUUID();
   private directorySeq = 0;
@@ -292,6 +296,8 @@ class PaseoHub extends EventEmitter {
       if (row.item.type === 'user_message') row.item.clientMessageId = clientMessageId;
     }
     this.pendingUserMessages.set(sessionId, { text, clientMessageId });
+    // a sandbox already being made for a turn nobody watched: this message now waits on it
+    this.announcePreparing(sessionId);
     this.emitEvent({ type: 'timeline', sessionId, rows, epoch: timeline.epoch, turnId });
     this.emitEvent({ type: 'turn', sessionId, phase: 'started', turnId });
     this.socket?.deliver({
@@ -309,6 +315,13 @@ class PaseoHub extends EventEmitter {
 
   abort(sessionId: string): void {
     this.socket?.deliver({ type: 'chat.abort', sessionId });
+  }
+
+  /** The chip, when the conversation's sandbox is being made and one of the person's messages waits on it. */
+  private announcePreparing(sessionId: string): void {
+    if (this.preparing.has(sessionId) && this.pendingUserMessages.has(sessionId)) {
+      this.emitEvent({ type: 'preparing', sessionId, state: 'preparing' });
+    }
   }
 
   private emitEvent(event: HubEvent): void {
@@ -356,9 +369,13 @@ class PaseoHub extends EventEmitter {
       case 'status': {
         const sandbox = (frame as { jarvisSandbox?: unknown }).jarvisSandbox;
         if (sessionId && (sandbox === 'preparing' || sandbox === 'ready')) {
-          if (sandbox === 'preparing') this.preparing.add(sessionId);
-          else this.preparing.delete(sessionId);
-          this.emitEvent({ type: 'preparing', sessionId, state: sandbox });
+          if (sandbox === 'preparing') {
+            this.preparing.add(sessionId);
+            this.announcePreparing(sessionId);
+          } else {
+            this.preparing.delete(sessionId);
+            this.emitEvent({ type: 'preparing', sessionId, state: 'ready' });
+          }
         }
         return;
       }
