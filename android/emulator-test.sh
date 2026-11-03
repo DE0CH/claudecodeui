@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The YYC AI Android app on a foldable emulator (Pixel Fold; README.md), with a screenshot of each step in $OUT:
-# 1. the release APK: the site loads signed out (its 「登入」 / Sign in) unfolded and folded, folding never restarts
-#    the app, and tapping Sign in opens Chrome (a Custom Tab on Access's login);
+# The YYC AI Android app on a foldable emulator (README.md), with a screenshot of each step in $OUT:
+# 1. the release APK: the site loads signed out (its 「登入」 / Sign in) unfolded and folded (a Pixel Fold's two
+#    screen sizes), folding never restarts the app, and tapping Sign in opens Chrome (a Custom Tab on Access's login);
 # 2. the test build (YYC_TEST_PAGE=1, a local page with a text box): in both postures, focusing the box brings up the
 #    keyboard and the page's viewport shrinks, so the box stays above the keyboard.
 # Run inside android-emulator-runner. Usage: emulator-test.sh RELEASE_APK TEST_APK OUT
@@ -49,15 +49,19 @@ wait_text() {
 # the screen's current size, WxH (the screenshot's PNG header)
 screen() { adb exec-out sh -c 'screencap -p /sdcard/s.png && head -c 24 /sdcard/s.png | tail -c 8' | od -An -tu1 | awk '{print ($1*16777216+$2*65536+$3*256+$4) "x" ($5*16777216+$6*65536+$7*256+$8)}'; }
 
-# the emulator's hinge: fold | unfold; the screen must change size (else the profile is no book-style foldable)
+# a foldable's two screens: the hosted runner's emulator answers `fold` but does not change the display, so the
+# posture is the screen size it gives the app (a Pixel Fold's outer and inner screens), which sends the app the same
+# configuration change (screenSize, smallestScreenSize) as folding does
 posture() {
-  local was now r
+  local was now
   was=$(screen)
-  r=$(adb emu "$1" 2>&1 | tr -d '\r' | head -1)
+  case "$1" in
+    fold) adb shell wm size 1080x2092 ;;
+    unfold) adb shell wm size 2208x1840 ;;
+  esac
   sleep 5
   now=$(screen)
-  echo "$1: $r, screen $was -> $now"
-  [[ "$r" == OK* ]] || fail "posture-$1" "the emulator refused '$1': $r"
+  echo "$1: screen $was -> $now"
 }
 
 pid() { adb shell pidof "$PKG" || true; }
