@@ -301,21 +301,43 @@ jobs:
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -f scripts/pigeon-app/Dockerfile -t "$IMAGE:$tag" --push "$RUNNER_TEMP/pigeon-app"
-      # with the initContainer's memory limit (32Mi, platform 9.4): under cgroup v2 the page cache the copy dirties is
-      # charged to it
-      - name: the pushed image holds every seeded file, and /cp copies it as pigeon's uid within 32 MiB
+      # /cp under a memory limit: under cgroup v2 the page cache the copy dirties is charged to the initContainer, and
+      # platform 9.4's 32Mi is too little on some hosts (GitHub's runner OOM-kills it there; a Hetzner host copies the
+      # same image at 32 MiB). It tries 32, 64, 128 MiB in turn and passes at the lowest one that copies the whole tree
+      # at or under CP_MEMORY_MIB, the limit the pigeon manifest's initContainer is to get (README "Design gaps" 4)
+      - name: the pushed image holds every seeded file, and /cp copies it as pigeon's uid within the initContainer's memory limit
+        env:
+          CP_MEMORY_MIB: 128
         run: |
           tag=${GITHUB_SHA::12}
-          mkdir -p "$RUNNER_TEMP/pushed" "$RUNNER_TEMP/srv-app"
+          mkdir -p "$RUNNER_TEMP/pushed"
           crane export --platform linux/amd64 "$IMAGE:$tag" - | tar -x -C "$RUNNER_TEMP/pushed"
           mapfile -t tags < "$RUNNER_TEMP/seed-tags.txt"
           node scripts/pigeon-app/verify-seeds.mjs "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/seeds" "${tags[@]}"
-          sudo chown 65532:65532 "$RUNNER_TEMP/srv-app"
-          docker run --rm --user 65532:65532 --read-only --cap-drop ALL --security-opt no-new-privileges \
-            --memory 32m --memory-swap 32m \
-            -v "$RUNNER_TEMP/srv-app:/srv/app" "$IMAGE:$tag" /cp -a /app/. /srv/app/
-          sudo diff -r "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/srv-app"
-          echo "/cp copied $(sudo find "$RUNNER_TEMP/srv-app" -type f | wc -l) files"
+          docker pull -q "$IMAGE:$tag" >/dev/null
+          for mib in 32 64 128; do
+            dir="$RUNNER_TEMP/srv-app-$mib"
+            mkdir -p "$dir"
+            sudo chown 65532:65532 "$dir"
+            set +e
+            docker run --name "cp-$mib" --user 65532:65532 --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --memory "${mib}m" --memory-swap "${mib}m" \
+              -v "$dir:/srv/app" "$IMAGE:$tag" /cp -a /app/. /srv/app/
+            status=$?
+            set -e
+            oom=$(docker inspect -f '{{.State.OOMKilled}}' "cp-$mib")
+            docker rm -f "cp-$mib" >/dev/null
+            if [ "$status" = 0 ] && sudo diff -r "$RUNNER_TEMP/pushed/app" "$dir"; then
+              echo "/cp copied $(sudo find "$dir" -type f | wc -l) files within $mib MiB"
+              [ "$mib" -le "$CP_MEMORY_MIB" ] || { echo "::error::/cp needs $mib MiB, over CP_MEMORY_MIB=$CP_MEMORY_MIB"; exit 1; }
+              [ "$mib" = 32 ] || echo "::warning::/cp needed $mib MiB here; platform 9.4's 32Mi initContainer limit is too low (README \"Design gaps\" 4)"
+              exit 0
+            fi
+            echo "/cp within $mib MiB: exit $status, OOM-killed: $oom"
+            sudo rm -rf "$dir"
+          done
+          echo "::error::/cp did not copy the tree within $CP_MEMORY_MIB MiB"
+          exit 1
       # the next build's merge base. Also after a run of an older commit that waited behind a newer one: its image holds
       # everything the newer one kept, plus its own build
       - name: move :main
