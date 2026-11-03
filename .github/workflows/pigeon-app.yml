@@ -16,13 +16,18 @@
 #   paseo-client dispatch and waits until aviary main lists them all. Runs no dependency code (node built-ins, crane,
 #   docker), and trusts no cache entry it has not checked against the previous image's own record.
 #
+# Branches: main, and pigeon-app-fix/* (a fix cut from the A1 commit during the A1-A5 freeze, which may change nothing
+#   but scripts/pigeon-app/ and this file: the image job refuses anything else; README "The A1-A5 freeze").
+#
 # Secrets: YYC_PIN_HISTORY_KEY (a read-only deploy key of DE0CH/YYC), AVIARY_DISPATCH_TOKEN (a fine-grained token,
 # DE0CH/aviary only, Contents read and write: what repository_dispatch needs). A missing one fails the job.
 name: pigeon-app
 
 on:
   push:
-    branches: [main]
+    # pigeon-app-fix/*: a fix cut from the A1 commit during the A1-A5 freeze (README "The A1-A5 freeze"); its commits
+    # touch scripts/pigeon-app/ or this file, so the paths filter always passes them
+    branches: [main, "pigeon-app-fix/**"]
     paths:
       - "paseo/**"
       - "public/sw.js"
@@ -46,7 +51,7 @@ permissions:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/pigeon-app-fix/')
     # the standard runner for public repositories (4 vCPU, 16 GiB): the export needs a 6 GiB heap, which
     # build-paseo-ui.mjs sets itself; a smaller runner fails or is OOM-killed
     runs-on: ubuntu-24.04
@@ -122,6 +127,18 @@ jobs:
           # every commit of main (no old trees or blobs), to resolve ui tags to their commits
           fetch-depth: 0
           filter: tree:0
+      # a fix branch is cut from the A1 commit and changes only pigeon-app's own files: the freeze lets YYC pin it
+      # (DE0CH/YYC cutover freeze-check: its diff from the A1 commit touches nothing else)
+      - name: a pigeon-app-fix branch changes nothing but pigeon-app
+        if: startsWith(github.ref, 'refs/heads/pigeon-app-fix/')
+        run: |
+          base=$(git merge-base HEAD origin/main)
+          other=$(git diff --name-only "$base" HEAD | grep -vE '^(scripts/pigeon-app/|\.github/workflows/pigeon-app\.yml$)' || true)
+          if [ -n "$other" ]; then
+            echo "::error::$GITHUB_REF_NAME changes files outside scripts/pigeon-app/ and .github/workflows/pigeon-app.yml since $base: $(tr '\n' ' ' <<<"$other")"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME: a pigeon-app-only fix on top of ${base::12} ($(git diff --name-only "$base" HEAD | wc -l) files)"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.23.3
@@ -169,8 +186,9 @@ jobs:
 
       # while the ui image is still built (jarvis-image.yml, until the switch's cleanup), the ui image of this commit is
       # seeded too: at A1 it is the image YYC is about to pin, and pigeon-app stays at this commit until A5
+      # (not on a pigeon-app-fix branch: jarvis-image builds main only, and the A1 ui image is in the pin history by then)
       - name: the ui image of this commit
-        if: hashFiles('.github/workflows/jarvis-image.yml') != ''
+        if: hashFiles('.github/workflows/jarvis-image.yml') != '' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -198,7 +216,9 @@ jobs:
 
       - name: the seeds' commits
         run: |
-          sort -u "$RUNNER_TEMP/seed-tags.txt" -o "$RUNNER_TEMP/seed-tags.txt"
+          # in pin order, oldest first (pins.mjs's order, this commit's ui image last), without repeats: assemble's report
+          # charges the seeds newest pin first
+          awk '!seen[$0]++' "$RUNNER_TEMP/seed-tags.txt" > "$RUNNER_TEMP/seed-tags.dedup" && mv "$RUNNER_TEMP/seed-tags.dedup" "$RUNNER_TEMP/seed-tags.txt"
           : > "$RUNNER_TEMP/seeds.txt"
           while read -r tag; do
             commit=$(git rev-parse --verify --quiet "$tag^{commit}") \
@@ -285,7 +305,9 @@ jobs:
         env:
           PREVIOUS: ${{ steps.previous.outputs.dir }}
         run: |
-          args=(--dist "$RUNNER_TEMP/dist" --sw public/sw.js --commit "$GITHUB_SHA" --out "$RUNNER_TEMP/pigeon-app" --seeds "$RUNNER_TEMP/seeds" --budget-mib 480)
+          # --pins: the report gives the mandatory part's headroom and projects it over 744 h at the ui pin rate of the
+          # last 7 days (a warning when it would go over the budget; README design gap 1)
+          args=(--dist "$RUNNER_TEMP/dist" --sw public/sw.js --commit "$GITHUB_SHA" --out "$RUNNER_TEMP/pigeon-app" --seeds "$RUNNER_TEMP/seeds" --budget-mib 480 --pins "$RUNNER_TEMP/pins.txt")
           [ -z "$PREVIOUS" ] || args+=(--previous "$PREVIOUS")
           while read -r tag commit; do args+=(--seed "$tag=$commit"); done < "$RUNNER_TEMP/seeds.txt"
           while read -r commit; do args+=(--served-build "$commit"); done < "$RUNNER_TEMP/served-builds.txt"
