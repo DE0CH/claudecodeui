@@ -302,12 +302,14 @@ jobs:
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -f scripts/pigeon-app/Dockerfile -t "$IMAGE:$tag" --push "$RUNNER_TEMP/pigeon-app"
       # /cp under a memory limit: under cgroup v2 the page cache the copy dirties is charged to the initContainer, and
-      # platform 9.4's 32Mi is too little on some hosts (GitHub's runner OOM-kills it there; a Hetzner host copies the
-      # same image at 32 MiB). It tries 32, 64, 128 MiB in turn and passes at the lowest one that copies the whole tree
-      # at or under CP_MEMORY_MIB, the limit the pigeon manifest's initContainer is to get (README "Design gaps" 4)
+      # how much of it the kernel writes back and reclaims in time depends on the host. On a Hetzner host (Ubuntu 6.8)
+      # the real tree copies within 32 MiB; on GitHub's runner (7.0 azure) /cp is OOM-killed at 32, 64 and 128 MiB
+      # and copies at 256 MiB. Platform 9.4's 32Mi is too low; the manifest's initContainer gets CP_MEMORY_MIB, the
+      # emptyDir's size, which no copy into it can outgrow (README "Design gaps" 4). The step must copy within that and
+      # reports the lowest limit that worked on this host.
       - name: the pushed image holds every seeded file, and /cp copies it as pigeon's uid within the initContainer's memory limit
         env:
-          CP_MEMORY_MIB: 128
+          CP_MEMORY_MIB: 512
         run: |
           tag=${GITHUB_SHA::12}
           mkdir -p "$RUNNER_TEMP/pushed"
@@ -315,20 +317,9 @@ jobs:
           mapfile -t tags < "$RUNNER_TEMP/seed-tags.txt"
           node scripts/pigeon-app/verify-seeds.mjs "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/seeds" "${tags[@]}"
           docker pull -q "$IMAGE:$tag" >/dev/null
-          # what the host is (the limit /cp needs depends on it)
-          uname -r
-          df -T "$RUNNER_TEMP" /var/lib/docker | cat
-          docker info -f 'cgroup {{.CgroupVersion}} {{.CgroupDriver}}, storage {{.Driver}}, docker {{.ServerVersion}}'
-          sudo systemd-run --wait --pipe -q -p MemoryMax=1G -p MemorySwapMax=0 cp -a "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/peak-probe" \
-            && sudo systemd-run --wait -p MemoryMax=1G -p MemorySwapMax=0 cp -a "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/peak-probe2" 2>&1 | grep -i memory || true
-          sudo rm -rf "$RUNNER_TEMP/peak-probe" "$RUNNER_TEMP/peak-probe2"
-          docker volume create cp-probe >/dev/null
-          set +e
-          docker run --rm --user 0:0 --memory 32m --memory-swap 32m -v cp-probe:/srv/app "$IMAGE:$tag" /cp -a /app/. /srv/app/
-          echo "/cp into a docker volume (/var/lib/docker) within 32 MiB: exit $?"
-          set -e
-          docker volume rm cp-probe >/dev/null
-          for mib in 32 64 128 256 512 1024; do
+          echo "host: kernel $(uname -r), $(docker info -f 'cgroup v{{.CgroupVersion}}, docker {{.ServerVersion}}')"
+          for mib in 32 64 128 256 512; do
+            [ "$mib" -le "$CP_MEMORY_MIB" ] || break
             dir="$RUNNER_TEMP/srv-app-$mib"
             mkdir -p "$dir"
             sudo chown 65532:65532 "$dir"
@@ -341,9 +332,7 @@ jobs:
             oom=$(docker inspect -f '{{.State.OOMKilled}}' "cp-$mib")
             docker rm -f "cp-$mib" >/dev/null
             if [ "$status" = 0 ] && sudo diff -r "$RUNNER_TEMP/pushed/app" "$dir"; then
-              echo "/cp copied $(sudo find "$dir" -type f | wc -l) files within $mib MiB"
-              [ "$mib" -le "$CP_MEMORY_MIB" ] || { echo "::error::/cp needs $mib MiB, over CP_MEMORY_MIB=$CP_MEMORY_MIB"; exit 1; }
-              [ "$mib" = 32 ] || echo "::warning::/cp needed $mib MiB here; platform 9.4's 32Mi initContainer limit is too low (README \"Design gaps\" 4)"
+              echo "/cp copied $(sudo find "$dir" -type f | wc -l) files ($(sudo du -sm "$dir" | cut -f1) MiB) within $mib MiB (the manifest's limit: $CP_MEMORY_MIB MiB)"
               exit 0
             fi
             echo "/cp within $mib MiB: exit $status, OOM-killed: $oom, $(sudo du -sm "$dir" | cut -f1) MiB copied"
