@@ -8,7 +8,8 @@ export default {
     name: "YYC AI",
     slug: "yyc-ai-android",
     version: "1.0.0",
-    orientation: "portrait",
+    // no lock: a foldable or a tablet shows the site at its full width, as Chrome does
+    orientation: "default",
     icon: "./assets/yyc-icon.png",
     scheme: PACKAGE_ID,
     userInterfaceStyle: "automatic",
@@ -30,6 +31,8 @@ export default {
     ],
     extra: {
       yycSite: process.env.YYC_SITE,
+      // CI's keyboard test build only (App.tsx TEST_PAGE)
+      testPage: process.env.YYC_TEST_PAGE === "1",
     },
   },
 };

@@ -1,5 +1,6 @@
 # The YYC AI Android app (android/README.md): a WebView of the site, built as a release APK signed with the upload
-# key, checked on an emulator (the site loads signed out, 「登入」 opens Chrome on Access's login). This repo is public:
+# key, checked on a foldable emulator (the site loads signed out folded and unfolded, 「登入」 opens Chrome on Access's
+# login, the keyboard shrinks the WebView). This repo is public:
 # the server's address is the YYC_SITE secret, so the APK and the screenshots leave CI only age-encrypted to
 # YYC_ANDROID_CI_AGE_KEY's recipient (claude-env scripts/yyc-android-apk.sh downloads and decrypts them).
 name: yyc-android
@@ -73,7 +74,12 @@ jobs:
           "$ANDROID_HOME"/build-tools/$(ls "$ANDROID_HOME"/build-tools | sort -V | tail -1)/apksigner verify --print-certs "$apk" | head -3
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp "$apk" "$GITHUB_WORKSPACE/out/yyc-ai.apk"
-          ls -l "$GITHUB_WORKSPACE/out"
+          # the keyboard test build (App.tsx TEST_PAGE): the same app with a local test page; only the JS changes
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$ANDROID_KEYSTORE"
+          YYC_TEST_PAGE=1 ./gradlew --no-daemon assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+          rm -f "$ANDROID_KEYSTORE"
+          cp "$(ls app/build/outputs/apk/release/*.apk | head -1)" "$RUNNER_TEMP/yyc-ai-test.apk"
+          ls -l "$GITHUB_WORKSPACE/out" "$RUNNER_TEMP/yyc-ai-test.apk"
 
       - name: Enable KVM
         run: |
@@ -87,10 +93,11 @@ jobs:
           api-level: 35
           target: google_apis_playstore
           arch: x86_64
-          profile: pixel_7
+          # a foldable: folded it is a phone, unfolded a small tablet (emulator-test.sh folds it both ways)
+          profile: pixel_fold
           disable-animations: true
           working-directory: android
-          script: ./emulator-test.sh "$GITHUB_WORKSPACE/out/yyc-ai.apk" "$GITHUB_WORKSPACE/out/screens"
+          script: ./emulator-test.sh "$GITHUB_WORKSPACE/out/yyc-ai.apk" "$RUNNER_TEMP/yyc-ai-test.apk" "$GITHUB_WORKSPACE/out/screens"
 
       # the download in YYC AI's Settings (router GET /api/jarvis/android.apk reads this object): only a pushed build
       # that passed the emulator test

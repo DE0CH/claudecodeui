@@ -7,10 +7,9 @@ import { StatusBar } from "expo-status-bar";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BackHandler, Linking, Pressable, StyleSheet, Text, useColorScheme, View } from "react-native";
-import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { WebView, type WebViewNavigation } from "react-native-webview";
 import type { ShouldStartLoadRequest } from "react-native-webview/lib/WebViewTypes";
-import { setCookie } from "./modules/yyc-cookies/src";
+import { setCookie, setInsetsBackground } from "./modules/yyc-cookies/src";
 
 const SITE = String(Constants.expoConfig?.extra?.yycSite ?? "").replace(/\/+$/, "");
 const SCHEME = "dev.de0ch.yycai";
@@ -18,6 +17,16 @@ const SCHEME = "dev.de0ch.yycai";
 const TOKEN_MAX_AGE = 720 * 3600;
 
 const DARK = "#1B2A3A";
+
+// CI's test build only (YYC_TEST_PAGE=1, emulator-test.sh): a local page with a text box at the bottom that shows
+// the viewport's height, to check the keyboard shrinks the WebView. Release builds never have it.
+const TEST_PAGE = Constants.expoConfig?.extra?.testPage
+  ? `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;height:100vh;display:flex;flex-direction:column;font:16px sans-serif">
+<p id="h" style="flex:1;margin:16px"></p><textarea id="box" placeholder="test box" style="height:48px;margin:8px"></textarea>
+<script>const h=document.getElementById("h");const u=()=>{h.textContent="vh="+window.innerHeight};
+addEventListener("resize",u);u();</script></body></html>`
+  : null;
 
 function siteOrigin(): string {
   const m = /^https?:\/\/[^/]+/.exec(SITE);
@@ -61,6 +70,9 @@ export default function App() {
   const [uri, setUri] = useState(SITE + "/");
   const [key, setKey] = useState(0);
   const [failed, setFailed] = useState<string | null>(null);
+  const background = dark ? "#000000" : "#ffffff";
+
+  useEffect(() => setInsetsBackground(background), [background]);
 
   const signIn = useCallback(async (next = "/") => {
     if (signingIn.current) return;
@@ -115,7 +127,7 @@ export default function App() {
     [signIn],
   );
 
-  if (!SITE) {
+  if (!SITE && !TEST_PAGE) {
     return (
       <View style={[styles.center, { backgroundColor: DARK }]}>
         <Text style={styles.message}>This build has no YYC_SITE.</Text>
@@ -124,9 +136,10 @@ export default function App() {
   }
 
   return (
-    <SafeAreaProvider>
+    <>
       <StatusBar style={dark ? "light" : "dark"} />
-      <SafeAreaView style={[styles.fill, { backgroundColor: dark ? "#000000" : "#ffffff" }]} edges={["top", "bottom"]}>
+      {/* the native content view is already padded by the system bars and the keyboard (modules/yyc-cookies) */}
+      <View style={[styles.fill, { backgroundColor: background }]}>
         {failed ? (
           <View style={styles.center}>
             <Text style={[styles.message, { color: dark ? "#ffffff" : "#000000" }]}>未能連線 Could not connect</Text>
@@ -146,7 +159,7 @@ export default function App() {
             key={key}
             ref={web}
             testID="site"
-            source={{ uri }}
+            source={TEST_PAGE ? { html: TEST_PAGE } : { uri }}
             style={styles.fill}
             originWhitelist={["https://*", "about:*", "data:*", "blob:*"]}
             onShouldStartLoadWithRequest={onShouldStart}
@@ -167,8 +180,8 @@ export default function App() {
             applicationNameForUserAgent="YYCAI-Android/1.0"
           />
         )}
-      </SafeAreaView>
-    </SafeAreaProvider>
+      </View>
+    </>
   );
 }
 
