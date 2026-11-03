@@ -15,7 +15,9 @@ mkdir -p "$OUT"
 shot() { adb exec-out screencap -p > "$OUT/$1.png"; }
 dump() { adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && adb shell cat /sdcard/ui.xml; }
 resumed() { adb shell dumpsys activity activities | grep -m1 -E "topResumedActivity|mResumedActivity" || true; }
-fail() { shot "fail-$1"; echo "FAIL: $2" >&2; exit 1; }
+# a failure is also a GitHub annotation (public: the step and the numbers, never the site), so it reads without a token
+fail() { shot "fail-$1"; echo "FAIL: $2" >&2; echo "::error title=emulator test::$1: $2"; exit 1; }
+note() { echo "$1"; echo "::notice title=emulator test::$1"; }
 
 # the centre of a node="<node … bounds="[x1,y1][x2,y2]" …>"
 centre() {
@@ -76,10 +78,10 @@ for i in $(seq 1 20); do
   top=$(resumed)
   if [[ "$top" != *"$PKG/.MainActivity"* && "$top" == *"chrome"* ]]; then ok=1; break; fi
 done
-[[ -n "$ok" ]] || fail 4-signin "tapping Sign in did not open Chrome; top activity: $(resumed)"
+[[ -n "$ok" ]] || fail 4-signin "tapping Sign in did not open Chrome; top activity: $(resumed | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1)"
 sleep 4
 shot 4-signin-in-chrome
-echo "ok: release build (unfolded, folded, sign-in in Chrome)"
+note "ok: release build (unfolded, folded, sign-in in Chrome)"
 adb shell am force-stop com.android.chrome || true
 
 # ---- 2. the keyboard, on the test build
@@ -101,10 +103,10 @@ for state in unfold fold; do
   sleep 2
   after=$(vh) || true
   shot "5-keyboard-$state"
-  echo "$state: viewport $before -> $after with the keyboard"
+  note "$state: viewport $before -> $after with the keyboard"
   [[ -n "$after" && "$after" -lt $((before - 100)) ]] \
     || fail "5-$state" "the WebView did not shrink for the keyboard ($state: $before -> ${after:-?})"
   wait_text "test box" 10 > /dev/null || fail "5-$state" "the text box is not on screen with the keyboard ($state)"
   adb shell input keyevent KEYCODE_BACK
 done
-echo "ok: the keyboard shrinks the WebView, folded and unfolded"
+note "ok: the keyboard shrinks the WebView, folded and unfolded"
