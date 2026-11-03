@@ -1,0 +1,111 @@
+# The YYC AI Android app (android/README.md): a WebView of the site, built as a release APK signed with the upload
+# key, checked on an emulator (the site loads signed out, 「登入」 opens Chrome on Access's login). This repo is public:
+# the server's address is the YYC_SITE secret, so the APK and the screenshots leave CI only age-encrypted to
+# YYC_ANDROID_CI_AGE_KEY's recipient (claude-env scripts/yyc-android-apk.sh downloads and decrypts them).
+name: yyc-android
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/yyc-android.yml"
+
+concurrency:
+  group: yyc-android
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AGE_RECIPIENT: age12yv9zraqrhap54e0gqe6j38lcthysyhpz5x6c7dggxqkzjzdmeassp2849
+  YYC_SITE: ${{ secrets.YYC_SITE }}
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: android/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate the Android project
+        env:
+          ANDROID_KEYSTORE: ${{ runner.temp }}/upload.p12
+          VERSION_CODE: ${{ github.run_number }}
+          CI: "1"
+        run: |
+          : "${YYC_SITE:?the YYC_SITE secret is required}"
+          npx expo prebuild --platform android --no-install --clean
+
+      - name: Build the release APK
+        env:
+          ANDROID_KEYSTORE: ${{ runner.temp }}/upload.p12
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.YYC_ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: upload
+          KEYSTORE_B64: ${{ secrets.YYC_ANDROID_UPLOAD_KEYSTORE }}
+        run: |
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$ANDROID_KEYSTORE"
+          cd android
+          ./gradlew --no-daemon assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+          rm -f "$ANDROID_KEYSTORE"
+          apk=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          "$ANDROID_HOME"/build-tools/$(ls "$ANDROID_HOME"/build-tools | sort -V | tail -1)/apksigner verify --print-certs "$apk" | head -3
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp "$apk" "$GITHUB_WORKSPACE/out/yyc-ai.apk"
+          ls -l "$GITHUB_WORKSPACE/out"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Emulator test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis_playstore
+          arch: x86_64
+          profile: pixel_7
+          disable-animations: true
+          working-directory: android
+          script: ./emulator-test.sh "$GITHUB_WORKSPACE/out/yyc-ai.apk" "$GITHUB_WORKSPACE/out/screens"
+
+      - name: Encrypt the APK and screenshots
+        if: always()
+        working-directory: .
+        run: |
+          sudo apt-get install -y -qq age > /dev/null
+          [ -d out ] || exit 0
+          rm -f out/screens/ui.xml
+          tar -czf - -C out . | age -r "$AGE_RECIPIENT" > yyc-android.tar.age
+          ls -l yyc-android.tar.age
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: yyc-android-encrypted
+          path: yyc-android.tar.age
+          if-no-files-found: ignore
+          retention-days: 30
