@@ -115,7 +115,6 @@ adb shell am force-stop com.android.chrome || true
 
 # ---- 2. the keyboard, on the test build
 vh() { wait_text 'vh=[0-9]+' 20 | sed -E 's/.*(text|content-desc)="vh=([0-9]+)".*/\2/' | head -1; }
-keyboard_shown() { adb shell dumpsys input_method | grep -q -E "mInputShown=true|isInputViewShown=true"; }
 
 adb install -r "$TEST_APK"
 for state in unfold fold; do
@@ -126,15 +125,21 @@ for state in unfold fold; do
   before=$(vh) || true
   [[ -n "$before" ]] || fail "5-$state" "the test page did not show its height ($state)"
   box=$(wait_class android.widget.EditText 20) || fail "5-$state" "the test page's text box is missing ($state)"
-  adb shell input tap $(centre "$box")
-  for i in $(seq 1 10); do sleep 1; keyboard_shown && break; done
-  keyboard_shown || fail "5-$state" "the keyboard did not come up ($state)"
-  sleep 2
-  after=$(vh) || true
+  # the emulator's keyboard sometimes stays down after a screen-size change: tap again (at most 3 times) until the
+  # viewport shrinks, which is the check itself (the IME's own "shown" flag can be stale)
+  after=
+  for tap in 1 2 3; do
+    adb shell input tap $(centre "$box")
+    for i in $(seq 1 8); do
+      sleep 1
+      after=$(vh) || true
+      [[ -n "$after" && "$after" -lt $((before - 100)) ]] && break 2
+    done
+  done
   shot "5-keyboard-$state"
-  note "$state: viewport $before -> $after with the keyboard"
+  note "$state: viewport $before -> ${after:-?} with the keyboard (tap $tap)"
   [[ -n "$after" && "$after" -lt $((before - 100)) ]] \
-    || fail "5-$state" "the WebView did not shrink for the keyboard ($state: $before -> ${after:-?})"
+    || fail "5-$state" "the WebView did not shrink for the keyboard ($state: $before -> ${after:-?}; see the screenshot for whether the keyboard came up)"
   wait_class android.widget.EditText 10 > /dev/null || fail "5-$state" "the text box is not on screen with the keyboard ($state)"
   adb shell input keyevent KEYCODE_BACK
 done
