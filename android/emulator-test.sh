@@ -11,6 +11,8 @@ TEST_APK=${2:?test apk}
 OUT=${3:?out dir}
 PKG=dev.de0ch.yycai
 mkdir -p "$OUT"
+# any other failing command (set -e) names itself too
+trap 'echo "::error title=emulator test::line $LINENO: $BASH_COMMAND"' ERR
 
 shot() { adb exec-out screencap -p > "$OUT/$1.png"; }
 dump() { adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && adb shell cat /sdcard/ui.xml; }
