@@ -46,17 +46,40 @@ wait_text() {
   return 1
 }
 
-# the emulator's hinge: fold | unfold
+# the screen's current size, WxH (the screenshot's PNG header)
+screen() { adb exec-out sh -c 'screencap -p /sdcard/s.png && head -c 24 /sdcard/s.png | tail -c 8' | od -An -tu1 | awk '{print ($1*16777216+$2*65536+$3*256+$4) "x" ($5*16777216+$6*65536+$7*256+$8)}'; }
+
+# the emulator's hinge: fold | unfold; the screen must change size (else the profile is no book-style foldable)
 posture() {
-  adb emu "$1" > /dev/null
+  local was now r
+  was=$(screen)
+  r=$(adb emu "$1" 2>&1 | tr -d '\r' | head -1)
   sleep 5
+  now=$(screen)
+  echo "$1: $r, screen $was -> $now"
+  [[ "$r" == OK* ]] || fail "posture-$1" "the emulator refused '$1': $r"
 }
 
 pid() { adb shell pidof "$PKG" || true; }
 
+# the first node of class $1 on screen, waiting up to $2 s
+wait_class() {
+  local c=$1 n=$2 i
+  for ((i = 0; i < n; i += 2)); do
+    dump > "$OUT/ui.xml" && grep -o '<node[^>]*>' "$OUT/ui.xml" | grep -F "class=\"$c\"" | head -1 | grep . && return 0
+    sleep 2
+  done
+  return 1
+}
+
 # ---- 1. the release APK
 adb install -r "$APK"
+posture fold
+folded=$(screen)
 posture unfold
+unfolded=$(screen)
+[[ "$folded" != "$unfolded" ]] || fail 0-posture "folding does not change the screen ($folded): not a book-style foldable"
+note "screen: folded $folded, unfolded $unfolded"
 adb shell am start -W -n "$PKG/.MainActivity"
 sleep 5
 wait_text "登入|Sign in" 90 > /dev/null || fail 1-unfolded "the signed-out site (Sign in) did not appear unfolded"
@@ -98,7 +121,7 @@ for state in unfold fold; do
   sleep 4
   before=$(vh) || true
   [[ -n "$before" ]] || fail "5-$state" "the test page did not show its height ($state)"
-  box=$(wait_text "test box" 20) || fail "5-$state" "the test page's text box is missing ($state)"
+  box=$(wait_class android.widget.EditText 20) || fail "5-$state" "the test page's text box is missing ($state)"
   adb shell input tap $(centre "$box")
   for i in $(seq 1 10); do sleep 1; keyboard_shown && break; done
   keyboard_shown || fail "5-$state" "the keyboard did not come up ($state)"
@@ -108,7 +131,7 @@ for state in unfold fold; do
   note "$state: viewport $before -> $after with the keyboard"
   [[ -n "$after" && "$after" -lt $((before - 100)) ]] \
     || fail "5-$state" "the WebView did not shrink for the keyboard ($state: $before -> ${after:-?})"
-  wait_text "test box" 10 > /dev/null || fail "5-$state" "the text box is not on screen with the keyboard ($state)"
+  wait_class android.widget.EditText 10 > /dev/null || fail "5-$state" "the text box is not on screen with the keyboard ($state)"
   adb shell input keyevent KEYCODE_BACK
 done
 note "ok: the keyboard shrinks the WebView, folded and unfolded"

@@ -93,7 +93,8 @@ jobs:
         run: |
           avd="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
           "$avd" list device -c | tee "$RUNNER_TEMP/devices.txt"
-          dev=$(grep -i -m1 -E '^pixel_fold$' "$RUNNER_TEMP/devices.txt" || grep -i -m1 'fold' "$RUNNER_TEMP/devices.txt" || true)
+          # a book-style foldable (Pixel Fold, Galaxy Z Fold), not a flip phone ("6.7in Foldable")
+          dev=$(grep -m1 -x -E 'pixel_fold|pixel_9_pro_fold' "$RUNNER_TEMP/devices.txt" || grep -m1 -x '7.6in Foldable' "$RUNNER_TEMP/devices.txt" || true)
           [ -n "$dev" ] || { echo "::error title=emulator test::no foldable device profile on this runner"; exit 1; }
           echo "::notice title=emulator test::foldable profile: $dev"
           echo "device=$dev" >> "$GITHUB_OUTPUT"
