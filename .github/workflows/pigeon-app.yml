@@ -315,7 +315,20 @@ jobs:
           mapfile -t tags < "$RUNNER_TEMP/seed-tags.txt"
           node scripts/pigeon-app/verify-seeds.mjs "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/seeds" "${tags[@]}"
           docker pull -q "$IMAGE:$tag" >/dev/null
-          for mib in 32 64 128; do
+          # what the host is (the limit /cp needs depends on it)
+          uname -r
+          df -T "$RUNNER_TEMP" /var/lib/docker | cat
+          docker info -f 'cgroup {{.CgroupVersion}} {{.CgroupDriver}}, storage {{.Driver}}, docker {{.ServerVersion}}'
+          sudo systemd-run --wait --pipe -q -p MemoryMax=1G -p MemorySwapMax=0 cp -a "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/peak-probe" \
+            && sudo systemd-run --wait -p MemoryMax=1G -p MemorySwapMax=0 cp -a "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/peak-probe2" 2>&1 | grep -i memory || true
+          sudo rm -rf "$RUNNER_TEMP/peak-probe" "$RUNNER_TEMP/peak-probe2"
+          docker volume create cp-probe >/dev/null
+          set +e
+          docker run --rm --user 0:0 --memory 32m --memory-swap 32m -v cp-probe:/srv/app "$IMAGE:$tag" /cp -a /app/. /srv/app/
+          echo "/cp into a docker volume (/var/lib/docker) within 32 MiB: exit $?"
+          set -e
+          docker volume rm cp-probe >/dev/null
+          for mib in 32 64 128 256 512 1024; do
             dir="$RUNNER_TEMP/srv-app-$mib"
             mkdir -p "$dir"
             sudo chown 65532:65532 "$dir"
@@ -333,7 +346,7 @@ jobs:
               [ "$mib" = 32 ] || echo "::warning::/cp needed $mib MiB here; platform 9.4's 32Mi initContainer limit is too low (README \"Design gaps\" 4)"
               exit 0
             fi
-            echo "/cp within $mib MiB: exit $status, OOM-killed: $oom"
+            echo "/cp within $mib MiB: exit $status, OOM-killed: $oom, $(sudo du -sm "$dir" | cut -f1) MiB copied"
             sudo rm -rf "$dir"
           done
           echo "::error::/cp did not copy the tree within $CP_MEMORY_MIB MiB"
