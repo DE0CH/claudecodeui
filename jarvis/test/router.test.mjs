@@ -233,6 +233,17 @@ test("drain: not ready, waits for running chats, then stops every process", asyn
   assert.ok(Date.now() - t0 < 9000);
 });
 
+test("drain: a process stopped with a chat still running is counted as an old turn cut (old_turn_cut_total); an idle one is not", async () => {
+  const r = makeRouter({ drainMs: 300 });
+  await r.listen();
+  await get(r, "/", auth(ALICE));
+  await get(r, "/", auth(BOB));
+  setRunning(r, ALICE, 1);
+  await r.drain();
+  assert.ok(r.procs.get(ALICE)?.exited ?? true);
+  assert.equal(r.sw.counters.oldTurnCutTotal, 1, "alice's running chat was cut by the drain's deadline; bob had none");
+});
+
 test("rendezvous owner is stable and spreads users", () => {
   const peers = ["10.0.0.1", "10.0.0.2"];
   const owners = new Set();
@@ -1171,6 +1182,17 @@ test("switch window: after the first move new non-LU upgrades get 503 before the
     for (const c of [before, lu, again]) c.s.destroy();
   } finally {
     pigeon.close();
+  }
+});
+
+test("switch window: the zero counters are in the report at 0 from the start (aviary testing/switch/zero-counters.txt, router lines)", async () => {
+  const r = swRouter();
+  await r.listen();
+  const rep = await sockets(r);
+  // an absent field would read as "no alert": each must be there, at 0
+  for (const series of ["counters.inflightClosesTotal", "totals.opaque", "counters.oldTurnCutTotal"]) {
+    const v = series.split(".").reduce((o, k) => o?.[k], rep);
+    assert.equal(v, 0, `${series} is reported at 0`);
   }
 });
 

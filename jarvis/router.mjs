@@ -1465,6 +1465,12 @@ export class Router {
       first = false;
       await sleep(Math.min(5000, Math.max(50, deadline - this.now())));
     }
+    // switch window: a process stopped here with a chat still running cuts an old turn (old_turn_cut_total, DESIGN 9.9)
+    await Promise.all([...this.procs.values()].map(async (p) => {
+      if (p.stopping || p.exited) return;
+      const r = await p.runningChats();
+      if (r === null ? p.inflight > 0 : r > 0) this.sw.turnCut(p, r, "shutdown");
+    }));
     await Promise.all([...this.procs.values()].map((p) => p.stop("shutdown")));
     for (const f of this.forwarded) f.socket.destroy();
     this.server.close();
@@ -1547,6 +1553,10 @@ export class Router {
 //   of theirs with a request outstanding (stale ones included) or opaque, or CloudCLI's GET /api/jarvis/switch/busy
 //   (jarvis-switch.routes.ts) lists anything: running (chats, tracked background work, CLI turns), a Claude Code
 //   process (holds, also those with no tracked task), a sandbox preparing, a Paseo message pending; can't tell = busy.
+// - old_turn_cut_total: a process the drain stops while it still runs a chat (running list non-empty, or unknown with
+//   HTTP in flight) is counted (`oldTurnCutTotal`) and logged at error as "switch: old turn cut (old_turn_cut_total)"
+//   with the person and the reason, whether the module is on or not: the drain's pod is going, so the runner reads it
+//   from the log (DESIGN 9.9's zero counter; the other stops, idle, eviction, restart, never stop a running chat).
 // - JARVIS_UI_PURGE=off: purgeWake does nothing and each process gets JARVIS_UI_PURGE=off (jarvis-purge.ts: no purge).
 // The endpoints take `Authorization: Bearer <JARVIS_UI_SWITCH_TOKEN>`, or the token in `x-jarvis-switch-token` (through
 // the old cluster's API server's pods/proxy, which keeps `Authorization` for itself); anything else is 404.
@@ -1904,13 +1914,19 @@ class SwitchWindow {
     this.luHttp = new Map();        // person -> in-flight LU HTTP (first hop)
     this.passOnInFlight = 0;
     this.nextId = 1;
-    this.counters = { movedTotal: 0, inflightClosesTotal: 0, opaqueSocketsTotal: 0, hopOpaqueSocketsTotal: 0, staleRequestsTotal: 0, refusedUpgradesTotal: 0, passedOnTotal: 0, closeErrorsTotal: 0 };
+    this.counters = { movedTotal: 0, inflightClosesTotal: 0, opaqueSocketsTotal: 0, hopOpaqueSocketsTotal: 0, staleRequestsTotal: 0, refusedUpgradesTotal: 0, passedOnTotal: 0, closeErrorsTotal: 0, oldTurnCutTotal: 0 };
     this.ticker = null;
     this.ager = null;
     if (this.enabled) {
       this.ager = setInterval(() => { try { this.#ageAll(); } catch (e) { log("error", "switch: ageing failed", { error: String(e?.message || e) }); } }, Math.max(10, Math.min(10_000, Math.floor(this.staleMs / 4))));
       this.ager.unref?.();
     }
+  }
+
+  /** A process stopped with a chat running (`running`: its running count, null when it could not tell). */
+  turnCut(p, running, reason) {
+    this.counters.oldTurnCutTotal++;
+    log("error", "switch: old turn cut (old_turn_cut_total)", { user: p.key, running, reason });
   }
 
   /** Env for each CloudCLI process. */
