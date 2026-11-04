@@ -40,7 +40,48 @@ export type HubEvent =
   | { type: 'timeline'; sessionId: string; rows: PaseoTimelineRow[]; epoch: string; turnId?: string }
   | { type: 'turn'; sessionId: string; phase: 'started' | 'completed' | 'failed' | 'canceled'; turnId: string; error?: string }
   | { type: 'session'; sessionId: string; removed?: boolean }
-  | { type: 'preparing'; sessionId: string; state: 'preparing' | 'ready' };
+  | { type: 'preparing'; sessionId: string; state: 'preparing' | 'ready' }
+  | { type: 'question'; sessionId: string; request: PaseoQuestionRequest }
+  | { type: 'question_resolved'; sessionId: string; requestId: string; resolution: PaseoPermissionResponse };
+
+/**
+ * Claude Code's AskUserQuestion, waiting for the person's answer (CloudCLI's `permission_request` for a tool that
+ * needs interaction; Paseo's AgentPermissionRequest of kind "question", drawn as its question card).
+ */
+export type PaseoQuestionRequest = {
+  id: string;
+  provider: 'claude';
+  name: string;
+  kind: 'question';
+  input: Record<string, unknown>;
+};
+
+/** Paseo's AgentPermissionResponse (packages/protocol agent-types.ts). */
+export type PaseoPermissionResponse =
+  | { behavior: 'allow'; updatedInput?: Record<string, unknown> }
+  | { behavior: 'deny'; message?: string };
+
+const QUESTION_TOOL = 'AskUserQuestion';
+
+/**
+ * Paseo's card keys each answer by the question's `header`; Claude Code reads them by the question's text. Keys that
+ * already are a question's text stay as they are.
+ */
+export function answersByQuestionText(input: Record<string, unknown>): Record<string, unknown> {
+  const answers = input.answers;
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return input;
+  const questions = Array.isArray(input.questions) ? (input.questions as Array<Record<string, unknown>>) : [];
+  const texts = new Set(questions.map((q) => q?.question).filter((q): q is string => typeof q === 'string'));
+  const byHeader = new Map<string, string>();
+  for (const q of questions) {
+    if (typeof q?.header === 'string' && typeof q?.question === 'string' && !byHeader.has(q.header)) byHeader.set(q.header, q.question);
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(answers as Record<string, unknown>)) {
+    out[texts.has(key) ? key : byHeader.get(key) ?? key] = value;
+  }
+  return { ...input, answers: out };
+}
 
 export const PROJECT_ID = 'prj_conversations';
 
@@ -129,6 +170,10 @@ class PaseoHub extends EventEmitter {
    * work) makes its sandbox out of sight (Deyao, 2026-11-03).
    */
   private preparing = new Set<string>();
+  /** AskUserQuestion calls waiting for an answer, per conversation (requestId → request). */
+  private questions = new Map<string, Map<string, PaseoQuestionRequest>>();
+  /** The answer given to each waiting question, until CloudCLI says it was resolved. */
+  private answers = new Map<string, PaseoPermissionResponse>();
   readonly generation = randomUUID();
   private directorySeq = 0;
 
@@ -347,12 +392,34 @@ class PaseoHub extends EventEmitter {
           this.emitEvent({ type: 'session', sessionId, removed: true });
         }
         return;
-      case 'chat_subscribed':
+      case 'permission_request': {
+        const requestId = typeof frame.requestId === 'string' ? frame.requestId : '';
+        const toolName = typeof frame.toolName === 'string' ? frame.toolName : '';
+        const input = frame.input && typeof frame.input === 'object' ? (frame.input as Record<string, unknown>) : {};
+        if (sessionId && requestId) this.onPermissionRequest(sessionId, requestId, toolName, input);
+        return;
+      }
+      case 'permission_resolved':
+      case 'permission_cancelled': {
+        const requestId = typeof frame.requestId === 'string' ? frame.requestId : '';
+        if (sessionId && requestId) this.onPermissionGone(sessionId, requestId, kind === 'permission_cancelled');
+        return;
+      }
+      // a run the hub subscribed to mid-way: the questions it is already waiting on
+      case 'chat_subscribed': {
+        const pending = Array.isArray((frame as { pendingPermissions?: unknown }).pendingPermissions)
+          ? ((frame as { pendingPermissions: Array<Record<string, unknown>> }).pendingPermissions)
+          : [];
+        for (const item of pending) {
+          const requestId = typeof item.requestId === 'string' ? item.requestId : '';
+          const toolName = typeof item.toolName === 'string' ? item.toolName : '';
+          const input = item.input && typeof item.input === 'object' ? (item.input as Record<string, unknown>) : {};
+          if (sessionId && requestId) this.onPermissionRequest(sessionId, requestId, toolName, input);
+        }
+        return;
+      }
       case 'loading_progress':
       case 'session_created':
-      case 'permission_request':
-      case 'permission_resolved':
-      case 'permission_cancelled':
       case 'stream_end':
       case 'task_status':
       case 'task_notification':
@@ -386,6 +453,7 @@ class PaseoHub extends EventEmitter {
         const turnId = this.turnIdFor(sessionId);
         this.turnIds.delete(sessionId);
         this.pendingUserMessages.delete(sessionId);
+        this.dropQuestions(sessionId);
         // A turn that ended while its sandbox was still being made (stopped, or the start failed)
         if (this.preparing.delete(sessionId)) this.emitEvent({ type: 'preparing', sessionId, state: 'ready' });
         const phase = aborted ? 'canceled' : typeof exitCode === 'number' && exitCode !== 0 ? 'failed' : 'completed';
@@ -411,6 +479,73 @@ class PaseoHub extends EventEmitter {
     if (rows.length > 0) this.emitEvent({ type: 'timeline', sessionId, rows, epoch: timeline.epoch, turnId });
   }
 
+  /** The questions of a conversation still waiting for the person (the agent snapshot's pendingPermissions). */
+  pendingQuestions(sessionId: string): PaseoQuestionRequest[] {
+    return [...(this.questions.get(sessionId)?.values() ?? [])];
+  }
+
+  /** The person's answer to a waiting question (Paseo's agent_permission_response); false if nothing waits on it. */
+  answer(sessionId: string, requestId: string, response: PaseoPermissionResponse): boolean {
+    const request = this.questions.get(sessionId)?.get(requestId);
+    if (!request) return false;
+    this.answers.set(requestId, response);
+    if (response.behavior === 'allow') {
+      this.socket?.deliver({
+        type: 'chat.permission-response',
+        requestId,
+        allow: true,
+        updatedInput: answersByQuestionText({ ...request.input, ...(response.updatedInput ?? {}) }),
+      });
+    } else {
+      this.socket?.deliver({
+        type: 'chat.permission-response',
+        requestId,
+        allow: false,
+        message: response.message || 'The person dismissed the question without answering.',
+      });
+    }
+    return true;
+  }
+
+  /**
+   * A tool waiting on the person. Only AskUserQuestion is shown (as Paseo's question card); YYC AI asks staff for no
+   * permissions (skill yyc-ai "Internal writes only"), so anything else that reaches here (ExitPlanMode after the
+   * model entered plan mode) is allowed at once, as bypassPermissions would.
+   */
+  private onPermissionRequest(sessionId: string, requestId: string, toolName: string, input: Record<string, unknown>): void {
+    if (toolName !== QUESTION_TOOL) {
+      this.socket?.deliver({ type: 'chat.permission-response', requestId, allow: true, updatedInput: input });
+      return;
+    }
+    let waiting = this.questions.get(sessionId);
+    if (!waiting) {
+      waiting = new Map();
+      this.questions.set(sessionId, waiting);
+    }
+    if (waiting.has(requestId)) return;
+    const request: PaseoQuestionRequest = { id: requestId, provider: 'claude', name: toolName, kind: 'question', input };
+    waiting.set(requestId, request);
+    this.emitEvent({ type: 'question', sessionId, request });
+    this.emitEvent({ type: 'session', sessionId });
+  }
+
+  private onPermissionGone(sessionId: string, requestId: string, cancelled: boolean): void {
+    const waiting = this.questions.get(sessionId);
+    if (!waiting?.delete(requestId)) return;
+    if (waiting.size === 0) this.questions.delete(sessionId);
+    const resolution: PaseoPermissionResponse = cancelled
+      ? { behavior: 'deny', message: 'Cancelled' }
+      : this.answers.get(requestId) ?? { behavior: 'allow' };
+    this.answers.delete(requestId);
+    this.emitEvent({ type: 'question_resolved', sessionId, requestId, resolution });
+    this.emitEvent({ type: 'session', sessionId });
+  }
+
+  /** A turn that ended takes its unanswered questions with it (stopped, failed, the CLI gone). */
+  private dropQuestions(sessionId: string): void {
+    for (const requestId of [...(this.questions.get(sessionId)?.keys() ?? [])]) this.onPermissionGone(sessionId, requestId, true);
+  }
+
   /** Tests: forget everything. */
   resetForTests(): void {
     this.socket = null;
@@ -420,6 +555,8 @@ class PaseoHub extends EventEmitter {
     this.turnIds.clear();
     this.pendingUserMessages.clear();
     this.preparing.clear();
+    this.questions.clear();
+    this.answers.clear();
     this.removeAllListeners();
   }
 }

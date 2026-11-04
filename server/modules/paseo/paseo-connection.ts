@@ -397,6 +397,31 @@ class PaseoConnection {
         return;
       }
 
+      // The person's answer to Claude Code's AskUserQuestion (Paseo's question card)
+      case 'agent_permission_response': {
+        const agentId = String(message.agentId ?? '');
+        const permissionId = String(message.requestId ?? '');
+        const response = (message.response ?? {}) as AnyRecord;
+        const answer = response.behavior === 'allow'
+          ? { behavior: 'allow' as const, updatedInput: response.updatedInput && typeof response.updatedInput === 'object' ? response.updatedInput : undefined }
+          : { behavior: 'deny' as const, message: typeof response.message === 'string' ? response.message : undefined };
+        if (!paseoHub.pendingQuestions(agentId).some((q) => q.id === permissionId)) return;
+        // view as: an answer is sent as the person, so it is recorded like a message first
+        if (this.viewer) {
+          const chars = JSON.stringify(answer.behavior === 'allow' ? answer.updatedInput?.answers ?? {} : {}).length;
+          const recorded = await recordViewAs(this.viewer, { event: 'message', conversation: agentId, chars }).then(
+            () => true,
+            (e: unknown) => {
+              console.error('[paseo] view-as answer not recorded', e);
+              return false;
+            },
+          );
+          if (!recorded) return;
+        }
+        paseoHub.answer(agentId, permissionId, answer);
+        return;
+      }
+
       case 'cancel_agent_request': {
         const agentId = String(message.agentId ?? '');
         paseoHub.abort(agentId);
@@ -588,6 +613,7 @@ class PaseoConnection {
   private agentSnapshot(row: SessionRowLite): AnyRecord {
     const running = paseoHub.isRunning(row.session_id);
     const model = paseoHub.model;
+    const questions = paseoHub.pendingQuestions(row.session_id);
     return {
       id: row.session_id,
       provider: 'claude',
@@ -606,14 +632,14 @@ class PaseoConnection {
       currentModeId: null,
       availableModes: [],
       features: [],
-      pendingPermissions: [],
+      pendingPermissions: questions,
       persistence: null,
       title: this.titleOf(row),
       labels: {},
       archivedAt: Number(row.isArchived) === 1 ? toIso(row.deleted_at ?? row.updated_at) : null,
-      requiresAttention: false,
-      attentionReason: null,
-      attentionTimestamp: null,
+      requiresAttention: questions.length > 0,
+      attentionReason: questions.length > 0 ? 'permission' : null,
+      attentionTimestamp: questions.length > 0 ? nowIso() : null,
     };
   }
 
@@ -807,6 +833,16 @@ class PaseoConnection {
       }
       case 'session':
         await this.pushSession(event.sessionId, event.removed);
+        return;
+      case 'question':
+        this.reply('agent_permission_request', { agentId: event.sessionId, request: event.request });
+        return;
+      case 'question_resolved':
+        this.reply('agent_permission_resolved', {
+          agentId: event.sessionId,
+          requestId: event.requestId,
+          resolution: event.resolution,
+        });
         return;
       case 'preparing':
         // yyc.sandbox_status (paseo/packages/protocol messages.ts): the chip above the composer
