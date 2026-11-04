@@ -451,7 +451,7 @@ function readLimited(req, max) {
  */
 function upstreamHeaders(req, email, extra = {}, viewer = null) {
   const h = { ...req.headers };
-  for (const k of ["x-jarvis-user", VIEWER_HEADER, VIEWER_SESSION_HEADER, HOP, PEER_AUTH, LU_HEADER /* switch window */, "proxy-connection", "keep-alive", "te", "trailer"]) delete h[k];
+  for (const k of ["x-jarvis-user", VIEWER_HEADER, VIEWER_SESSION_HEADER, HOP, PEER_AUTH, LU_HEADER, SWITCH_TOKEN_HEADER /* switch window */, "proxy-connection", "keep-alive", "te", "trailer"]) delete h[k];
   if (!req.headers.upgrade) delete h.connection;
   if (email) {
     h["x-jarvis-user"] = email;
@@ -1548,7 +1548,8 @@ export class Router {
 //   (jarvis-switch.routes.ts) lists anything: running (chats, tracked background work, CLI turns), a Claude Code
 //   process (holds, also those with no tracked task), a sandbox preparing, a Paseo message pending; can't tell = busy.
 // - JARVIS_UI_PURGE=off: purgeWake does nothing and each process gets JARVIS_UI_PURGE=off (jarvis-purge.ts: no purge).
-// The endpoints take `Authorization: Bearer <JARVIS_UI_SWITCH_TOKEN>`; anything else is 404.
+// The endpoints take `Authorization: Bearer <JARVIS_UI_SWITCH_TOKEN>`, or the token in `x-jarvis-switch-token` (through
+// the old cluster's API server's pods/proxy, which keeps `Authorization` for itself); anything else is 404.
 //
 // Environment:
 //   JARVIS_UI_SWITCH_TOKEN [unset]    bearer of the switch endpoints; unset: the module is off
@@ -1558,6 +1559,7 @@ export class Router {
 //                                     error, move answers 409 and nothing is armed
 //   JARVIS_UI_PURGE [on]              off: no Recently-deleted purge (purgeWake and the processes')
 const LU_HEADER = "x-aviary-lu";
+const SWITCH_TOKEN_HEADER = "x-jarvis-switch-token";
 const SWITCH_PATHS = ["/__jarvis/sockets", "/__jarvis/move", "/__jarvis/admit", "/__jarvis/restart"];
 /** Server messages: bytes read from each. */
 export const SWITCH_PREFIX = 8192;
@@ -2207,7 +2209,11 @@ class SwitchWindow {
       res.end(JSON.stringify(body));
     };
     req.resume();
-    if (!this.enabled || !eqSecret(String(req.headers.authorization || ""), `Bearer ${this.token}`)) return answer(404, { error: "not found" });
+    // the token as `Authorization: Bearer …`, or as `x-jarvis-switch-token` when the caller comes through the old
+    // cluster's API server (pods/proxy keeps `Authorization` for its own login: the importer and the runner, B7)
+    const presented = req.headers[SWITCH_TOKEN_HEADER] !== undefined ? String(req.headers[SWITCH_TOKEN_HEADER]) : null;
+    const ok = presented !== null ? eqSecret(presented, this.token) : eqSecret(String(req.headers.authorization || ""), `Bearer ${this.token}`);
+    if (!this.enabled || !ok) return answer(404, { error: "not found" });
     const want = pathname === "/__jarvis/sockets" ? "GET" : "POST";
     if (req.method !== want) return answer(405, { error: `${want} only` });
     const person = String(new URL(req.url, "http://x").searchParams.get("person") || "").trim().toLowerCase();

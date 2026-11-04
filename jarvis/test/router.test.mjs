@@ -1179,6 +1179,9 @@ test("switch window: GET /__jarvis/sockets counts in-flight HTTP per person (LU 
   await r.listen();
   assert.equal((await get(r, "/__jarvis/sockets")).status, 404);
   assert.equal((await get(r, "/__jarvis/sockets", { authorization: "Bearer nope" })).status, 404);
+  // through the API server's pods/proxy (B7): the token in its own header; a wrong one is refused even beside a good Bearer
+  assert.equal((await get(r, "/__jarvis/sockets", { "x-jarvis-switch-token": SW })).status, 200);
+  assert.equal((await get(r, "/__jarvis/sockets", { "x-jarvis-switch-token": "nope", ...swAuth })).status, 404);
   assert.equal((await get(r, "/__jarvis/move", { authorization: "Bearer nope" }, "POST")).status, 404);
   assert.equal((await get(r, "/__jarvis/move", swAuth, "GET")).status, 405);
   assert.equal((await sockets(r)).armed, false, "a 405 does not arm");
