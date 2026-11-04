@@ -29,6 +29,11 @@
 //             reconnect and the next send is native
 //   warm      an idle warm old sandbox: the tab moved right after a turn, the person's gate set; the conversation is
 //             released only once the old sandbox is gone, with no reconnect, and the next send is native
+//   a1        the A1 gated ui rollout (DESIGN 9.6, DECISIONS E5), before T0: four tabs open on the old ui and a long
+//             old turn running in one when the rollout is pushed (the box's control `a1-rollout`: the Deployment
+//             paused with the new template, the gate resuming only while no old pod has running work); the gate
+//             waits for the turn, which streams to its end and is accepted once; every tab reconnects at most once
+//             and is connected afterwards; nothing counted in a1_rollout_cut_total
 //
 // The checker is proved by the seeded defects (--defect, draft only): `lost-draft` (the persona build empties the
 // composer at each reconnect) and `second-reconnect` (the edge drops each tab's first connection after the flip once
@@ -215,6 +220,57 @@ async function releaseAndNative(who, { whileLegacy } = {}) {
 }
 
 const personas = {
+  async a1() {
+    await openApp();
+    await openConversation();
+    // three more tabs of the person (the old Service spreads them over both old pods)
+    const tabs = [page];
+    for (let i = 0; i < 3; i++) {
+      const p = await context.newPage();
+      await p.goto(o.edge, { waitUntil: "domcontentloaded" });
+      await p.waitForFunction(() => (window.__yycPersona?.statuses || []).includes("connected"), null, { timeout: 60000 });
+      tabs.push(p);
+    }
+    const counts = () => Promise.all(tabs.map((p) => p.evaluate(() => window.__yycPersona?.connects ?? -1).catch(() => -1)));
+    const c0 = await counts();
+    // a long old turn running when the rollout is pushed
+    const t = tag();
+    await box.fill(`[[slow 20]] ${t} a1 turn`);
+    await box.press("Enter");
+    check("the turn started", await until(60000, async () => (await shown(t)) > 0, 500));
+    let endedAt = 0;
+    const watchEnd = (async () => {
+      endedAt = (await until(300000, async () => ((await shown("done 20", "assistant-message")) > 0 ? Date.now() : 0), 500)) || 0;
+    })();
+    const st = await ctl("a1-rollout", { step: "start" });
+    check("the A1 rollout pushed", st.ok, st.text.slice(-300));
+    let r = { ok: false, text: "" };
+    const rollEnd = Date.now() + 1200000;
+    while (Date.now() < rollEnd) {
+      r = await ctl("a1-rollout", { step: "result" });
+      if (r.ok || !/exit code 2|^$/.test(r.text)) break;
+      await wait(3000);
+    }
+    check("the A1 rollout finished", r.ok, r.text.slice(-300));
+    await watchEnd;
+    let g = {};
+    try { g = JSON.parse(r.text.split("\n").filter(Boolean).pop() || "{}"); } catch { /* reported below */ }
+    check("the running turn is not cut", endedAt > 0, endedAt ? "done 20 shown" : "no done 20 in the tab");
+    check("the gate waited for the running turn", endedAt > 0 && g.firstResumeAt >= endedAt,
+      `first resume ${g.firstResumeAt ? g.firstResumeAt - endedAt : "?"} ms after the turn ended`);
+    check("a1_rollout_cut_total 0", g.a1RolloutCutTotal === 0, `a1RolloutCutTotal ${g.a1RolloutCutTotal}`);
+    const rows = await oldUserRows(t);
+    check("the turn's message accepted once", rows.length === 1, `${rows.length} old user rows`);
+    // each tab: its old pod drained, so it reconnects, once
+    await wait(10000);
+    const c1 = await counts();
+    tabs.forEach((_, i) => {
+      const n = c1[i] - c0[i];
+      check(`tab ${i + 1} reconnects at most once`, n <= 1, `${n} reconnects`);
+      check(`tab ${i + 1} connected after the rollout`, n >= 1, `${n} reconnects (its old pod drained)`);
+    });
+  },
+
   async draft() {
     await openApp();
     await openConversation();
