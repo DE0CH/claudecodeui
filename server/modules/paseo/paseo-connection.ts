@@ -6,6 +6,7 @@
  * CloudCLI session id. Only what a chat app needs is implemented; everything a developer machine has (git, terminals,
  * scripts, plugins, worktrees) answers empty, and the server_info features leave it out so the app hides it.
  */
+import { NOT_AFTER_CODE, NOT_AFTER_FIELD, NotAfterError, pastNotAfter } from './not-after.js';
 import { randomUUID } from 'node:crypto';
 
 import type { WebSocket } from 'ws';
@@ -126,7 +127,6 @@ class PaseoConnection {
   private projectsSubscription: string | null = null;
   private timelineSubscription: string | null = null;
   private timelineAgents = new Set<string>();
-  private creations = new Map<string, string>();
 
   constructor(
     private readonly ws: WebSocket,
@@ -134,6 +134,16 @@ class PaseoConnection {
   ) {}
 
   /** Viewing as someone: a change other than sending is refused with an rpc_error (true = refused). */
+  /**
+   * Switch window: a write whose `aviaryNotAfter` passed is refused (rpc_error `not_after`), never applied; called right
+   * before each write's commit (not-after.ts).
+   */
+  private refuseLate(message: AnyRecord, type: string, requestId: string): boolean {
+    if (!pastNotAfter(message[NOT_AFTER_FIELD])) return false;
+    this.reply('rpc_error', { requestId, requestType: type, error: 'the write arrived after its bound', code: NOT_AFTER_CODE });
+    return true;
+  }
+
   private refuseWhileViewing(type: string, requestId: string): boolean {
     if (!this.viewer) return false;
     this.reply('rpc_error', { requestId, requestType: type, error: VIEW_AS_READ_ONLY, code: 'view_as_read_only' });
@@ -391,7 +401,14 @@ class PaseoConnection {
               )
             : true;
           if (!recorded) error = VIEW_AS_NOT_RECORDED;
-          else await paseoHub.send(agentId, text, clientMessageId, { images: message.images, attachments: message.attachments });
+          else {
+            try {
+              await paseoHub.send(agentId, text, clientMessageId, { images: message.images, attachments: message.attachments }, message[NOT_AFTER_FIELD]);
+            } catch (e) {
+              if (!(e instanceof NotAfterError)) throw e;
+              error = NOT_AFTER_CODE;
+            }
+          }
         }
         this.reply('send_agent_message_response', { requestId, agentId, accepted: error === null, error });
         return;
@@ -418,12 +435,14 @@ class PaseoConnection {
           );
           if (!recorded) return;
         }
+        if (this.refuseLate(message, type, permissionId)) return;
         paseoHub.answer(agentId, permissionId, answer);
         return;
       }
 
       case 'cancel_agent_request': {
         const agentId = String(message.agentId ?? '');
+        if (this.refuseLate(message, type, requestId)) return;
         paseoHub.abort(agentId);
         const row = await paseoHub.getSession(agentId);
         this.reply('cancel_agent_response', { requestId, agentId, agent: row ? this.agentSnapshot(row) : null, error: null });
@@ -439,6 +458,7 @@ class PaseoConnection {
         const agentId = String(message.agentId ?? '');
         const title = typeof message.title === 'string' ? message.title.trim() : '';
         let error: string | null = null;
+        if (this.refuseLate(message, type, requestId)) return;
         if (title) {
           try {
             await sessionsService.renameSessionById(agentId, title);
@@ -456,6 +476,7 @@ class PaseoConnection {
         const sessionId = sessionIdFromWorkspace(String(message.workspaceId ?? '')) ?? '';
         const title = typeof message.title === 'string' ? message.title.trim() : '';
         let error: string | null = null;
+        if (this.refuseLate(message, type, requestId)) return;
         if (title) {
           try {
             await sessionsService.renameSessionById(sessionId, title);
@@ -484,7 +505,10 @@ class PaseoConnection {
         const agentId = String(message.agentId ?? '');
         const row = await paseoHub.getSession(agentId, { includeDeleted: true });
         if (row && Number(row.isArchived) === 1 && this.refuseWhileViewing(type, requestId)) return;
-        if (row && Number(row.isArchived) === 1) await sessionsService.restoreSessionById(agentId);
+        if (row && Number(row.isArchived) === 1) {
+          if (this.refuseLate(message, type, requestId)) return;
+          await sessionsService.restoreSessionById(agentId);
+        }
         this.send({ type: 'status', payload: { status: 'agent_refreshed', agentId, requestId } });
         await this.pushSession(agentId);
         return;
@@ -502,6 +526,7 @@ class PaseoConnection {
         try {
           const row = await paseoHub.getSession(sessionId, { includeDeleted: true });
           const permanent = type === 'delete_agent_request' && !!row && Number(row.isArchived) === 1;
+          if (pastNotAfter(message[NOT_AFTER_FIELD])) throw new NotAfterError();
           await sessionsService.deleteOrArchiveSessionById(sessionId, permanent ? { force: true, deletedFromDisk: true } : {});
         } catch (e) {
           error = e instanceof Error ? e.message : String(e);
@@ -861,25 +886,30 @@ class PaseoConnection {
       : typeof message.firstAgentContext?.prompt === 'string' ? message.firstAgentContext.prompt : '';
     const clientMessageId = typeof agent.clientMessageId === 'string' ? agent.clientMessageId : `${idempotencyKey}:initial-message`;
 
-    const existing = this.creations.get(idempotencyKey);
     const firstContext = (message.firstAgentContext ?? {}) as AnyRecord;
     const viewer = this.viewer;
     let sessionId: string;
     try {
-      sessionId = existing ?? await paseoHub.createConversation(
-        text,
-        clientMessageId,
-        { images: agent.images ?? firstContext.images, attachments: agent.attachments ?? firstContext.attachments },
-        // view as: recorded in the operator page's History before the first message goes
-        viewer ? (id) => recordViewAs(viewer, { event: 'conversation', conversation: id, chars: text.length }) : undefined,
+      sessionId = await paseoHub.createOnce(idempotencyKey, () =>
+        paseoHub.createConversation(
+          text,
+          clientMessageId,
+          { images: agent.images ?? firstContext.images, attachments: agent.attachments ?? firstContext.attachments },
+          // view as: recorded in the operator page's History before the first message goes
+          viewer ? (id) => recordViewAs(viewer, { event: 'conversation', conversation: id, chars: text.length }) : undefined,
+          message[NOT_AFTER_FIELD],
+        ),
       );
     } catch (error) {
+      if (error instanceof NotAfterError) {
+        this.reply('rpc_error', { requestId, requestType: 'workspace.create.request', error: error.message, code: NOT_AFTER_CODE });
+        return;
+      }
       if (!viewer) throw error;
       console.error('[paseo] view-as conversation not recorded', error);
       this.reply('workspace.create.response', { requestId, workspace: null, setupTerminalId: null, error: VIEW_AS_NOT_RECORDED });
       return;
     }
-    this.creations.set(idempotencyKey, sessionId);
     const row = await paseoHub.getSession(sessionId);
     if (!row) {
       this.reply('workspace.create.response', { requestId, workspace: null, setupTerminalId: null, error: 'Could not start the conversation' });

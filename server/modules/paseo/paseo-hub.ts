@@ -8,6 +8,7 @@
  *   - it tells the Paseo connections (paseo-connection.ts) what changed: timeline rows, run status, list changes.
  * Nothing here stores state of its own: the session rows, transcripts and runs stay CloudCLI's.
  */
+import { NotAfterError, pastNotAfter } from './not-after.js';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 
@@ -157,6 +158,9 @@ class HubChatSocket extends EventEmitter {
   }
 }
 
+/** How long a create's idempotency key is remembered (longer than any client retry). */
+const CREATION_KEY_TTL_MS = 10 * 60_000;
+
 class PaseoHub extends EventEmitter {
   private socket: HubChatSocket | null = null;
   private timelines = new Map<string, SessionTimeline>();
@@ -250,6 +254,26 @@ class PaseoHub extends EventEmitter {
     return turnId;
   }
 
+  /**
+   * Creates by idempotency key, across every socket of the person (one hub per person): a create retried on another
+   * socket (pigeon's legacy upstream reopened, a tab reconnected), also while the first is still running, gets the
+   * conversation the first one made. A failed create is forgotten (the retry makes it). Kept for CREATION_KEY_TTL_MS.
+   */
+  private readonly creations = new Map<string, { made: Promise<string>; at: number }>();
+
+  createOnce(key: string, make: () => Promise<string>): Promise<string> {
+    const now = Date.now();
+    for (const [k, v] of this.creations) if (now - v.at > CREATION_KEY_TTL_MS) this.creations.delete(k);
+    const known = this.creations.get(key);
+    if (known) return known.made;
+    const made = make();
+    this.creations.set(key, { made, at: now });
+    made.catch(() => {
+      if (this.creations.get(key)?.made === made) this.creations.delete(key);
+    });
+    return made;
+  }
+
   /** The conversation's timeline, read from history the first time. */
   async timeline(sessionId: string): Promise<SessionTimeline> {
     const ready = this.timelines.get(sessionId);
@@ -297,7 +321,10 @@ class PaseoHub extends EventEmitter {
     clientMessageId: string,
     attachments: PaseoAttachments = {},
     beforeSend?: (sessionId: string) => Promise<void>,
+    notAfter?: unknown,
   ): Promise<string> {
+    // switch window: nothing is made for a create that arrived after its bound
+    if (pastNotAfter(notAfter)) throw new NotAfterError();
     const created = await sessionsService.createAppSession('claude', this.workspacePath, text);
     if (beforeSend) {
       try {
@@ -310,14 +337,22 @@ class PaseoHub extends EventEmitter {
       }
     }
     this.timelines.set(created.sessionId, new SessionTimeline((value) => sentPathToWorkspaceRelative(value)));
-    await this.send(created.sessionId, text, clientMessageId, attachments);
+    await this.send(created.sessionId, text, clientMessageId, attachments, notAfter);
     return created.sessionId;
   }
 
   /** Sends a message: the user row goes on the timeline at once, then CloudCLI runs the turn. */
-  async send(sessionId: string, text: string, clientMessageId: string, sent: PaseoAttachments = {}): Promise<void> {
+  async send(
+    sessionId: string,
+    text: string,
+    clientMessageId: string,
+    sent: PaseoAttachments = {},
+    notAfter?: unknown,
+  ): Promise<void> {
     const attachments = await toCloudCliAttachments(sent);
     const timeline = await this.timeline(sessionId);
+    // switch window: the commit point (the user row) is here, after the awaits above
+    if (pastNotAfter(notAfter)) throw new NotAfterError();
     const turnId = randomUUID();
     this.turnIds.set(sessionId, turnId);
     const rows = timeline.apply(
@@ -557,6 +592,7 @@ class PaseoHub extends EventEmitter {
     this.preparing.clear();
     this.questions.clear();
     this.answers.clear();
+    this.creations.clear();
     this.removeAllListeners();
   }
 }

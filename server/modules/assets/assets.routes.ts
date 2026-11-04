@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import { NOT_AFTER_CODE, NOT_AFTER_HEADER, pastNotAfter } from '@/modules/paseo/not-after.js';
 import express from 'express';
 import multer from 'multer';
 
@@ -85,6 +87,11 @@ router.post('/files', (req, res) => {
     const files = Array.isArray(req.files) ? req.files : [];
     if (files.length === 0) {
       return res.status(400).json({ error: 'No files provided' });
+    }
+    // switch window: a copy pigeon gave up on (it arrived after its bound) is not kept (paseo/not-after.ts)
+    if (pastNotAfter(req.headers[NOT_AFTER_HEADER])) {
+      for (const f of files) fs.promises.unlink(f.path).catch(() => {});
+      return res.status(409).json({ error: 'the upload arrived after its bound', code: NOT_AFTER_CODE });
     }
 
     res.json({ attachments: buildStoredAttachmentRecords(files) });
