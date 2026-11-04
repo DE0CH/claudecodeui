@@ -340,8 +340,11 @@ const personas = {
     const asked2 = await until(90000, async () => (await card.count()) > before);
     check("an ask made after the move is shown", asked2, `${await card.count()} question cards (${before} before)`);
     const stop2 = await until(30000, async () => ((await stopButton().count()) > 0 ? stopButton() : null));
-    if (stop2) await stop2.click();
-    check("and Stop ends that turn too", await until(60000, async () => (await stopButton().count()) === 0));
+    check("Stop offered for it", !!stop2);
+    if (stop2) {
+      await stop2.click();
+      check("and Stop ends that turn too", await until(60000, async () => (await stopButton().count()) === 0));
+    }
   },
 
   async "view-as"() {
