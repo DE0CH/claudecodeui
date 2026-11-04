@@ -167,9 +167,11 @@ async function move(c0, persons = [person]) {
   check("reconnected", (await connects()) > c0, `connects ${c0} -> ${await connects()}${why}`);
 }
 
-/** After a move: no second reconnect within 10 s. */
+/** After a move: no second reconnect within the app's longest reconnect delay (the client's backoff is 1.5 s doubling
+ * per attempt up to 30 s, DEFAULT_RECONNECT_MAX_DELAY_MS, and its attempt count need not have reset: a socket cut
+ * 1.5 s after the move's reconnect came back 12 s later on the box, after a 10 s window had already counted one). */
 async function oneReconnect(c0) {
-  await wait(10000);
+  await until(32000, async () => (await connects()) - c0 > 1, 500);
   const n = (await connects()) - c0;
   check("one reconnect per move", n === 1, `${n} reconnects`);
 }
