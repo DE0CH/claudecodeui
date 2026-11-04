@@ -6,6 +6,9 @@
 //          exactly once, the draft is still in the composer, and sent afterwards it is accepted once (one user row
 //          in the old child's history: it went through pigeon's legacy upstream to the conversation's owner)
 //
+// With --control (the box's) a clean run goes on: the gate, the release while the tab shows the conversation (no
+// reconnect, the composer kept), and the next send is a native turn in magpie with nothing written to the old child.
+//
 // The checker is proved by the seeded defects (--defect): `lost-draft` (the persona build empties the composer at
 // each reconnect) and `second-reconnect` (the edge drops each tab's first connection after the flip once more); with
 // either the run must fail on that check, which run.sh asserts.
@@ -24,6 +27,8 @@ const o = {
   defect: arg("defect", ""), out: arg("out", ""), luToken: arg("lu-token"),
   // every old ui pod's own address: the runner stand-in calls move on each (else --old-ui only)
   oldPods: (arg("old-pods", "") || arg("old-ui")).split(",").filter(Boolean),
+  // the box's control (gate, owner, native-turns): with it, a clean run goes on to the gate and the release
+  control: arg("control", ""),
 };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -45,6 +50,11 @@ async function oldUserRows(tok) {
   const r = await fetch(`${o.oldUi}/api/providers/sessions/${o.conversation}/messages`, { headers: { "cf-access-jwt-assertion": tok, "x-aviary-lu": o.luToken } });
   const v = await r.json().catch(() => ({}));
   return (v?.data?.messages || []).filter((m) => m.role === "user").map((m) => String(m.content || ""));
+}
+
+async function ctl(name, conversation) {
+  const r = await fetch(`${o.control}/${name}${conversation ? `?conversation=${conversation}` : ""}`, { method: "POST" });
+  return { ok: r.ok, text: (await r.text()).trim() };
 }
 
 const checks = [];
@@ -109,6 +119,36 @@ try {
   await wait(3000);
   rows = (await oldUserRows(tok)).filter((t) => t.includes(draft));
   check("sent once after the move", rows.length === 1, `${rows.length} user rows with the draft`);
+  if (o.control && !o.defect) {
+    // the gate, then the release while this tab shows the conversation: no reconnect, the composer untouched by the
+    // replacement, and the next send is a native turn (magpie's), never the old child's
+    const draft2 = `persona after release ${randomUUID()}`;
+    await box.fill(draft2);
+    const c1 = await connects();
+    const g = await ctl("gate");
+    check("gate set", g.ok, g.text.slice(-300));
+    let owner = "";
+    const relUntil = Date.now() + 240000;
+    while (Date.now() < relUntil && owner !== "owned") {
+      owner = (await ctl("owner", o.conversation)).text;
+      if (owner !== "owned") await wait(3000);
+    }
+    check("released while shown", owner === "owned", `owner ${owner}`);
+    await wait(5000);
+    check("no reconnect at the release", (await connects()) === c1, `connects ${c1} -> ${await connects()}`);
+    const kept2 = await box.inputValue().catch(() => "");
+    check("draft kept across the release", kept2 === draft2, `composer holds ${JSON.stringify(kept2.slice(0, 60))}`);
+    await box.press("Enter");
+    let native = 0;
+    const natUntil = Date.now() + 90000;
+    while (Date.now() < natUntil && native < 1) {
+      native = Number((await ctl("native-turns", o.conversation)).text) || 0;
+      if (native < 1) await wait(2000);
+    }
+    check("the next send is native", native >= 1, `${native} person turns in magpie`);
+    const old2 = (await oldUserRows(tok)).filter((t) => t.includes(draft2));
+    check("nothing written to the old child after the release", old2.length === 0, `${old2.length} old rows`);
+  }
 } catch (e) {
   check("ran to the end", false, String(e?.message || e).slice(0, 300));
 } finally {
