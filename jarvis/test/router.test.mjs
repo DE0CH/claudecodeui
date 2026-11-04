@@ -1587,11 +1587,15 @@ test("switch window: per-frame latency through the router added by the module is
   const added = [];
   for (let i = 0; i < steps.length; i++) {
     if (!t.on[i].length) continue;
-    added.push({ step: i, bytes: steps[i].buf.length, on: median(t.on[i]), off: median(t.off[i]), added: median(t.on[i]) - median(t.off[i]) });
+    // the best of the 40 round trips per step and side: the module's work is in every one of them, while a shared
+    // runner's scheduling noise (another job's CPU, a GC pause) only ever adds time, so the minima keep a constant
+    // cost of the module and drop the noise that made the medians differ by more than 1 ms between identical sides
+    const best = (a) => Math.min(...a);
+    added.push({ step: i, bytes: steps[i].buf.length, on: best(t.on[i]), off: best(t.off[i]), added: best(t.on[i]) - best(t.off[i]), medianAdded: median(t.on[i]) - median(t.off[i]) });
   }
   const all = { on: t.on.flat(), off: t.off.flat() };
   log("info", "router latency per step, module on vs off (ms)", {
-    steps: added.map((a) => ({ ...a, on: +a.on.toFixed(3), off: +a.off.toFixed(3), added: +a.added.toFixed(3) })),
+    steps: added.map((a) => ({ ...a, on: +a.on.toFixed(3), off: +a.off.toFixed(3), added: +a.added.toFixed(3), medianAdded: +a.medianAdded.toFixed(3) })),
     samples: all.on.length,
     p50: { on: +pct(all.on, 0.5).toFixed(3), off: +pct(all.off, 0.5).toFixed(3) }, p99: { on: +pct(all.on, 0.99).toFixed(3), off: +pct(all.off, 0.99).toFixed(3) },
   });
@@ -1600,7 +1604,8 @@ test("switch window: per-frame latency through the router added by the module is
   // run), so the time spent in them is what it adds to whatever the loop forwards next. Their p99 per chunk (a
   // chunk holds one frame or more, so per frame it is no more) over the module-on runs is under 1 ms. The end-to-end
   // round trips cannot show a p99 that small: their own p99 moves by more than 1 ms between identical runs (the
-  // 1.1 MB timeline response), so the per-step medians are checked against 1 ms too and the raw p99s are logged.
+  // 1.1 MB timeline response), so each step's best round trip with the module is checked against its best without
+  // it (within 1 ms), and the medians and raw p99s are logged.
   const ms = timings.map((x) => x.ms);
   const pt = (q) => pct(ms, q);
   log("info", "module time per chunk (ms)", { chunks: ms.length, p50: +pt(0.5).toFixed(4), p99: +pt(0.99).toFixed(4), max: +pt(1).toFixed(4),
@@ -1608,5 +1613,5 @@ test("switch window: per-frame latency through the router added by the module is
   assert.ok(timings.length >= 40 * 8, `${timings.length} chunks`);
   assert.ok(pt(0.99) < 1, `the module's p99 per chunk is ${pt(0.99).toFixed(3)} ms`);
   assert.ok(added.length >= 6);
-  for (const a of added) assert.ok(a.added < 1, `step ${a.step} (${a.bytes} bytes) adds ${a.added.toFixed(3)} ms`);
+  for (const a of added) assert.ok(a.added < 1, `step ${a.step} (${a.bytes} bytes) adds ${a.added.toFixed(3)} ms (best of ${reps} on vs off; medians differ by ${a.medianAdded.toFixed(3)} ms)`);
 });
