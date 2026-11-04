@@ -66,13 +66,17 @@ async function until(pred, ms, what) {
 
 /**
  * A TCP proxy with network delay: each connection gets a one-way latency in [minMs, maxMs] plus up to jitterMs per
- * chunk, in both directions, bytes and FIN/close kept in order. `cutAll()` destroys every connection at once (the
+ * chunk, in both directions, bytes and FIN/close kept in order; with several targets each connection goes to one at
+ * random (the old ui Service in front of its pods). `cutAll()` destroys every connection at once (the
  * self-check's mover that is not request-aware).
  */
-async function delayProxy(targetPort, rand, { minMs = 5, maxMs = 90, jitterMs = 25 } = {}) {
+async function delayProxy(targets, rand, { minMs = 5, maxMs = 90, jitterMs = 25 } = {}) {
   const pairs = new Set();
+  const list = Array.isArray(targets) ? targets : [{ host: "127.0.0.1", port: targets }];
   const server = net.createServer((c) => {
-    const u = net.connect(targetPort, "127.0.0.1");
+    // a Service in front of several pods: each connection to one of them at random
+    const t = list[Math.floor(rand() * list.length)];
+    const u = net.connect(t.port, t.host);
     const pair = { c, u };
     pairs.add(pair);
     c.setNoDelay(true);
@@ -281,9 +285,9 @@ class Tab {
 }
 
 /** What the old children saw: each request's fuzzId, from each person's $HOME/paseo-seen (fake-cloudcli.mjs). */
-function oldSeen(r) {
+function oldSeen(rs) {
   const out = [];
-  for (const p of PERSONS) {
+  for (const r of rs) for (const p of PERSONS) {
     let text = "";
     try { text = readFileSync(path.join(r.homeRoot, userKey(p), "paseo-seen"), "utf8"); } catch { continue; }
     for (const line of text.split("\n")) {
@@ -295,7 +299,7 @@ function oldSeen(r) {
   return out;
 }
 
-function makeRouter(passOnPort) {
+function makeRouter(passOnPort, extra = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "move-fuzz-"));
   return new Router({
     config: { access: { teamDomain: TEAM, audience: AUD }, users: PERSONS },
@@ -303,12 +307,14 @@ function makeRouter(passOnPort) {
     port: 0, host: "127.0.0.1", killAfterMs: 2000, sweepMs: 3600_000, distDir: null,
     switchToken: SW, luToken: "lu-fuzz-token", passOnUrl: `http://127.0.0.1:${passOnPort}`,
     switchQuietMs: 300, switchMoveMs: 1000, switchTailMs: 600, switchTickMs: 20,
+    ...extra,
   });
 }
 
-function call(port, p, { method = "POST", headers = {}, body } = {}) {
+function call(to, p, { method = "POST", headers = {}, body } = {}) {
+  const { host, port } = typeof to === "number" ? { host: "127.0.0.1", port: to } : to;
   return new Promise((resolve, reject) => {
-    const q = http.request({ host: "127.0.0.1", port, path: p, method, headers }, (res) => {
+    const q = http.request({ host, port, path: p, method, headers }, (res) => {
       let b = "";
       res.setEncoding("utf8");
       res.on("data", (c) => (b += c));
@@ -324,14 +330,26 @@ function call(port, p, { method = "POST", headers = {}, body } = {}) {
  * One round. `naive`: no move; the proxy cuts every old connection at T0 instead (the self-check). Returns the
  * checker's findings and the numbers.
  */
-async function round(seed, { naive = false } = {}) {
+async function round(seed, { naive = false, replicas = 1 } = {}) {
   const rand = rng(seed);
   const pigeon = await pigeonStandIn();
-  const r = makeRouter(pigeon.port);
-  await r.listen();
+  let rs;
+  if (replicas === 1) {
+    rs = [makeRouter(pigeon.port)];
+    await rs[0].listen();
+  } else {
+    // two ui pods as in jarvis (127.0.0.1 and .2 on one port, peers by the rendezvous hash): a tab landing on the pod
+    // that does not hold the person's process is passed on to the one that does (a hop); move is called on both
+    const port = await new Promise((res) => { const x = net.createServer().listen(0, "127.0.0.1", () => { const q = x.address().port; x.close(() => res(q)); }); });
+    const ips = Array.from({ length: replicas }, (_, i) => `127.0.0.${i + 1}`);
+    rs = ips.map((ip) => makeRouter(pigeon.port, { host: ip, port, peers: "ui-peers", selfIp: ip, ccToken: "peer-fuzz-token", resolve: async () => ips }));
+    for (const r of rs) await r.listen();
+    for (const r of rs) await r.refreshPeers();
+  }
+  const pods = rs.map((r) => ({ host: r.host ?? "127.0.0.1", port: r.port }));
   const f = {
     rand, seq: 0, actions: [], stopping: false, flipped: false,
-    oldProxy: await delayProxy(r.port, rand),
+    oldProxy: await delayProxy(pods, rand),
     newProxy: await delayProxy(pigeon.port, rand),
     // the edge stand-in: the old tunnel until T0; then pigeon, except a stale location (30 %) that still routes to
     // the old tunnel
@@ -344,6 +362,10 @@ async function round(seed, { naive = false } = {}) {
   await until(() => tabs.every((t) => t.connected), 20_000, "every tab connected (the children start)");
 
   const swHeaders = { authorization: `Bearer ${SW}` };
+  // with two pods, some tabs must have landed on the pod that does not hold their person's process
+  const passedOn = (await Promise.all(pods.map((pod) => call(pod, "/__jarvis/sockets", { method: "GET", headers: swHeaders }))))
+    .reduce((n, x) => n + x.json.totals.hopSockets, 0);
+  if (replicas > 1) assert.ok(passedOn > 0 && passedOn < tabs.length, `some tabs passed on between the pods (${passedOn})`);
   const T0 = Date.now() + 1200;
   // actions at random instants in [T0 - 1 s, T0 + 2.5 s]: exponential gaps, mean 120 ms per tab
   const timers = [];
@@ -374,11 +396,11 @@ async function round(seed, { naive = false } = {}) {
   let moving = null;
   if (naive) f.oldProxy.cutAll();
   else {
-    assert.equal((await call(r.port, "/__jarvis/move", { headers: swHeaders })).status, 200, "arm");
+    for (const pod of pods) assert.equal((await call(pod, "/__jarvis/move", { headers: swHeaders })).status, 200, "arm");
     let go = true;
     moving = (async () => {
       while (go) {
-        await Promise.all(PERSONS.map((p) => call(r.port, `/__jarvis/move?person=${encodeURIComponent(p)}`, { headers: swHeaders })));
+        await Promise.all(pods.flatMap((pod) => PERSONS.map((p) => call(pod, `/__jarvis/move?person=${encodeURIComponent(p)}`, { headers: swHeaders }))));
         await wait(200);
       }
     })();
@@ -386,7 +408,7 @@ async function round(seed, { naive = false } = {}) {
   }
   await wait(2700); // past the last action
   if (moving) {
-    await until(async () => (await call(r.port, "/__jarvis/sockets", { method: "GET", headers: swHeaders })).json.totals.sockets === 0, 20_000, "every old socket moved");
+    await until(async () => (await Promise.all(pods.map((pod) => call(pod, "/__jarvis/sockets", { method: "GET", headers: swHeaders })))).every((x) => x.json.totals.sockets === 0 && x.json.totals.hopSockets === 0), 20_000, "every old socket moved");
     moving.stop();
     await moving;
   }
@@ -397,13 +419,17 @@ async function round(seed, { naive = false } = {}) {
     throw new Error(`${e.message}: ${left.map((t) => `${t.id} connected=${t.connected} side=${t.side} opens=${t.opens} refused=${t.refused} composer=${t.composer.length} pending=${t.pending.size}`).join("; ")}`);
   }
   await wait(300); // late frames (none expected)
-  const rep = (await call(r.port, "/__jarvis/sockets", { method: "GET", headers: swHeaders })).json;
+  const reps = (await Promise.all(pods.map((pod) => call(pod, "/__jarvis/sockets", { method: "GET", headers: swHeaders })))).map((x) => x.json);
+  // the counters added up across the pods (each counts its own first-hop sockets)
+  const counters = {};
+  for (const rep of reps) for (const [k, v] of Object.entries(rep.counters)) counters[k] = (counters[k] || 0) + v;
+  const hops = reps.reduce((n, rep) => n + rep.counters.hopOpaqueSocketsTotal, 0);
   const ups = await Promise.all(uploads);
 
   // ------------------------------------------------ the checker ------------------------------------------------
   const findings = [];
   const old = new Map(), neu = new Map();
-  for (const id of oldSeen(r)) old.set(id, (old.get(id) || 0) + 1);
+  for (const id of oldSeen(rs)) old.set(id, (old.get(id) || 0) + 1);
   for (const id of pigeon.seen) neu.set(id, (neu.get(id) || 0) + 1);
   for (const a of f.actions) {
     const n = (old.get(a.fuzzId) || 0) + (neu.get(a.fuzzId) || 0);
@@ -418,11 +444,10 @@ async function round(seed, { naive = false } = {}) {
     const answeredOld = a.accepted.some((x) => x.requestId === w.requestId);
     if (!answeredOld && !seenOld.has(w.fuzzId)) afterClose++;
   }
-  const counters = rep.counters;
   if (!naive && afterClose !== counters.inflightClosesTotal) findings.push(`after-close frames ${afterClose} != inflightClosesTotal ${counters.inflightClosesTotal}`);
   if (!naive) {
     for (const t of tabs) if (t.opens !== 2) findings.push(`tab ${t.id}: ${t.opens - 1} reconnects (expected exactly 1)`);
-    if (counters.opaqueSocketsTotal) findings.push(`opaque sockets: ${counters.opaqueSocketsTotal}`);
+    if (counters.opaqueSocketsTotal || hops) findings.push(`opaque sockets: ${counters.opaqueSocketsTotal} first hop, ${hops} passed on`);
     const timedOut = tabs.reduce((n, t) => n + t.timedOut, 0);
     if (timedOut) findings.push(`${timedOut} upgrades had no answer within the connect timeout`);
     if (counters.refusedUpgradesTotal !== tabs.reduce((n, t) => n + t.refused, 0)) findings.push(`refused upgrades ${counters.refusedUpgradesTotal} != the tabs' ${tabs.reduce((n, t) => n + t.refused, 0)}`);
@@ -433,7 +458,7 @@ async function round(seed, { naive = false } = {}) {
     }
   }
   const stats = {
-    seed, actions: f.actions.length, afterClose, moved: counters.movedTotal, inflightCloses: counters.inflightClosesTotal,
+    seed, replicas, passedOn, actions: f.actions.length, afterClose, moved: counters.movedTotal, inflightCloses: counters.inflightClosesTotal,
     resent: f.actions.filter((a) => a.writes.length > 1).length, staleEdgeRefusals: tabs.reduce((n, t) => n + t.refused, 0),
     uploadsPassedOn: counters.passedOnTotal,
   };
@@ -443,7 +468,7 @@ async function round(seed, { naive = false } = {}) {
   for (const t of tabs) t.stop();
   f.oldProxy.close();
   f.newProxy.close();
-  await r.drain();
+  for (const r of rs) await r.drain();
   pigeon.close();
   return { findings, stats };
 }
@@ -463,6 +488,18 @@ test(`move fuzz: sends, steers and Stops around a move with network delay are ea
     resent += stats.resent;
   }
   console.log(`move fuzz: ${total} actions, ${resent} sent again after a move, ${afterClose} read after a close decision`);
+  assert.ok(total >= ROUNDS * 250, "enough actions per round");
+});
+
+test(`move fuzz, two ui pods (sockets passed on between them, move called on both; seed ${SEED0 ^ 0x2545f491}, ${ROUNDS} rounds)`, { timeout: 600_000 }, async () => {
+  let total = 0;
+  for (let i = 0; i < ROUNDS; i++) {
+    const seed = ((SEED0 ^ 0x2545f491) + i * 7919) >>> 0;
+    const { findings, stats } = await round(seed, { replicas: 2 });
+    console.log("move fuzz round", JSON.stringify(stats));
+    assert.deepEqual(findings, [], `seed ${seed} (replay: FUZZ_SEED=${(seed ^ 0x2545f491) >>> 0} FUZZ_ROUNDS=1)`);
+    total += stats.actions;
+  }
   assert.ok(total >= ROUNDS * 250, "enough actions per round");
 });
 
