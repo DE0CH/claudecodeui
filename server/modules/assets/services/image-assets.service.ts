@@ -50,6 +50,19 @@ export async function ensureImageAssetsDir(): Promise<string> {
 }
 
 /**
+ * An upload's file name as the person named it. Browsers send a multipart file name as UTF-8 bytes, and multer 2
+ * (busboy's default) reads them as Latin-1, so 「Forum【Form】.xlsx」 arrived as "Forumã\x80\x90Formã\x80\x91.xlsx" and was
+ * saved, shown on the message and named to Claude that way (2026-11-03, YYC staff uploads). A name made only of Latin-1
+ * code points whose bytes are valid UTF-8 is read again as UTF-8; anything else (plain ASCII, a name busboy already
+ * decoded from `filename*`) is kept as it is.
+ */
+export function utf8FileName(name: string): string {
+  if (!name || /[^\x00-\xff]/.test(name) || !/[\x80-\xff]/.test(name)) return name;
+  const decoded = Buffer.from(name, 'latin1').toString('utf8');
+  return decoded.includes('\uFFFD') ? name : decoded;
+}
+
+/**
  * Maps multer-stored upload files to the attachment records returned to the
  * chat composer. The absolute path is what providers receive and what session
  * history carries back to the UI.
@@ -57,7 +70,7 @@ export async function ensureImageAssetsDir(): Promise<string> {
 export function buildStoredImageRecords(files: UploadedImageFile[]): StoredImageAsset[] {
   const assetsDir = getGlobalImageAssetsDir();
   return files.map((file) => ({
-    name: file.originalname,
+    name: utf8FileName(file.originalname),
     path: toPosixPath(path.join(assetsDir, file.filename)),
     size: file.size,
     mimeType: file.mimetype,

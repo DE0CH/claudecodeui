@@ -9,6 +9,7 @@ import {
   isAllowedImageMimeType,
   resolveAttachmentAssetFile,
   resolveImageAssetFile,
+  utf8FileName,
 } from '@/modules/assets/services/image-assets.service.js';
 
 const ASSETS_DIR = path.join(os.homedir(), '.cloudcli', 'assets');
@@ -71,4 +72,16 @@ test('resolveAttachmentAssetFile uses the same direct-child boundary', () => {
     path.join(path.resolve(ASSETS_DIR), '123-notes.txt'),
   );
   assert.equal(resolveAttachmentAssetFile('../notes.txt'), null);
+});
+
+test('utf8FileName reads a UTF-8 file name multer took as Latin-1 again, and keeps every other name', () => {
+  const name = 'Surgical Futures Forum【Registration Form】- Master 預約.xlsx';
+  const asMulterGotIt = Buffer.from(name, 'utf8').toString('latin1');
+  assert.notEqual(asMulterGotIt, name);
+  assert.equal(utf8FileName(asMulterGotIt), name);
+  assert.equal(buildStoredAttachmentRecords([{ originalname: asMulterGotIt, filename: 'x.xlsx', size: 1, mimetype: 'application/octet-stream' }])[0]?.name, name);
+  assert.equal(utf8FileName('report (final).pdf'), 'report (final).pdf');
+  assert.equal(utf8FileName(name), name, 'already decoded (filename*)');
+  assert.equal(utf8FileName('caf\u00e9.txt'), 'caf\u00e9.txt', 'Latin-1 bytes that are not UTF-8');
+  assert.equal(utf8FileName(''), '');
 });

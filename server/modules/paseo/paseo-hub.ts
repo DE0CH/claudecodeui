@@ -167,7 +167,11 @@ class PaseoHub extends EventEmitter {
   private loading = new Map<string, Promise<SessionTimeline>>();
   private lastSeq = new Map<string, number>();
   private turnIds = new Map<string, string>();
-  private pendingUserMessages = new Map<string, { text: string; clientMessageId: string }>();
+  /**
+   * The message each conversation's running turn was sent with: its user row, and the sizes of the files the app
+   * attached (by name), so Claude Code's echo of it can fill the row's files (paseo-timeline.ts fillUserFiles).
+   */
+  private pendingUserMessages = new Map<string, { text: string; clientMessageId: string; row?: PaseoTimelineRow; fileSizes?: Map<string, number> }>();
   /**
    * Conversations whose sandbox is being made. The app's "preparing" chip shows only while a message the person sent
    * is waiting on it: a turn nobody is waiting for (a scheduled turn, Claude Code's own follow-up after background
@@ -375,7 +379,14 @@ class PaseoHub extends EventEmitter {
     for (const row of rows) {
       if (row.item.type === 'user_message') row.item.clientMessageId = clientMessageId;
     }
-    this.pendingUserMessages.set(sessionId, { text, clientMessageId });
+    const fileSizes = new Map(
+      (sent.attachments ?? [])
+        .filter((attachment) => typeof attachment.fileName === 'string' && typeof attachment.size === 'number')
+        .map((attachment) => [attachment.fileName as string, attachment.size as number]),
+    );
+    this.pendingUserMessages.set(sessionId, {
+      text, clientMessageId, row: rows.find((row) => row.item.type === 'user_message'), fileSizes,
+    });
     // a sandbox already being made for a turn nobody watched: this message now waits on it
     this.announcePreparing(sessionId);
     this.emitEvent({ type: 'timeline', sessionId, rows, epoch: timeline.epoch, turnId });
@@ -504,10 +515,16 @@ class PaseoHub extends EventEmitter {
   private async appendLive(sessionId: string, message: NormalizedMessage): Promise<void> {
     const timeline = this.timelines.get(sessionId);
     if (!timeline) return; // nobody has opened it in Paseo yet: it is read from history when someone does
-    // The user's own message comes back from Claude Code's transcript too: it is already on the timeline.
+    // The user's own message comes back from Claude Code's transcript too: it is already on the timeline. The echo
+    // names the files' copies in /workspace/uploads, which the row made at send time could not (fillUserFiles).
     if (message.kind === 'text' && message.role === 'user') {
       const pending = this.pendingUserMessages.get(sessionId);
-      if (pending && (message.content ?? '').trim() === pending.text.trim()) return;
+      if (pending && (message.content ?? '').trim() === pending.text.trim()) {
+        if (pending.row && timeline.fillUserFiles(pending.row, message.files, pending.fileSizes)) {
+          this.emitEvent({ type: 'timeline', sessionId, rows: [pending.row], epoch: timeline.epoch, turnId: pending.row.turnId });
+        }
+        return;
+      }
     }
     const turnId = this.turnIdFor(sessionId);
     const rows = timeline.apply(message, turnId);

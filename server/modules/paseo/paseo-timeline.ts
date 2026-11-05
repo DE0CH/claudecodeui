@@ -257,6 +257,22 @@ export class SessionTimeline {
     return mapClaudeCompletedToolCall({ callId, name, input, output, ...(metadata ? { metadata } : {}) });
   }
 
+  /**
+   * The files of a sent message's row, from Claude Code's echo of that message (its `<files_input>`, parsed). The row
+   * made at send time cannot name them: the app sends each upload's path in CloudCLI's assets folder, outside
+   * /workspace, and the copy in /workspace/uploads (which the file routes serve) is made only when the turn runs.
+   * `sizes` are the sizes the app sent, by file name (the echo has none). Returns whether the row changed.
+   */
+  fillUserFiles(row: PaseoTimelineRow, files: unknown, sizes: ReadonlyMap<string, number> = new Map()): boolean {
+    if (row.item.type !== 'user_message' || row.item.attachments?.length) return false;
+    const attachments = userFilesOf(files, this.toRelative).map((file) =>
+      file.size === 0 && sizes.has(file.fileName) ? { ...file, size: sizes.get(file.fileName)! } : file,
+    );
+    if (attachments.length === 0) return false;
+    row.item.attachments = attachments;
+    return true;
+  }
+
   private push(item: PaseoTimelineItem, timestamp: string, turnId?: string): PaseoTimelineRow {
     const seq = this.nextSeq++;
     const row: PaseoTimelineRow = {
