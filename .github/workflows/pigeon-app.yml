@@ -319,7 +319,8 @@ jobs:
       - name: build and push
         run: |
           tag=${GITHUB_SHA::12}
-          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+          # amd64 and arm64 (the new cluster's workers are ARM): the files are the same, only /cp is per platform
+          docker buildx build --platform linux/amd64,linux/arm64 --provenance=false --sbom=false \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -f scripts/pigeon-app/Dockerfile -t "$IMAGE:$tag" --push "$RUNNER_TEMP/pigeon-app"
@@ -362,6 +363,14 @@ jobs:
           done
           echo "::error::/cp did not copy the tree within $CP_MEMORY_MIB MiB"
           exit 1
+      - name: the arm64 image holds the same files, and its /cp is an arm64 binary
+        run: |
+          tag=${GITHUB_SHA::12}
+          mkdir -p "$RUNNER_TEMP/pushed-arm64"
+          crane export --platform linux/arm64 "$IMAGE:$tag" - | tar -x -C "$RUNNER_TEMP/pushed-arm64"
+          diff -r "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/pushed-arm64/app"
+          diff -r "$RUNNER_TEMP/pushed/meta" "$RUNNER_TEMP/pushed-arm64/meta"
+          file -L "$RUNNER_TEMP/pushed-arm64/cp" | tee /dev/stderr | grep -q 'ARM aarch64'
       # the next build's merge base. Also after a run of an older commit that waited behind a newer one: its image holds
       # everything the newer one kept, plus its own build
       - name: move :main
