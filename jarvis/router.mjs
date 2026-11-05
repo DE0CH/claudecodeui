@@ -1041,8 +1041,9 @@ export class Router {
     }
     if (url.startsWith(PEER_PATH)) return this.#peerHolds(req, res);
     if (url === SENT_FILES_PATH || url.startsWith(SENT_FILES_PATH + "?")) return this.#sentFilesSnapshot(req, res);
-    if (this.sw.handles(req, res)) return; // switch window: its endpoints, and the pass-on once armed
+    if (this.sw.handles(req, res)) return; // switch window: its endpoints, and the pass-on once armed for everyone
     const who = await this.#identify(req);
+    if (this.sw.passOnPerson(req, res, who)) return; // switch window: the pass-on once armed for this person
     this.sw.httpStarted(req, res, who); // switch window
     if (who.status === 401 && this.distDir && (req.method === "GET" || req.method === "HEAD")) {
       if (await this.#shell(req, res)) return;
@@ -1383,9 +1384,10 @@ export class Router {
 
   async #onUpgrade(req, socket, head) {
     socket.on("error", () => {});
-    if (this.sw.refuseUpgrade(req, socket)) return; // switch window: 503 before the 101 once armed
+    if (this.sw.refuseUpgrade(req, socket)) return; // switch window: 503 before the 101 once armed for everyone
     const who = await this.#identify(req);
     if (who.status !== 200) return rejectUpgrade(socket, who.status, "not allowed\n");
+    if (this.sw.refuseUpgrade(req, socket, who)) return; // switch window: 503 before the 101 once armed for this person
     // viewing as someone: only the Paseo socket, whose bridge records what is sent (top of this file)
     if (who.viewAs && (req.url || "").split("?")[0] !== "/paseo-ws") return rejectUpgrade(socket, 403, "read-only while viewing as someone else\n");
     const route = await this.#route(req, who.email);
@@ -1399,7 +1401,7 @@ export class Router {
     }
     const up = http.request({ path: req.url, ...target, method: req.method });
     up.on("upgrade", (ures, usock, uhead) => {
-      if (this.sw.refuseLate(req, socket, usock)) return; // switch window
+      if (this.sw.refuseLate(req, socket, usock, who)) return; // switch window
       let raw = `HTTP/1.1 101 Switching Protocols\r\n`;
       for (let i = 0; i < ures.rawHeaders.length; i += 2) raw += `${ures.rawHeaders[i]}: ${ures.rawHeaders[i + 1]}\r\n`;
       socket.write(raw + "\r\n");
@@ -1539,8 +1541,11 @@ export class Router {
 //   sockets another replica passed on (`hop`: id, path, opaque, outstanding, stale; whether it is LU is known only on
 //   the first hop), in-flight HTTP that is not LU; totals (`opaque` counts this replica's opaque first-hop sockets, LU
 //   ones included; hop sockets only in `hopSockets`/`hopOpaque`, so `opaque` adds up across replicas); `generatedAt`.
-// - POST /__jarvis/move[?person=<email>]: the first call arms the refusal of new non-LU upgrades (503 before the 101)
-//   and the pass-on of non-LU HTTP to JARVIS_UI_PASS_ON_URL, unchanged (409 and nothing armed while that is unset).
+// - POST /__jarvis/move[?person=<email>]: arms the refusal of new non-LU upgrades (503 before the 101) and the pass-on
+//   of non-LU HTTP to JARVIS_UI_PASS_ON_URL, unchanged (409 and nothing armed while that is unset). A bare `move` arms
+//   them for everyone (`armed`), checked before the request is identified; `move?person=` arms them for that person
+//   only (`armedPersons`, rehearsal R1 before the flip), checked once the request is identified as that person (the
+//   identified person: an admin's view-as request counts as the person viewed, as for the move's closes).
 //   RELAY_PATH stays here: it is router-served (no process) and no package of the design serves it on the new side
 //   (the page is newer than the design; a recorded gap: it must move before A6, when this router goes). With
 //   `person`, each of that person's non-LU, non-opaque first-hop sockets is closed at an instant when it has no
@@ -1548,7 +1553,7 @@ export class Router {
 //   at the close, and on every server frame and every SWITCH_TICK_MS while the call is fresh): both pipes stop, a close
 //   frame 1012 is sent, the socket is read for SWITCH_TAIL_MS more and a request frame read then is counted
 //   (`inflightCloses`) and not forwarded.
-// - POST /__jarvis/admit: undoes the arming (a rollback before the gate).
+// - POST /__jarvis/admit: undoes the arming, for everyone and every person (a rollback before the gate).
 // - POST /__jarvis/restart?person=<email>: stops the person's process here unless it is busy: HTTP in flight, a socket
 //   of theirs with a request outstanding (stale ones included) or opaque, or CloudCLI's GET /api/jarvis/switch/busy
 //   (jarvis-switch.routes.ts) lists anything: running (chats, tracked background work, CLI turns), a Claude Code
@@ -1907,7 +1912,8 @@ class SwitchWindow {
       if (t.error) log("error", `switch: JARVIS_UI_PASS_ON_URL is not usable (${t.error}): move answers 409 and nothing is armed`, { passOn: this.passOnUrl });
       else this.passOn = t;
     } else if (this.enabled) log("error", "switch: JARVIS_UI_PASS_ON_URL is not set: move answers 409 and nothing is armed");
-    this.armed = false;
+    this.armed = false;            // bare move: refusal and pass-on for everyone
+    this.armedPersons = new Set();  // move?person=: refusal and pass-on for these persons only
     this.recs = new Set();          // every upgraded socket's record (first hop or not)
     this.moveCalls = new Map();     // person -> when move?person= was last called
     this.http = new Map();          // person -> in-flight non-LU HTTP (first hop)
@@ -1947,7 +1953,18 @@ class SwitchWindow {
       });
       return true;
     }
-    if (!this.enabled || !this.armed || pathname.startsWith("/__jarvis") || pathname === RELAY_PATH || this.isHop(req) || this.isLu(req)) return false;
+    if (!this.enabled || !this.armed) return false;
+    return this.#passOnIf(req, res, pathname);
+  }
+
+  /** Once armed for the identified person: their non-LU HTTP goes to pigeon; true when the request was handled here. */
+  passOnPerson(req, res, who) {
+    if (!this.enabled || this.armed || who.status !== 200 || !this.armedPersons.has(who.email)) return false;
+    return this.#passOnIf(req, res, (req.url || "/").split("?")[0]);
+  }
+
+  #passOnIf(req, res, pathname) {
+    if (pathname.startsWith("/__jarvis") || pathname === RELAY_PATH || this.isHop(req) || this.isLu(req)) return false;
     try { this.#passOn(req, res); } catch (e) {
       log("error", "switch: pass-on failed", { error: String(e?.message || e).slice(0, 200) });
       if (!res.headersSent) { res.setHeader("retry-after", "1"); page(res, 502, "請重新整理", "請重新整理頁面。Reload the page."); } else res.destroy();
@@ -1970,9 +1987,12 @@ class SwitchWindow {
     });
   }
 
-  /** Once armed: a new non-LU first-hop upgrade is answered 503 before any 101. */
-  refuseUpgrade(req, socket) {
-    if (!this.enabled || !this.armed || this.isHop(req) || this.isLu(req)) return false;
+  /** Armed for everyone, or (`who` given: the request identified) for this person. */
+  armedFor(who) { return this.armed || (!!who && who.status === 200 && this.armedPersons.has(who.email)); }
+
+  /** Once armed for everyone (`who` absent) or for the identified person: a new non-LU first-hop upgrade gets 503 before any 101. */
+  refuseUpgrade(req, socket, who) {
+    if (!this.enabled || !this.armedFor(who) || this.isHop(req) || this.isLu(req)) return false;
     this.counters.refusedUpgradesTotal++;
     socket.on("error", () => {});
     rejectUpgrade(socket, 503, "moved, reconnect\n");
@@ -1980,8 +2000,8 @@ class SwitchWindow {
   }
 
   /** The upstream answered 101: refused anyway if the arming came meanwhile (nothing has reached the client yet). */
-  refuseLate(req, socket, usock) {
-    if (!this.refuseUpgrade(req, socket)) return false;
+  refuseLate(req, socket, usock, who) {
+    if (!this.refuseUpgrade(req, socket, who)) return false;
     usock.destroy();
     return true;
   }
@@ -2166,14 +2186,14 @@ class SwitchWindow {
     for (const [person, n] of this.http) { of(person).http = n; http += n; }
     for (const [person, n] of this.luHttp) of(person).luHttp = n;
     return {
-      generatedAt: iso(now), armed: this.armed, pod: this.r.selfIp || null, persons,
+      generatedAt: iso(now), armed: this.armed, armedPersons: [...this.armedPersons].sort(), pod: this.r.selfIp || null, persons,
       totals: { sockets, opaque, lu, luOpaque, http, passOnInFlight: this.passOnInFlight, hopSockets: hop, hopOpaque },
       counters: { ...this.counters },
     };
   }
 
   move(person) {
-    this.armed = true;
+    if (person) this.armedPersons.add(person); else this.armed = true;
     this.#ageAll();
     let closed = 0, waiting = 0, opaque = 0;
     if (person) {
@@ -2186,7 +2206,7 @@ class SwitchWindow {
       }
       if (!this.ticker) { this.ticker = setInterval(() => this.#tick(), this.tickMs); this.ticker.unref?.(); }
     }
-    return { armed: true, person: person || null, closed, waiting, opaque, generatedAt: new Date(this.r.now()).toISOString() };
+    return { armed: this.armed, armedPersons: [...this.armedPersons].sort(), person: person || null, closed, waiting, opaque, generatedAt: new Date(this.r.now()).toISOString() };
   }
 
   async restart(person) {
@@ -2237,16 +2257,18 @@ class SwitchWindow {
     if (pathname === "/__jarvis/move") {
       if (!this.passOnUrl) return answer(409, { error: "JARVIS_UI_PASS_ON_URL is not set: nothing armed" });
       if (!this.passOn) return answer(409, { error: `JARVIS_UI_PASS_ON_URL is not usable (${parsePassOnUrl(this.passOnUrl).error}): nothing armed` });
-      const first = !this.armed;
+      const first = person ? !this.armed && !this.armedPersons.has(person) : !this.armed;
       const out = this.move(person);
-      if (first) log("info", "switch: armed (new non-LU upgrades refused, non-LU HTTP passed on)", { passOn: this.passOnUrl });
+      if (first && person) log("info", "switch: armed for one person (their new non-LU upgrades refused, their non-LU HTTP passed on)", { user: userKey(person), passOn: this.passOnUrl });
+      else if (first) log("info", "switch: armed (new non-LU upgrades refused, non-LU HTTP passed on)", { passOn: this.passOnUrl });
       return answer(200, out);
     }
     if (pathname === "/__jarvis/admit") {
       this.armed = false;
+      this.armedPersons.clear();
       this.moveCalls.clear();
       log("info", "switch: admitted (arming undone)");
-      return answer(200, { armed: false });
+      return answer(200, { armed: false, armedPersons: [] });
     }
     if (!person) return answer(400, { error: "person is required" });
     try { return answer(200, await this.restart(person)); } catch (e) { return answer(500, { error: String(e.message || e) }); }

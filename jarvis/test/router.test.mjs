@@ -1185,6 +1185,66 @@ test("switch window: after the first move new non-LU upgrades get 503 before the
   }
 });
 
+test("switch window: move?person= arms only that person (their upgrades 503, their HTTP to pigeon), others are served; admit clears it; a bare move still arms everyone", async () => {
+  const got = [];
+  const pigeon = http.createServer((q, s) => { q.resume(); q.on("end", () => { got.push({ url: q.url, email: q.headers["cf-access-jwt-assertion"] }); s.writeHead(207); s.end("from pigeon"); }); });
+  await new Promise((x) => pigeon.listen(0, "127.0.0.1", x));
+  const r = swRouter({ passOnUrl: `http://127.0.0.1:${pigeon.address().port}` });
+  await r.listen();
+  try {
+    const bobBefore = await wsOpen(r, BOB);
+    const out = await move(r, ALICE);
+    assert.equal(out.armed, false, "a per-person move never arms everyone");
+    assert.deepEqual(out.armedPersons, [ALICE]);
+    let rep = await sockets(r);
+    assert.equal(rep.armed, false);
+    assert.deepEqual(rep.armedPersons, [ALICE]);
+    // alice: refused and passed on
+    const refused = await wsOpen(r, ALICE, { expect101: false });
+    assert.match(refused.head, /^HTTP\/1.1 503/);
+    await refused.done;
+    assert.equal((await get(r, "/api/a", auth(ALICE))).status, 207);
+    assert.equal(got.length, 1);
+    assert.equal(got[0].url, "/api/a");
+    // alice's LU socket and LU HTTP stay here
+    const lu = await wsOpen(r, ALICE, { headers: { "x-aviary-lu": LU } });
+    assert.match(lu.head, /^HTTP\/1.1 101/);
+    assert.equal((await get(r, "/api/x", { ...auth(ALICE), "x-aviary-lu": LU })).status, 200);
+    // bob and the signed-out: served here, nothing passed on
+    const bob = await wsOpen(r, BOB);
+    assert.match(bob.head, /^HTTP\/1.1 101/);
+    assert.ok(!bobBefore.closed);
+    assert.equal((await get(r, "/api/b", auth(BOB))).json.url, "/api/b");
+    assert.notEqual((await get(r, "/")).status, 207, "a signed-out request is not passed on by a per-person arming");
+    assert.equal(got.length, 1);
+    // a second person
+    assert.deepEqual((await move(r, CAROL)).armedPersons, [ALICE, CAROL].sort());
+    assert.equal((await get(r, "/api/c", auth(CAROL))).status, 207);
+    assert.equal((await get(r, "/api/b2", auth(BOB))).json.url, "/api/b2");
+    // admit clears every person
+    const ad = (await get(r, "/__jarvis/admit", swAuth, "POST")).json;
+    assert.deepEqual([ad.armed, ad.armedPersons], [false, []]);
+    rep = await sockets(r);
+    assert.deepEqual([rep.armed, rep.armedPersons], [false, []]);
+    const again = await wsOpen(r, ALICE);
+    assert.match(again.head, /^HTTP\/1.1 101/);
+    assert.equal((await get(r, "/api/a2", auth(ALICE))).json.url, "/api/a2");
+    assert.equal(got.length, 2);
+    // a bare move still arms everyone
+    assert.equal((await move(r)).armed, true);
+    for (const who of [ALICE, BOB]) {
+      const c = await wsOpen(r, who, { expect101: false });
+      assert.match(c.head, /^HTTP\/1.1 503/, who);
+      await c.done;
+    }
+    assert.equal((await get(r, "/api/b3", auth(BOB))).status, 207);
+    assert.equal((await sockets(r)).armed, true);
+    for (const c of [bobBefore, lu, bob, again]) c.s.destroy();
+  } finally {
+    pigeon.close();
+  }
+});
+
 test("switch window: the zero counters are in the report at 0 from the start (aviary testing/switch/zero-counters.txt, router lines)", async () => {
   const r = swRouter();
   await r.listen();
