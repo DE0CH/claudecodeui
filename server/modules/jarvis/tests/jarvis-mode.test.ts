@@ -14,7 +14,7 @@ import { releaseTestDatabase } from '@/modules/database/testing.js';
 import { ensureJarvisProject, ensureJarvisUser } from '@/modules/jarvis/jarvis-bootstrap.js';
 import { conversationFilesRoot, conversationSentDir, conversationWorkspaceDir, jarvisLocale, jarvisModel, jarvisProductName, jarvisSessionName, resetJarvisInstanceConfig } from '@/modules/jarvis/jarvis-config.js';
 import { onConversationDeleted, onConversationForked, recordJarvisFailedTurn, stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
-import { readableClaudeApiError, readableSandboxError, SandboxServiceError } from '@/modules/jarvis/jarvis-errors.js';
+import { readableClaudeApiError, readableSandboxError, SandboxServiceError, transcriptTooLongToOpen } from '@/modules/jarvis/jarvis-errors.js';
 import { createJarvisFilesRouter, listSentWorkspaceFiles, openSentFile, openWorkspaceFile } from '@/modules/jarvis/jarvis-files.routes.js';
 import { readSentFiles, sentPathToWorkspaceRelative } from '@/modules/jarvis/jarvis-sent-files.js';
 import { isUnavailableInJarvis, jarvisApiGuard } from '@/modules/jarvis/jarvis-guard.js';
@@ -600,6 +600,39 @@ test('Stop while the workspace is prepared cancels the turn: no Claude Code, no 
       assert.equal(await abortClaudeSDKSession(created.sessionId), false, 'nothing left to stop');
     } finally {
       sandboxDelayMs = 0;
+    }
+  });
+});
+
+test('a transcript too big for the heap is not read: the conversation shows one line saying so', async () => {
+  const MB = 1024 * 1024;
+  // 1 GB heap, 60 MB in use: about 190 MB of transcript fits, 200 MB does not
+  const heap = { heap_size_limit: 1024 * MB, used_heap_size: 60 * MB } as ReturnType<typeof import('node:v8').getHeapStatistics>;
+  assert.equal(transcriptTooLongToOpen(98.5 * MB, heap), false);
+  assert.equal(transcriptTooLongToOpen(200 * MB, heap), true);
+
+  await withJarvis(async ({ jfs }) => {
+    const savedLocale = process.env.JARVIS_LOCALE;
+    try {
+      const providerSessionId = randomUUID();
+      const file = path.join(jfs, `${providerSessionId}.jsonl`);
+      await mkdir(jfs, { recursive: true });
+      await writeFile(file, '{"type":"user"}\n');
+      const sessionId = await sessionsDb.createSession(providerSessionId, 'claude', '/workspace', undefined, undefined, undefined, file);
+      // this test process's own heap: a file bigger than all of it never fits
+      const { heap_size_limit } = (await import('node:v8')).getHeapStatistics();
+      const { truncate } = await import('node:fs/promises');
+      await truncate(file, Math.ceil(heap_size_limit / 4));
+      process.env.JARVIS_LOCALE = 'zh-HK';
+      const history = await sessionsService.fetchHistory(sessionId);
+      assert.equal(history.messages.length, 1);
+      assert.equal(history.messages[0]!.kind, 'error');
+      assert.match(String(history.messages[0]!.content), /^這個對話太長，暫時無法開啟。/);
+      process.env.JARVIS_LOCALE = 'en';
+      const en = await sessionsService.fetchHistory(sessionId);
+      assert.match(String(en.messages[0]!.content), /^This conversation is too long to open for now\./);
+    } finally {
+      if (savedLocale === undefined) delete process.env.JARVIS_LOCALE; else process.env.JARVIS_LOCALE = savedLocale;
     }
   });
 });

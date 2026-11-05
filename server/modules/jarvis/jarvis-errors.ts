@@ -6,6 +6,8 @@
  *
  * Language: jarvisLocale() (zh-* → Traditional Chinese, Hong Kong usage); English otherwise.
  */
+import v8 from 'node:v8';
+
 import { jarvisLocale } from '@/modules/jarvis/jarvis-config.js';
 
 type Key =
@@ -18,7 +20,8 @@ type Key =
   | 'modelUnavailable'
   | 'modelRefused'
   | 'modelAccess'
-  | 'modelConnection';
+  | 'modelConnection'
+  | 'tooLong';
 
 const MESSAGES: Record<'en' | 'zh', Record<Key, string>> = {
   en: {
@@ -32,6 +35,7 @@ const MESSAGES: Record<'en' | 'zh', Record<Key, string>> = {
     modelRefused: 'The AI model refused this request',
     modelAccess: 'The AI model service refused access. Please tell your administrator.',
     modelConnection: 'Could not reach the AI model. Please try again.',
+    tooLong: 'This conversation is too long to open for now. There is a known problem in the system: when a conversation gets very long, the server can\'t load it. We\'re fixing it and expect to finish within two weeks; after that this won\'t happen again. Until then, please start a new conversation to continue, or contact the admin to raise this conversation\'s limit temporarily.',
   },
   zh: {
     unreachable: '暫時連接不到這個對話的電腦，請稍後再試。',
@@ -44,12 +48,32 @@ const MESSAGES: Record<'en' | 'zh', Record<Key, string>> = {
     modelRefused: 'AI 模型拒絕了這個請求',
     modelAccess: 'AI 模型服務拒絕存取，請通知管理員。',
     modelConnection: '連接不到 AI 模型，請再試一次。',
+    tooLong: '這個對話太長，暫時無法開啟。系統目前有一個已知問題：對話內容太多時，伺服器無法把它載入。我們正在修復，預計兩星期內完成，之後便不會再出現這個情況。在此之前，請開始一個新對話繼續工作，或聯絡管理員，暫時提高這個對話的上限。',
   },
 };
 
 function t(key: Key): string {
   const locale = jarvisLocale().toLowerCase();
   return MESSAGES[locale.startsWith('zh') ? 'zh' : 'en'][key];
+}
+
+/**
+ * Opening a conversation reads its whole transcript into this process, parses it and serialises it again: the heap
+ * peaks near 4.6x the file (measured 2026-11-05 on transcripts of base64 page renders), so a file past the heap's room
+ * crashes the process (V8 "Reached heap limit") in a loop on every open, and the page spins forever (2026-11-02). 5x
+ * leaves a margin. Temporary until magpie serves conversations without loading them whole.
+ */
+export const TRANSCRIPT_HEAP_FACTOR = 5;
+
+/** Whether a transcript of `bytes` would not fit this process's heap (the room left under --max-old-space-size). */
+export function transcriptTooLongToOpen(bytes: number, heap = v8.getHeapStatistics()): boolean {
+  const room = heap.heap_size_limit - heap.used_heap_size;
+  return bytes * TRANSCRIPT_HEAP_FACTOR > room;
+}
+
+/** What to show instead of a conversation too long to open. */
+export function conversationTooLongMessage(): string {
+  return t('tooLong');
 }
 
 /** An error answer from Jarvis 3's /internal/cc/* (status 0: no answer at all). */
