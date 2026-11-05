@@ -320,6 +320,8 @@ jobs:
         run: |
           tag=${GITHUB_SHA::12}
           # amd64 and arm64 (the new cluster's workers are ARM): the files are the same, only /cp is per platform
+          # (a multi-platform build needs buildx's docker-container driver; the default docker driver refuses it)
+          docker buildx create --use --driver docker-container --name multi >/dev/null
           docker buildx build --platform linux/amd64,linux/arm64 --provenance=false --sbom=false \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
