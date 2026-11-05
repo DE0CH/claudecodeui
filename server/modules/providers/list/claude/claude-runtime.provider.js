@@ -70,6 +70,15 @@ const pendingSandboxWaits = new Map();
 const supersededInstances = new WeakSet();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
+// An interactive tool (AskUserQuestion, ExitPlanMode) nobody answers is closed after this long (Deyao, 2026-11-05):
+// waiting forever kept the turn, and so the sandbox, from ever going idle. The model is told why and may ask again.
+// The new stack's supervisor does the same (aviary crates/supervisor ASK_TIMEOUT).
+const INTERACTIVE_TOOL_TIMEOUT_MS = parseInt(process.env.CLAUDE_INTERACTIVE_TOOL_TIMEOUT_MS, 10) || 30 * 60 * 1000;
+
+export function askTimeoutMessage(timeoutMs = INTERACTIVE_TOOL_TIMEOUT_MS) {
+  const minutes = Math.round((timeoutMs / 60000) * 100) / 100;
+  return `User has not answered in ${minutes} minutes, the session has timed out, ask again if needed.`;
+}
 
 // How long background work is allowed to keep running after a turn ends. This drives
 // two halves of the same behaviour:
@@ -161,7 +170,7 @@ function waitForToolApproval(requestId, options = {}) {
       }
     };
 
-    // timeoutMs 0 = wait indefinitely (interactive tools)
+    // timeoutMs 0 = wait indefinitely
     if (timeoutMs > 0) {
       timeout = setTimeout(() => {
         onCancel?.('timeout');
@@ -1178,7 +1187,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       }));
 
       const decision = await waitForToolApproval(requestId, {
-        timeoutMs: requiresInteraction ? 0 : undefined,
+        timeoutMs: requiresInteraction ? INTERACTIVE_TOOL_TIMEOUT_MS : undefined,
         signal: context?.signal,
         metadata: {
           // Keyed by the app session id so `chat.subscribe` can look pending
@@ -1193,7 +1202,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         }
       });
       if (!decision) {
-        return { behavior: 'deny', message: 'Permission request timed out' };
+        return { behavior: 'deny', message: requiresInteraction ? askTimeoutMessage() : 'Permission request timed out' };
       }
 
       if (decision.cancelled) {
