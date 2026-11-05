@@ -7,23 +7,25 @@ import test from 'node:test';
 import type { NormalizedMessage, ProviderRuntimeContext } from '@/shared/types.js';
 
 /**
- * An AskUserQuestion nobody answers is closed after CLAUDE_INTERACTIVE_TOOL_TIMEOUT_MS (default 30 min): the model is
- * told so and may ask again, the client's prompt is withdrawn, and the turn can end, so the sandbox can go idle
- * (Deyao, 2026-11-05). The timeout is read when the module loads, so it is set before the import.
+ * The long safety limit on a question Claude Code is still waiting on live (a turn that could not let its sandbox go,
+ * or no sandbox of its own: DECISIONS 17, Deyao, 2026-11-05): past CLAUDE_INTERACTIVE_TOOL_TIMEOUT_MS (default 7 days)
+ * the model is told so in words naming the real duration and may ask again, and the client's prompt is withdrawn.
+ * A turn that waits only on its question parks instead (claude-ask-park.test.ts). The limit is read when the module
+ * loads, so it is set before the import.
  */
 process.env.CLAUDE_INTERACTIVE_TOOL_TIMEOUT_MS = '200';
 const { askTimeoutMessage, queryClaudeSDK } = await import('@/modules/providers/list/claude/claude-runtime.provider.js');
 const { ClaudeSessionsProvider } = await import('@/modules/providers/list/claude/claude-sessions.provider.js');
 const { CLAUDE_PREDEFINED_MODELS } = await import('@/modules/providers/list/claude/claude-models.provider.js');
 
-test('the default timeout answer names 30 minutes', () => {
+test('the default safety limit answer names 7 days', () => {
   assert.equal(
-    askTimeoutMessage(30 * 60 * 1000),
-    'User has not answered in 30 minutes, the session has timed out, ask again if needed.',
+    askTimeoutMessage(7 * 24 * 60 * 60 * 1000),
+    'User has not answered in 7 days, the session has timed out, ask again if needed.',
   );
 });
 
-test('an unanswered AskUserQuestion is denied with the timeout answer and its prompt withdrawn', async () => {
+test('an AskUserQuestion still unanswered at the safety limit is denied with its answer and its prompt withdrawn', async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'claude-ask-timeout-'));
   const sent: NormalizedMessage[] = [];
   const writer = { send: (message: NormalizedMessage) => { sent.push(message); }, userId: null };

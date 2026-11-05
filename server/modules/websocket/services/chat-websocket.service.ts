@@ -17,6 +17,7 @@ import type {
   AuthenticatedWebSocketRequest,
   LLMProvider,
   ProviderPermissionDecision,
+  ProviderPermissionOutcome,
   ProviderRuntimeWriter,
 } from '@/shared/types.js';
 import { parseIncomingJsonObject } from '@/shared/utils.js';
@@ -76,7 +77,7 @@ export type ProviderRuntimeGateway = {
   stopBackgroundTask(provider: LLMProvider, sessionId: string, taskId: string): Promise<boolean>;
   /** Whether a provider runtime still holds background work for the session after its turn ended. */
   hasBackgroundWork(sessionId: string): boolean;
-  resolveToolApproval(requestId: string, payload: ProviderPermissionDecision): void;
+  resolveToolApproval(requestId: string, payload: ProviderPermissionDecision): ProviderPermissionOutcome | void;
   getPendingApprovalsForSession(sessionId: string): unknown[];
 };
 
@@ -560,18 +561,36 @@ function handleChatSubscribe(
  * Handles `chat.permission-response`: forwards a tool-approval decision to the
  * pending approval resolver (Claude is the only provider with interactive
  * approvals today, but the message is intentionally provider-neutral).
+ *
+ * An answer to a parked question (its turn let the sandbox go, DECISIONS 17)
+ * starts the turn that resumes the conversation with it, on this socket, like
+ * a send: the runtime gives Claude Code the answer as that turn's message.
  */
-function handlePermissionResponse(data: AnyRecord, dependencies: ChatWebSocketDependencies): void {
+async function handlePermissionResponse(
+  ws: WebSocket,
+  userId: string | number | null,
+  data: AnyRecord,
+  dependencies: ChatWebSocketDependencies,
+): Promise<void> {
   if (typeof data.requestId !== 'string' || data.requestId.length === 0) {
     return;
   }
 
-  dependencies.runtime.resolveToolApproval(data.requestId, {
+  const outcome = dependencies.runtime.resolveToolApproval(data.requestId, {
     allow: Boolean(data.allow),
     updatedInput: data.updatedInput,
     message: typeof data.message === 'string' ? data.message : undefined,
     rememberEntry: data.rememberEntry,
   });
+  if (!outcome || !('resume' in outcome)) {
+    return;
+  }
+  const { sessionId, options } = outcome.resume;
+  const session = await sessionsDb.getSessionById(sessionId);
+  if (!session) {
+    return;
+  }
+  await dispatchRun(ws, userId, sessionId, session, { sessionId, content: '', options }, dependencies);
 }
 
 /**
@@ -691,7 +710,7 @@ export function handleChatConnection(
           handleChatSubscribe(ws, data, dependencies);
           return;
         case 'chat.permission-response':
-          handlePermissionResponse(data, dependencies);
+          await handlePermissionResponse(ws, userId, data, dependencies);
           return;
         default:
           sendProtocolError(ws, 'UNKNOWN_MESSAGE_TYPE', `Unknown message type "${messageType}".`);

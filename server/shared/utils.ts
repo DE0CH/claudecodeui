@@ -471,6 +471,8 @@ export function createCompleteMessage(opts: {
   actualSessionId?: string | null;
   exitCode?: number | null;
   aborted?: boolean;
+  /** The turn ended to wait for the person's answer to its open question (claude-runtime "park", DECISIONS 17). */
+  awaitingAnswer?: boolean;
 }): NormalizedMessage {
   const exitCode = typeof opts.exitCode === 'number' ? opts.exitCode : 1;
   const aborted = Boolean(opts.aborted);
@@ -483,6 +485,7 @@ export function createCompleteMessage(opts: {
     exitCode,
     success: exitCode === 0 && !aborted,
     aborted,
+    ...(opts.awaitingAnswer ? { awaitingAnswer: true } : {}),
   });
 }
 

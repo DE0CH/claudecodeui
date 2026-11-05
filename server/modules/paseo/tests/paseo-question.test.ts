@@ -7,6 +7,7 @@ import path from 'node:path';
 import { afterEach, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { openQuestions } from '../../jarvis/jarvis-open-questions.js';
 import { answersByQuestionText, paseoHub, type HubEvent } from '../paseo-hub.js';
 import { handlePaseoConnection } from '../paseo-connection.js';
 
@@ -160,5 +161,78 @@ describe('AskUserQuestion in the Paseo UI', () => {
     hub.onChatFrame({ kind: 'complete', sessionId: 's1', exitCode: 0 });
     assert.deepEqual(paseoHub.pendingQuestions('s1'), []);
     assert.ok(events.some((e) => e.type === 'question_resolved' && e.requestId === 'r4'));
+  });
+
+  // DECISIONS 17: a turn that let its sandbox go while it asks keeps its question on screen
+  const keep = (requestId: string, sessionId: string) => openQuestions.add({
+    requestId, sessionId, providerSessionId: null, toolName: 'AskUserQuestion', toolUseId: `toolu_${requestId}`,
+    input: INPUT, runOptions: {}, askedAt: new Date().toISOString(), answer: null,
+  });
+
+  it('a turn parked on its question ends, and the card stays', async () => {
+    start();
+    hub.onChatFrame({ kind: 'permission_request', sessionId: 's5', requestId: 'r5', toolName: 'AskUserQuestion', input: INPUT });
+    await keep('r5', 's5');
+    try {
+      hub.onChatFrame({ kind: 'complete', sessionId: 's5', exitCode: 0, awaitingAnswer: true });
+      assert.deepEqual(paseoHub.pendingQuestions('s5').map((q) => q.id), ['r5'], 'still waiting for the person');
+      assert.equal(events.some((e) => e.type === 'question_resolved'), false);
+      assert.ok(events.some((e) => e.type === 'turn' && e.phase === 'completed'), 'the turn itself is over');
+    } finally {
+      openQuestions.close('r5', 'superseded');
+    }
+  });
+
+  it("the last answer to a kept question shows its turn as started, like a sent message (the sandbox may be made)", async () => {
+    start();
+    // CloudCLI records the answer on this delivery (chat-websocket.service.ts handlePermissionResponse)
+    hub.socket = { deliver: (frame) => { delivered.push(frame); openQuestions.answer(String(frame.requestId), { allow: frame.allow === true, updatedInput: frame.updatedInput }); } };
+    const running = hub.isRunning;
+    hub.isRunning = () => false;
+    await keep('r8', 's8');
+    try {
+      assert.equal(paseoHub.answer('s8', 'r8', { behavior: 'allow', updatedInput: { ...INPUT, answers: { 語言: 'English' } } }), true);
+      assert.ok(events.some((e) => e.type === 'turn' && e.sessionId === 's8' && e.phase === 'started'));
+      assert.deepEqual(paseoHub.busyState().pending, ['s8'], 'a message pending for the switch, until its turn completes');
+      hub.onChatFrame({ kind: 'status', sessionId: 's8', jarvisSandbox: 'preparing' });
+      assert.ok(events.some((e) => e.type === 'preparing' && e.sessionId === 's8' && e.state === 'preparing'), 'the preparing chip');
+    } finally {
+      hub.isRunning = running;
+      openQuestions.close('r8', 'answered');
+    }
+  });
+
+  it('a kept question is shown and answerable after this process restarted, and withdrawn when it expires', async () => {
+    start();
+    await keep('r6', 's6');
+    await keep('r7', 's6');
+    try {
+      // no permission_request in this process's life: the question comes from the store
+      const ws = new FakeSocket();
+      handlePaseoConnection(ws as never, { headers: {} } as never, {} as never);
+      ws.client({ type: 'hello' });
+      ws.client({ type: 'session', message: { type: 'fetch_agent_request', requestId: 'q', agentId: 's6' } });
+      await flush();
+      const reply = ws.sent.find((f) => f.message?.type === 'fetch_agent_response');
+      expectValid(reply!);
+      assert.deepEqual(reply!.message.payload.agent.pendingPermissions.map((p: { id: string }) => p.id), ['r6', 'r7']);
+      ws.client({
+        type: 'session',
+        message: { type: 'agent_permission_response', agentId: 's6', requestId: 'r6', response: { behavior: 'allow', updatedInput: { ...INPUT, answers: { 語言: '中文' } } } },
+      });
+      await flush();
+      assert.deepEqual(delivered.at(-1), {
+        type: 'chat.permission-response', requestId: 'r6', allow: true, updatedInput: { ...INPUT, answers: { '報告要用哪種語言？': '中文' } },
+      });
+      openQuestions.close('r7', 'expired');
+      await flush();
+      assert.deepEqual(paseoHub.pendingQuestions('s6').map((q) => q.id), ['r6'], 'the expired one is withdrawn');
+      const gone = ws.sent.find((f) => f.message?.type === 'agent_permission_resolved' && f.message.payload.requestId === 'r7');
+      assert.equal(gone?.message.payload.resolution.behavior, 'deny');
+      ws.emit('close');
+    } finally {
+      openQuestions.close('r6', 'superseded');
+      openQuestions.close('r7', 'superseded');
+    }
   });
 });

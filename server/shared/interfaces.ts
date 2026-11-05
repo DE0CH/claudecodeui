@@ -6,6 +6,7 @@ import type {
   LLMProvider,
   McpScope,
   NormalizedMessage,
+  OpenQuestionSummary,
   ProviderSkill,
   ProviderSkillListOptions,
   ProviderAuthStatus,
@@ -51,6 +52,12 @@ export interface IProviderRuntime {
    * settled, or the id was never one of its own.
    */
   stopBackgroundTask?(sessionId: string, taskId: string): Promise<boolean>;
+  /**
+   * Questions waiting for the person after their turn let its process (and
+   * sandbox) go: not running work. Only the Claude runtime parks questions
+   * (DE0CH/YYC yyc-ai/refactor/DECISIONS.md 17).
+   */
+  listOpenQuestions?(): OpenQuestionSummary[];
 }
 
 /**

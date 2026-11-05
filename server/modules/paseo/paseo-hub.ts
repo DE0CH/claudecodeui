@@ -17,7 +17,14 @@ import path from 'node:path';
 
 import { ensureImageAssetsDir } from '@/modules/assets/index.js';
 import { sessionsDb } from '@/modules/database/index.js';
-import { jarvisModel, jarvisProductName, jarvisWorkspacePath, sentPathToWorkspaceRelative } from '@/modules/jarvis/index.js';
+import {
+  jarvisModel,
+  jarvisProductName,
+  jarvisWorkspacePath,
+  openQuestions,
+  sentPathToWorkspaceRelative,
+  type OpenQuestionClosed,
+} from '@/modules/jarvis/index.js';
 import { sessionsService } from '@/modules/providers/index.js';
 import { chatRunRegistry, handleChatConnection } from '@/modules/websocket/index.js';
 import type { AuthenticatedWebSocketRequest, NormalizedMessage } from '@/shared/types.js';
@@ -190,6 +197,34 @@ class PaseoHub extends EventEmitter {
     if (this.socket) return;
     this.socket = new HubChatSocket((frame) => this.onChatFrame(frame));
     handleChatConnection(this.socket as never, request, chat);
+  }
+
+  constructor() {
+    super();
+    openQuestions.on('closed', this.onOpenQuestionClosed);
+  }
+
+  /**
+   * A question kept after its turn let the sandbox go (jarvis-open-questions.ts) was withdrawn with no turn to say so:
+   * the long safety limit, or a message the person sent instead (its turn says so too; the second is a no-op).
+   */
+  private readonly onOpenQuestionClosed = (closed: OpenQuestionClosed): void => {
+    if (closed.reason !== 'answered') this.onPermissionGone(closed.sessionId, closed.requestId, true);
+  };
+
+  /** Questions kept after their turn ended (this process may have restarted since): shown like any waiting one. */
+  private adoptOpenQuestions(sessionId: string): void {
+    for (const question of openQuestions.forSession(sessionId)) {
+      if (question.answer || question.toolName !== QUESTION_TOOL) continue;
+      let waiting = this.questions.get(sessionId);
+      if (!waiting) {
+        waiting = new Map();
+        this.questions.set(sessionId, waiting);
+      }
+      if (waiting.has(question.requestId)) continue;
+      const input = question.input && typeof question.input === 'object' ? (question.input as Record<string, unknown>) : {};
+      waiting.set(question.requestId, { id: question.requestId, provider: 'claude', name: question.toolName, kind: 'question', input });
+    }
   }
 
   nextDirectorySeq(): number {
@@ -499,6 +534,7 @@ class PaseoHub extends EventEmitter {
         const turnId = this.turnIdFor(sessionId);
         this.turnIds.delete(sessionId);
         this.pendingUserMessages.delete(sessionId);
+        // a turn that let its sandbox go while it asks (`awaitingAnswer`) keeps its questions on screen
         this.dropQuestions(sessionId);
         // A turn that ended while its sandbox was still being made (stopped, or the start failed)
         if (this.preparing.delete(sessionId)) this.emitEvent({ type: 'preparing', sessionId, state: 'ready' });
@@ -533,14 +569,32 @@ class PaseoHub extends EventEmitter {
 
   /** The questions of a conversation still waiting for the person (the agent snapshot's pendingPermissions). */
   pendingQuestions(sessionId: string): PaseoQuestionRequest[] {
+    this.adoptOpenQuestions(sessionId);
     return [...(this.questions.get(sessionId)?.values() ?? [])];
   }
 
   /** The person's answer to a waiting question (Paseo's agent_permission_response); false if nothing waits on it. */
   answer(sessionId: string, requestId: string, response: PaseoPermissionResponse): boolean {
+    this.adoptOpenQuestions(sessionId);
     const request = this.questions.get(sessionId)?.get(requestId);
     if (!request) return false;
     this.answers.set(requestId, response);
+    // A question kept after its turn let the sandbox go: the last answer starts the turn that resumes the conversation
+    // (CloudCLI does it on this delivery, synchronously up to its first await), which the person waits on like a sent
+    // message (the preparing chip when a sandbox has to be made, the running state).
+    const kept = Boolean(openQuestions.get(requestId));
+    this.deliverAnswer(requestId, request, response);
+    if (kept && openQuestions.get(requestId)?.answer && openQuestions.allAnswered(sessionId) && !this.isRunning(sessionId)) {
+      const turnId = randomUUID();
+      this.turnIds.set(sessionId, turnId);
+      this.pendingUserMessages.set(sessionId, { text: '', clientMessageId: `answer:${requestId}` });
+      this.announcePreparing(sessionId);
+      this.emitEvent({ type: 'turn', sessionId, phase: 'started', turnId });
+    }
+    return true;
+  }
+
+  private deliverAnswer(requestId: string, request: PaseoQuestionRequest, response: PaseoPermissionResponse): void {
     if (response.behavior === 'allow') {
       this.socket?.deliver({
         type: 'chat.permission-response',
@@ -556,7 +610,6 @@ class PaseoHub extends EventEmitter {
         message: response.message || 'The person dismissed the question without answering.',
       });
     }
-    return true;
   }
 
   /**
@@ -593,9 +646,15 @@ class PaseoHub extends EventEmitter {
     this.emitEvent({ type: 'session', sessionId });
   }
 
-  /** A turn that ended takes its unanswered questions with it (stopped, failed, the CLI gone). */
+  /**
+   * A turn that ended takes its unanswered questions with it (stopped, failed, the CLI gone), except those kept for the
+   * person after it let its sandbox go (jarvis-open-questions.ts: they stay until answered, superseded or expired).
+   */
   private dropQuestions(sessionId: string): void {
-    for (const requestId of [...(this.questions.get(sessionId)?.keys() ?? [])]) this.onPermissionGone(sessionId, requestId, true);
+    for (const requestId of [...(this.questions.get(sessionId)?.keys() ?? [])]) {
+      if (openQuestions.get(requestId)) continue;
+      this.onPermissionGone(sessionId, requestId, true);
+    }
   }
 
   /** Tests: forget everything. */

@@ -87,6 +87,13 @@ test('the reported model id is passed through verbatim, suffix and all', () => {
   assert.equal(prose?.model, 'claude-opus-5[1m]');
 });
 
+test("Claude Code's resume placeholder reply is not shown (DECISIONS 17: it sits between a question and its answer)", () => {
+  const provider = new ClaudeSessionsProvider();
+  assert.deepEqual(provider.normalizeMessage(assistantRow('asst-5', '<synthetic>', [{ type: 'text', text: 'No response requested.' }]), SESSION_ID), []);
+  // the same words from the model itself are its reply
+  assert.equal(provider.normalizeMessage(assistantRow('asst-6', 'claude-opus-5', [{ type: 'text', text: 'No response requested.' }]), SESSION_ID).length, 1);
+});
+
 test('a locally fabricated row reports no model at all', () => {
   // Claude Code stamps rows it synthesized itself — the usage-limit notice, an
   // API-error placeholder — with `<synthetic>`. No request ran, so there is no

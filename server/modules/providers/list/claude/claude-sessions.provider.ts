@@ -1082,6 +1082,16 @@ const readAssistantModel = (value: unknown): string | undefined => {
   return model && !isPlaceholderProviderModel(model) ? model : undefined;
 };
 
+/** Claude Code's `<synthetic>` "No response requested." row (its NO_RESPONSE_REQUESTED placeholder, 2.1.304). */
+function isNoResponsePlaceholder(raw: AnyRecord): boolean {
+  if (raw?.message?.role !== 'assistant' || raw.message.model !== '<synthetic>') return false;
+  const content = raw.message.content;
+  const text = typeof content === 'string'
+    ? content
+    : Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' ? content[0].text : null;
+  return text === 'No response requested.';
+}
+
 /** The CLI's `{total_tokens, tool_uses, duration_ms}` in the app's spelling. */
 function readTaskUsage(value: unknown): TaskUsage | undefined {
   const usage = readObjectRecord(value);
@@ -1608,6 +1618,13 @@ export class ClaudeSessionsProvider implements IProviderSessions {
         content: raw.output || '',
         isError: false,
       }));
+      return messages;
+    }
+
+    // Claude Code's placeholder reply when it resumes a conversation whose last turn ended without one (it closes the
+    // turn's open tool calls as interrupted and writes this `<synthetic>` row): no one wrote it, and after a question
+    // whose turn let its sandbox go (DECISIONS 17) it sits between the question and the person's answer.
+    if (isNoResponsePlaceholder(raw)) {
       return messages;
     }
 

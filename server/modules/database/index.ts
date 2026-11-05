@@ -27,3 +27,5 @@ export { scheduledMessagesDb } from './repositories/scheduled-messages.db.js';
 export type { ScheduledMessageRow, ScheduledMessageStatus } from './repositories/scheduled-messages.db.js';
 export { jarvisTurnsDb } from '@/modules/database/repositories/jarvis-turns.db.js';
 export type { JarvisFailedTurn } from '@/modules/database/repositories/jarvis-turns.db.js';
+export { jarvisOpenQuestionsDb } from '@/modules/database/repositories/jarvis-open-questions.db.js';
+export type { JarvisOpenQuestionRow } from '@/modules/database/repositories/jarvis-open-questions.db.js';

@@ -153,6 +153,33 @@ function textOf(message: NormalizedMessage): string {
   return '';
 }
 
+/**
+ * Claude Code's result for a tool call its process ended under (2.1.304 writes it when it resumes the conversation).
+ * A question whose turn let its sandbox go ends this way (DECISIONS 17); its answer follows as the person's message.
+ */
+const SESSION_ENDED_RESULT = "[Tool call interrupted: the session ended before this call's result was recorded";
+const QUESTION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
+
+/** A question closed by that marker is shown as asked, not as a failed tool. */
+function isClosedQuestion(name: string, output: unknown): boolean {
+  return QUESTION_TOOLS.has(name) && typeof output === 'string' && output.startsWith(SESSION_ENDED_RESULT);
+}
+
+/**
+ * How the message that carries a closed question's answer begins (jarvis-open-questions.ts `answerContinuation`, in
+ * the tool's own words, and the Paseo card's dismissal): shown on the question's card, as the live answer is, not as
+ * a message of the person's.
+ */
+const ANSWER_PREFIXES = [
+  'Your questions have been answered: ',
+  'The user answered: ',
+  'The user responded: ',
+  'The user did not answer the questions.',
+  'User has approved your plan.',
+  'User has approved exiting plan mode.',
+  'The person dismissed the question without answering.',
+];
+
 function toolOutput(message: NormalizedMessage): unknown {
   const result = message.toolResult;
   if (result?.toolUseResult !== undefined) return result.toolUseResult;
@@ -168,6 +195,8 @@ export class SessionTimeline {
   private nextSeq = 1;
   private toolRows = new Map<string, PaseoTimelineRow>();
   private toolInputs = new Map<string, { name: string; input: unknown }>();
+  /** Questions closed by Claude Code's restart whose answer may come as the next message (call id -> name). */
+  private closedQuestions = new Map<string, string>();
   /** Ids of history/live messages already applied, so a replayed live event is not added twice. */
   private seen = new Set<string>();
 
@@ -186,6 +215,9 @@ export class SessionTimeline {
         const text = textOf(message);
         const hasAttachments = message.role === 'user' && (userImagesOf(message.images).length > 0 || Array.isArray(message.files) && message.files.length > 0);
         if (!text.trim() && !hasAttachments) return [];
+        const answerRows = message.role === 'user' ? this.answerClosedQuestions(text, timestamp) : null;
+        if (answerRows) return answerRows;
+        this.closedQuestions.clear();
         if (message.role === 'user') {
           const images = userImagesOf(message.images);
           const attachments = userFilesOf(message.files, this.toRelative);
@@ -223,7 +255,12 @@ export class SessionTimeline {
         if (!callId) return [];
         const known = this.toolInputs.get(callId);
         const name = known?.name ?? message.toolName ?? 'tool';
-        const item = this.finishedTool(callId, name, known?.input, toolOutput(message), message.isError === true || message.toolResult?.isError === true);
+        const output = toolOutput(message);
+        const closed = isClosedQuestion(name, output);
+        if (closed) this.closedQuestions.set(callId, name);
+        const item = closed
+          ? this.finishedTool(callId, name, known?.input, null, false)
+          : this.finishedTool(callId, name, known?.input, output, message.isError === true || message.toolResult?.isError === true);
         if (!item) return [];
         const row = this.toolRows.get(callId);
         if (!row) {
@@ -246,6 +283,25 @@ export class SessionTimeline {
       default:
         return [];
     }
+  }
+
+  /** The answer to questions closed by Claude Code's restart: put on their cards; null when `text` is not one. */
+  private answerClosedQuestions(text: string, timestamp: string): PaseoTimelineRow[] | null {
+    if (this.closedQuestions.size === 0 || !ANSWER_PREFIXES.some((prefix) => text.startsWith(prefix))) return null;
+    const changed: PaseoTimelineRow[] = [];
+    for (const [callId, name] of this.closedQuestions) {
+      const row = this.toolRows.get(callId);
+      const item = this.finishedTool(callId, name, this.toolInputs.get(callId)?.input, text, false);
+      if (!row || !item) continue;
+      const seq = this.nextSeq++;
+      row.item = item;
+      row.seqEnd = seq;
+      row.timestamp = row.timestamp || timestamp;
+      row.sourceSeqRanges = [...row.sourceSeqRanges, { startSeq: seq, endSeq: seq }];
+      changed.push(row);
+    }
+    this.closedQuestions.clear();
+    return changed;
   }
 
   private finishedTool(callId: string, name: string, input: unknown, output: unknown, failed: boolean): ToolCallTimelineItem | null {

@@ -637,9 +637,25 @@ export type ProviderPermissionDecision = {
   rememberEntry?: unknown;
 };
 
+/**
+ * What answering a parked question asks of the caller: start the turn that resumes the conversation with the answers
+ * (its options are the asking turn's). Null when the answer reached a live wait, or other questions still wait.
+ */
+export type ProviderPermissionOutcome = { resume: { sessionId: string; options: AnyRecord } } | null;
+
 export type ProviderRuntimePermissionGateway = {
-  resolve(requestId: string, decision: ProviderPermissionDecision): void;
+  resolve(requestId: string, decision: ProviderPermissionDecision): ProviderPermissionOutcome | void;
   listPending(sessionId: string): unknown[];
+};
+
+/** A question waiting for the person after its turn let the sandbox go (claude-runtime `listOpenQuestions`). */
+export type OpenQuestionSummary = {
+  sessionId: string;
+  requestId: string;
+  toolName: string;
+  toolUseId: string | null;
+  askedAt: string;
+  answered: boolean;
 };
 
 /**
@@ -665,7 +681,13 @@ export type ProviderRuntimeContext = {
   createQuery?: (input: { prompt: AsyncIterable<unknown>; options: AnyRecord }) => AsyncIterable<unknown> & {
     interrupt(): Promise<void>;
     stopTask?(taskId: string): Promise<void>;
+    close?(): void;
   };
+  /**
+   * Whether a turn waiting only on a question parks (DECISIONS 17). Production leaves it unset: on in Jarvis sandbox
+   * mode, where this process starts Claude Code itself. Tests set it with a scripted stream.
+   */
+  parkQuestions?: boolean;
 };
 
 export type ProviderRunFunction = (

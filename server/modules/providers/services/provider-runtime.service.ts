@@ -5,7 +5,9 @@ import type { IProvider } from '@/shared/interfaces.js';
 import type {
   AnyRecord,
   LLMProvider,
+  OpenQuestionSummary,
   ProviderPermissionDecision,
+  ProviderPermissionOutcome,
   ProviderRunFunction,
   ProviderRuntimeContext,
   ProviderRuntimeWriter,
@@ -102,10 +104,18 @@ export function createProviderRuntimeService(
         (provider.runtime.listBackgroundWork?.() ?? []).some((entry) => entry.sessionId === sessionId));
     },
 
-    resolveToolApproval(requestId: string, decision: ProviderPermissionDecision): void {
+    /** Delivers an answer; a parked question's last answer returns the turn to start (ProviderPermissionOutcome). */
+    resolveToolApproval(requestId: string, decision: ProviderPermissionDecision): ProviderPermissionOutcome {
+      let outcome: ProviderPermissionOutcome = null;
       for (const provider of dependencies.listProviders()) {
-        provider.runtime.permissions?.resolve(requestId, decision);
+        const result = provider.runtime.permissions?.resolve(requestId, decision);
+        if (result && !outcome) outcome = result;
       }
+      return outcome;
+    },
+
+    listOpenQuestions(): OpenQuestionSummary[] {
+      return dependencies.listProviders().flatMap((provider) => provider.runtime.listOpenQuestions?.() ?? []);
     },
 
     getPendingApprovalsForSession(sessionId: string): unknown[] {

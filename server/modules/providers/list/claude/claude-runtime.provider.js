@@ -24,6 +24,7 @@ import { prepareJarvisAttachments } from '@/modules/jarvis/jarvis-images.js';
 import { readableSandboxError } from '@/modules/jarvis/jarvis-errors.js';
 import { acquireSandboxReporting, jarvisEnabled, SandboxWaitCancelled, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
 import { jarvisLocal, jarvisLocalPermissionMode, jarvisModel, jarvisWorkspacePath } from '@/modules/jarvis/jarvis-config.js';
+import { answerContinuation, ASK_SAFETY_LIMIT_MS, formatAskDuration, openQuestions } from '@/modules/jarvis/index.js';
 import { sessionsDb } from '@/modules/database/index.js';
 import { titleConversation } from '@/modules/jarvis/jarvis-title.js';
 
@@ -70,14 +71,34 @@ const pendingSandboxWaits = new Map();
 const supersededInstances = new WeakSet();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
-// An interactive tool (AskUserQuestion, ExitPlanMode) nobody answers is closed after this long (Deyao, 2026-11-05):
-// waiting forever kept the turn, and so the sandbox, from ever going idle. The model is told why and may ask again.
-// The new stack's supervisor does the same (aviary crates/supervisor ASK_TIMEOUT).
-const INTERACTIVE_TOOL_TIMEOUT_MS = parseInt(process.env.CLAUDE_INTERACTIVE_TOOL_TIMEOUT_MS, 10) || 30 * 60 * 1000;
+// An interactive tool (AskUserQuestion, ExitPlanMode) waits for its answer without holding the sandbox (DECISIONS 17 in
+// DE0CH/YYC yyc-ai/refactor, Deyao, 2026-11-05; see "park" in queryClaudeSDK). CLAUDE_INTERACTIVE_TOOL_TIMEOUT_MS
+// (default 7 days, jarvis-open-questions.ts) is only a safety limit: past it a question is closed, and a live Claude
+// Code still waiting on one (a turn that could not let its sandbox go) is told so in these words.
+const INTERACTIVE_TOOL_TIMEOUT_MS = ASK_SAFETY_LIMIT_MS;
 
 export function askTimeoutMessage(timeoutMs = INTERACTIVE_TOOL_TIMEOUT_MS) {
-  const minutes = Math.round((timeoutMs / 60000) * 100) / 100;
-  return `User has not answered in ${minutes} minutes, the session has timed out, ask again if needed.`;
+  return `User has not answered in ${formatAskDuration(timeoutMs)}, the session has timed out, ask again if needed.`;
+}
+
+// Turns stopped while their only wait was a question (park), until their Claude Code process has exited: the answer's
+// turn resumes the conversation only after that, so two processes never write one transcript. By app session id.
+const parkedExits = new Map();
+// How long the answer's turn waits for the parked process to exit (it got SIGTERM, then SIGKILL after PARK_KILL_AFTER_MS).
+const PARKED_EXIT_WAIT_MS = 15_000;
+const PARK_KILL_AFTER_MS = 10_000;
+
+/**
+ * The options the answer's turn runs with: the asking turn's own, without its attachments (Claude Code already has
+ * them). resolveToolApproval takes an approved ExitPlanMode out of plan mode, as the tool itself would.
+ */
+function parkedRunOptions(options) {
+  const keep = ['model', 'effort', 'permissionMode', 'toolsSettings', 'sessionSummary', 'cwd', 'projectPath'];
+  const runOptions = {};
+  for (const key of keep) {
+    if (options[key] !== undefined) runOptions[key] = options[key];
+  }
+  return runOptions;
 }
 
 // How long background work is allowed to keep running after a turn ends. This drives
@@ -203,11 +224,31 @@ function waitForToolApproval(requestId, options = {}) {
   });
 }
 
+/**
+ * A client's answer. A live wait takes it at once. A parked question (its turn let the sandbox go) records it, and once
+ * every question of that conversation is answered the caller is told to start the turn that resumes the conversation
+ * with the answers (`{ resume: { sessionId, options } }`); otherwise null.
+ */
 function resolveToolApproval(requestId, decision) {
   const resolver = pendingToolApprovals.get(requestId);
   if (resolver) {
     resolver(decision);
+    return null;
   }
+  const question = openQuestions.answer(requestId, {
+    allow: Boolean(decision?.allow),
+    ...(decision?.updatedInput !== undefined ? { updatedInput: decision.updatedInput } : {}),
+    ...(typeof decision?.message === 'string' ? { message: decision.message } : {}),
+  });
+  if (!question || !openQuestions.allAnswered(question.sessionId)) {
+    return null;
+  }
+  const options = { ...question.runOptions };
+  // an approved plan leaves plan mode, as ExitPlanMode itself does
+  if (options.permissionMode === 'plan' && openQuestions.forSession(question.sessionId).some((q) => q.toolName === 'ExitPlanMode' && q.answer?.allow)) {
+    options.permissionMode = 'default';
+  }
+  return { resume: { sessionId: question.sessionId, options } };
 }
 
 // Match stored permission entries against a tool + input combo.
@@ -968,6 +1009,22 @@ async function loadMcpConfig(cwd) {
 }
 
 /**
+ * Keeps `open` to the main thread's tool calls that have no result yet (a subagent's own calls run inside its Agent
+ * call, which stays open meanwhile).
+ * @param {Set<string>} open - tool_use ids
+ * @param {Object} message - SDK stream message
+ */
+function trackOpenToolUses(open, message) {
+  if (message?.parent_tool_use_id) return;
+  const content = message?.message?.content;
+  if (!Array.isArray(content)) return;
+  for (const block of content) {
+    if (message.type === 'assistant' && block?.type === 'tool_use' && typeof block.id === 'string') open.add(block.id);
+    else if (message.type === 'user' && block?.type === 'tool_result' && typeof block.tool_use_id === 'string') open.delete(block.tool_use_id);
+  }
+}
+
+/**
  * Executes a Claude query using the SDK
  * @param {string} command - User prompt/command
  * @param {Object} options - Query options
@@ -1032,6 +1089,45 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     releaseHeldSession(sessionKey());
   }
 
+  // A turn starting in a conversation with questions its last turn left open (park, below) takes them: answered ones
+  // are delivered to the resumed Claude Code as this turn's message, in the tool's own words (a resumed Claude Code
+  // closes a tool call made before it restarted as interrupted and takes no answer for it: jarvis-open-questions.ts);
+  // unanswered ones are withdrawn, as is every one when the turn rewinds the conversation (an edited message).
+  const rewinding = Boolean(options.resumeAnchorId) || options.resumeFromScratch === true;
+  const takenQuestions = sessionId ? openQuestions.forSession(sessionId) : [];
+  const deliveredAnswers = [];
+  for (const question of takenQuestions) {
+    const deliver = Boolean(question.answer) && !rewinding;
+    openQuestions.close(question.requestId, deliver ? 'answered' : 'superseded');
+    if (deliver) deliveredAnswers.push(question);
+    ws.send(createNormalizedMessage(deliver
+      ? { kind: 'permission_resolved', requestId: question.requestId, sessionId, provider: 'claude' }
+      : { kind: 'permission_cancelled', requestId: question.requestId, reason: 'superseded', sessionId, provider: 'claude' }));
+  }
+  const prompt = [answerContinuation(deliveredAnswers), typeof command === 'string' ? command : '']
+    .filter((text) => text.trim())
+    .join('\n\n');
+
+  // Park (DECISIONS 17): while the turn waits only on questions (no other tool call open, no background work, the model's
+  // reply finished), the turn ends for the client, Claude Code is stopped and the questions wait in openQuestions; the
+  // sandbox then idles and is released like any idle one. Only where this process starts Claude Code itself (the
+  // sandbox), since the stop must be a plain SIGTERM: an SDK close() is an interrupt, which records a rejection.
+  const parkingEnabled = Boolean(sessionId) && (context.parkQuestions ?? (jarvisEnabled() && !jarvisLocal()));
+  // the Claude Code process (jarvis: the sandbox's, through spawnInSandbox)
+  let spawnedProcess = null;
+  // live waits on interactive tools: requestId -> { toolName, toolUseId, input, askedAt }
+  const waitingAsks = new Map();
+  // main-thread tool calls with no result yet
+  const openToolUses = new Set();
+  // the model is still writing its reply (between message_start and message_stop): a question can come before the
+  // reply's last block
+  let mainThreadStreaming = false;
+  let parked = false;
+  let parkedExit = null;
+  let parkedExitResolve = () => {};
+  // the silence ceiling (scheduleRelease) does not run while a question waits
+  let ceilingSuspended = false;
+
   // Arms (or re-arms) the idle countdown that eventually closes stdin.
   const scheduleRelease = () => {
     if (idleReleaseTimer) {
@@ -1049,6 +1145,68 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
   // Hoisted above the try so the catch's cleanup can tell whether this run
   // still owns the activeSessions entry (or was superseded by a newer run).
   let queryInstance = null;
+
+  /**
+   * Parks the turn when all it waits on is the person: every open main-thread tool call is a question still waiting,
+   * the model's reply has ended, and nothing runs in the background (tracked tasks, a hold on the launch rule, a
+   * backgrounded call of this turn the CLI has not reported yet). Called whenever one of those may have changed.
+   */
+  const maybePark = () => {
+    if (!parkingEnabled || parked || waitingAsks.size === 0 || mainThreadStreaming) return;
+    const asks = [...waitingAsks.entries()].filter(([requestId]) => pendingToolApprovals.has(requestId));
+    if (asks.length === 0) return;
+    const askToolUses = new Set(asks.map(([, ask]) => ask.toolUseId).filter(Boolean));
+    for (const toolUseId of openToolUses) {
+      if (!askToolUses.has(toolUseId)) return;
+    }
+    if (backgroundWork.hasOutstanding(sessionKey()) || heldForBackgroundWork || (backgroundWorkPending && !sawTaskEventThisTurn)) return;
+    park(asks);
+  };
+
+  // Synchronous up to the stop, so an answer arriving meanwhile either reaches the live wait (then nothing is parked)
+  // or the kept question, never neither.
+  const park = (asks) => {
+    parked = true;
+    parkedExit = new Promise((resolve) => { parkedExitResolve = resolve; });
+    parkedExits.set(sessionId, parkedExit);
+    const runOptions = parkedRunOptions(options);
+    for (const [requestId, ask] of asks) {
+      void openQuestions.add({
+        requestId,
+        sessionId,
+        providerSessionId: capturedSessionId || null,
+        toolName: ask.toolName,
+        toolUseId: ask.toolUseId,
+        input: ask.input,
+        runOptions,
+        askedAt: ask.askedAt,
+        answer: null,
+      });
+      waitingAsks.delete(requestId);
+      // ends the live wait without withdrawing the question from the client
+      pendingToolApprovals.get(requestId)?.({ parked: true });
+    }
+    console.log('[Claude SDK] turn parked on a question; Claude Code stops and the sandbox may go idle', { sessionId, questions: asks.length });
+    // The turn is over for the client: no working time runs, nothing to stop; the question stays on screen.
+    if (!turnCompleteSent) {
+      turnCompleteSent = true;
+      ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: 0, awaitingAnswer: true }));
+    }
+    if (idleReleaseTimer) {
+      clearTimeout(idleReleaseTimer);
+      idleReleaseTimer = null;
+    }
+    // SIGTERM: Claude Code writes out its transcript (the question's tool call included) and records no answer.
+    if (spawnedProcess) {
+      spawnedProcess.kill('SIGTERM');
+      const proc = spawnedProcess;
+      const kill = setTimeout(() => proc.kill('SIGKILL'), PARK_KILL_AFTER_MS);
+      kill.unref?.();
+    } else {
+      queryInstance?.close?.();
+    }
+    releasePromptStream();
+  };
   // Jarvis mode: whether Claude Code produced anything (then its transcript holds the user's message), and when the
   // turn arrived (a failed turn's error must sort after the message the user just sent).
   let sawSdkMessage = false;
@@ -1109,7 +1267,10 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       delete sdkOptions.mcpServers;
       // the instance's model is the sandbox's ANTHROPIC_MODEL (egress allows only the instance's models)
       delete sdkOptions.model;
-      sdkOptions.spawnClaudeCodeProcess = (spawnOptions) => spawnInSandbox(sandbox, sessionId, spawnOptions);
+      sdkOptions.spawnClaudeCodeProcess = (spawnOptions) => {
+        spawnedProcess = spawnInSandbox(sandbox, sessionId, spawnOptions);
+        return spawnedProcess;
+      };
       // a new conversation (no Claude Code session yet) still on its provisional name gets a title from the title
       // model, alongside the turn (jarvis-title.ts)
       if (!providerSessionId && typeof command === 'string' && command.trim()) {
@@ -1121,7 +1282,12 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // Every turn uses streaming input so stdin stays open past the turn's
     // `result`. The message list is reusable, but each query attempt needs its
     // own stream because an async generator cannot be replayed once consumed.
-    const promptMessages = await buildPromptMessages(command, promptImages, promptFiles, options.cwd, savedImages);
+    const promptMessages = await buildPromptMessages(prompt, promptImages, promptFiles, options.cwd, savedImages);
+
+    // the model's reply is followed block by block, so a question is parked only once the reply has ended
+    if (parkingEnabled) {
+      sdkOptions.includePartialMessages = true;
+    }
 
     sdkOptions.hooks = {
       Notification: [{
@@ -1150,7 +1316,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // auto-approves them and the model acts on a generated answer. Move these
     // tools to a PreToolUse hook (runs before the mode check) if we need them
     // to work in those modes.
-    sdkOptions.canUseTool = async (toolName, input, context) => {
+    sdkOptions.canUseTool = async (toolName, input, toolContext) => {
       const requiresInteraction = TOOLS_REQUIRING_INTERACTION.has(toolName);
 
       if (!requiresInteraction) {
@@ -1174,21 +1340,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       }
 
       const requestId = createRequestId();
-      ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
-      await emitNotification(createNotificationEvent({
-        provider: 'claude',
-        sessionId: sessionId || capturedSessionId || null,
-        kind: 'action_required',
-        code: 'permission.required',
-        meta: { toolName, sessionName: sessionSummary },
-        severity: 'warning',
-        requiresUserAction: true,
-        dedupeKey: `claude:permission:${sessionId || capturedSessionId || 'none'}:${requestId}`
-      }));
-
-      const decision = await waitForToolApproval(requestId, {
+      // Registered before the client hears of it: a client may answer in the same tick (the Paseo hub allows
+      // ExitPlanMode at once), and an answer with no waiter would be lost.
+      const waiting = waitForToolApproval(requestId, {
         timeoutMs: requiresInteraction ? INTERACTIVE_TOOL_TIMEOUT_MS : undefined,
-        signal: context?.signal,
+        signal: toolContext?.signal,
         metadata: {
           // Keyed by the app session id so `chat.subscribe` can look pending
           // approvals up directly; provider id only for legacy callers.
@@ -1201,6 +1357,45 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
           ws.send(createNormalizedMessage({ kind: 'permission_cancelled', requestId, reason, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
         }
       });
+      if (requiresInteraction) {
+        waitingAsks.set(requestId, {
+          toolName,
+          toolUseId: typeof toolContext?.toolUseID === 'string' ? toolContext.toolUseID : null,
+          input,
+          askedAt: new Date().toISOString(),
+        });
+        // waiting for the person is not silence: the post-turn hold's ceiling stops while a question is open
+        if (idleReleaseTimer) {
+          clearTimeout(idleReleaseTimer);
+          idleReleaseTimer = null;
+          ceilingSuspended = true;
+        }
+      }
+      ws.send(createNormalizedMessage({ kind: 'permission_request', requestId, toolName, input, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+      await emitNotification(createNotificationEvent({
+        provider: 'claude',
+        sessionId: sessionId || capturedSessionId || null,
+        kind: 'action_required',
+        code: 'permission.required',
+        meta: { toolName, sessionName: sessionSummary },
+        severity: 'warning',
+        requiresUserAction: true,
+        dedupeKey: `claude:permission:${sessionId || capturedSessionId || 'none'}:${requestId}`
+      }));
+      if (requiresInteraction) {
+        maybePark();
+      }
+
+      const decision = await waiting;
+      waitingAsks.delete(requestId);
+      if (ceilingSuspended && waitingAsks.size === 0) {
+        ceilingSuspended = false;
+        if (heldForBackgroundWork && !parked) scheduleRelease();
+      }
+      if (decision?.parked) {
+        // the process is being stopped (park); nothing it does with this reaches the transcript
+        return { behavior: 'deny', message: 'The question is kept for the person; this process is stopping.' };
+      }
       if (!decision) {
         return { behavior: 'deny', message: requiresInteraction ? askTimeoutMessage() : 'Permission request timed out' };
       }
@@ -1234,6 +1429,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // The SDK's own `query`, unless the caller supplies one (tests script the
     // stream to drive the hold logic below without a CLI process).
     const createQuery = context.createQuery ?? query;
+    // the turn that answers a parked question resumes only once the parked process has exited
+    const parkedBefore = sessionId ? parkedExits.get(sessionId) : null;
+    if (parkedBefore) {
+      await Promise.race([parkedBefore, new Promise((resolve) => { setTimeout(resolve, PARKED_EXIT_WAIT_MS).unref?.(); })]);
+    }
     let heldPrompt = createHeldPromptStream(promptMessages);
     releasePromptStream = heldPrompt.release;
     try {
@@ -1265,6 +1465,23 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     console.log('Starting async generator loop for session:', capturedSessionId || 'NEW');
     for await (const message of queryInstance) {
       sawSdkMessage = true;
+      // A parked turn has nothing more to tell anyone: the process is stopping.
+      if (parked) {
+        continue;
+      }
+      // Partial messages (park only) say where the model's reply is; nothing else reads them.
+      if (message.type === 'stream_event') {
+        if (!message.parent_tool_use_id) {
+          if (message.event?.type === 'message_start') mainThreadStreaming = true;
+          else if (message.event?.type === 'message_stop') {
+            mainThreadStreaming = false;
+            maybePark();
+          }
+        }
+        if (idleReleaseTimer) scheduleRelease();
+        continue;
+      }
+      trackOpenToolUses(openToolUses, message);
       // Capture session ID from first message
       if (message.session_id && !capturedSessionId) {
 
@@ -1370,7 +1587,15 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         releasePromptStream();
       }
 
+      if (waitingAsks.size > 0) {
+        // a tool call settled, a task reported: the turn may now wait only on its question
+        maybePark();
+        if (parked) continue;
+      }
+
       if (message.type === 'result') {
+        openToolUses.clear();
+        mainThreadStreaming = false;
         // The turn is done as far as the client is concerned.
         const abortPending = sessionKey() ? abortedSessionIds.has(sessionKey()) : false;
         const stillOutstanding = backgroundWork.hasOutstanding(sessionKey());
@@ -1429,6 +1654,14 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       }
     }
 
+    if (parked) {
+      // Parked: the turn already ended for the client and its question waits in openQuestions.
+      if (sessionKey() && getSession(sessionKey())?.instance === queryInstance) {
+        removeSession(sessionKey());
+      }
+      return;
+    }
+
     // Clean up session on completion — only while this run still owns the map
     // entry. A superseding run may have replaced it, and deleting here would
     // strand that run.
@@ -1460,13 +1693,17 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     // Complete
 
   } catch (error) {
-    console.error('SDK query error:', error);
-
     // Clean up session on error — only while this run still owns the map entry
     // (a superseding run may have replaced it).
     if (sessionKey() && getSession(sessionKey())?.instance === queryInstance) {
       removeSession(sessionKey());
     }
+
+    if (parked) {
+      // the parked process ending on its SIGTERM, as intended
+      return;
+    }
+    console.error('SDK query error:', error);
 
     if (supersededInstances.has(queryInstance)) {
       // Interrupted because a newer run took over this session id; that run
@@ -1479,7 +1716,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       // Jarvis: stopped while its sandbox was being prepared. Claude Code never read the message, so it is kept in
       // our own table (no error): after a reload it shows as sent and not answered, as a stopped turn upstream.
       if (error instanceof SandboxWaitCancelled) {
-        await recordJarvisFailedTurn({ sessionId, userText: command, sentAt: options.sentAt, receivedAt: turnReceivedAt, error: '' });
+        await recordJarvisFailedTurn({ sessionId, userText: prompt, sentAt: options.sentAt, receivedAt: turnReceivedAt, error: '' });
       }
       // The abort already produced the terminal complete; a generator throw
       // caused by interrupt() is expected noise, not a user-facing error.
@@ -1503,7 +1740,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     if (jarvisEnabled()) {
       const failed = await recordJarvisFailedTurn({
         sessionId,
-        userText: sawSdkMessage ? null : command,
+        userText: sawSdkMessage ? null : prompt,
         sentAt: options.sentAt,
         receivedAt: turnReceivedAt,
         error: errorContent,
@@ -1529,6 +1766,10 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       idleReleaseTimer = null;
     }
     releasePromptStream();
+    if (parked) {
+      parkedExitResolve();
+      if (parkedExits.get(sessionId) === parkedExit) parkedExits.delete(sessionId);
+    }
   }
 }
 
@@ -1665,7 +1906,33 @@ function getPendingApprovalsForSession(sessionId) {
       });
     }
   }
+  // questions whose turn let the sandbox go: still the person's to answer (an answered one waits for its turn)
+  for (const question of openQuestions.forSession(sessionId)) {
+    if (question.answer || pendingToolApprovals.has(question.requestId)) continue;
+    pending.push({
+      requestId: question.requestId,
+      toolName: question.toolName,
+      input: question.input,
+      sessionId,
+      receivedAt: new Date(question.askedAt),
+    });
+  }
   return pending;
+}
+
+/**
+ * Conversations with a question waiting for the person after their turn let the sandbox go, for the switch's busy
+ * route (jarvis-switch.routes.ts `asking`): not running work, but the old router's importer must not lose them.
+ */
+function listClaudeSDKOpenQuestions() {
+  return openQuestions.list().map((question) => ({
+    sessionId: question.sessionId,
+    requestId: question.requestId,
+    toolName: question.toolName,
+    toolUseId: question.toolUseId,
+    askedAt: question.askedAt,
+    answered: question.answer !== null,
+  }));
 }
 
 /**
@@ -1692,6 +1959,7 @@ export const claudeRuntime = {
   },
   listBackgroundWork: listClaudeSDKBackgroundWork,
   stopBackgroundTask: stopClaudeSDKTask,
+  listOpenQuestions: listClaudeSDKOpenQuestions,
 };
 
 // Export public API
@@ -1699,6 +1967,7 @@ export {
   queryClaudeSDK,
   abortClaudeSDKSession,
   listClaudeSDKBackgroundWork,
+  listClaudeSDKOpenQuestions,
   stopClaudeSDKTask,
   isClaudeSDKSessionActive,
   getClaudeSDKSessionStartTime,

@@ -9,6 +9,7 @@ import express from 'express';
 
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import { releaseTestDatabase } from '@/modules/database/testing.js';
+import { openQuestions } from '@/modules/jarvis/jarvis-open-questions.js';
 import { createJarvisSwitchRouter, switchBusy } from '@/modules/jarvis/jarvis-switch.routes.js';
 import { paseoHub } from '@/modules/paseo/paseo-hub.js';
 import { ClaudeSessionsProvider } from '@/modules/providers/list/claude/claude-sessions.provider.js';
@@ -192,6 +193,23 @@ test('Paseo: a message sent before its run registers, and a sandbox preparing, a
   }));
 });
 
+test('a question kept after its turn let the sandbox go is no running work: only `asking` lists it (DECISIONS 17)', { concurrency: false }, async () => {
+  await withIsolatedDatabase(() => withEmptyCliRegistry(async () => {
+    await sessionsDb.createAppSession('switch-ask', 'claude', '/tmp/switch-ask');
+    await openQuestions.add({
+      requestId: 'ask-1', sessionId: 'switch-ask', providerSessionId: 'native-ask', toolName: 'AskUserQuestion', toolUseId: 'toolu_ask',
+      input: { questions: [] }, runOptions: {}, askedAt: '2026-11-05T08:00:00.000Z', answer: null,
+    });
+    try {
+      const busy = await switchBusy();
+      assert.deepEqual([busy.running, busy.processes, busy.preparing, busy.pending], [[], [], [], []], 'the gate and restart may go ahead');
+      assert.deepEqual(busy.asking, [{ sessionId: 'switch-ask', requestId: 'ask-1', toolName: 'AskUserQuestion', toolUseId: 'toolu_ask', askedAt: '2026-11-05T08:00:00.000Z', answered: false }]);
+    } finally {
+      openQuestions.close('ask-1', 'superseded');
+    }
+  }));
+});
+
 test('GET /switch/busy answers the four lists, and 500 when it cannot tell', async () => {
   const serve = async (router: express.Router) => {
     const app = express();
@@ -211,7 +229,7 @@ test('GET /switch/busy answers the four lists, and 500 when it cannot tell', asy
     listProcesses: () => ['b'],
     hubState: () => ({ preparing: ['c'], pending: ['d'] }),
   }));
-  assert.deepEqual(ok, { status: 200, body: { running: ['a'], processes: ['b'], preparing: ['c'], pending: ['d'] } });
+  assert.deepEqual(ok, { status: 200, body: { running: ['a'], processes: ['b'], preparing: ['c'], pending: ['d'], asking: [] } });
   const failed = await serve(createJarvisSwitchRouter({
     listRunning: async () => { throw new Error('db down'); },
     listProcesses: () => [],

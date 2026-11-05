@@ -94,6 +94,34 @@ describe('SessionTimeline', () => {
     assert.equal((timeline.rows[0]?.item as { status: string }).status, 'failed');
   });
 
+  // DECISIONS 17: a question whose turn let its sandbox go is closed by Claude Code's restart; its answer follows as a
+  // message in the tool's own words, which goes on the question's card (as the live answer does)
+  it('shows a question closed by the restart as answered by the message after it', () => {
+    const timeline = new SessionTimeline(toRelative);
+    const input = { questions: [{ question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] }] };
+    timeline.apply(message({ kind: 'text', role: 'user', content: 'pick one' }));
+    timeline.apply(message({ kind: 'tool_use', toolId: 'q1', toolName: 'AskUserQuestion', toolInput: input }));
+    timeline.apply(message({
+      kind: 'tool_result', toolId: 'q1', isError: true,
+      toolResult: { content: "[Tool call interrupted: the session ended before this call's result was recorded, so its outcome is unknown. Check whether it took effect before relying on it or running it again.]", isError: true },
+    }));
+    assert.equal((timeline.rows[1]?.item as { status: string }).status, 'completed', 'not a failed tool');
+    const answer = 'Your questions have been answered: "Which colour?"="Blue". You can now continue with these answers in mind.';
+    const changed = timeline.apply(message({ kind: 'text', role: 'user', content: answer }));
+    timeline.apply(message({ kind: 'text', role: 'assistant', content: 'BLUE' }));
+    assert.deepEqual(timeline.rows.map((row) => row.item.type), ['user_message', 'tool_call', 'assistant_message'], 'no message of the person for the answer');
+    assert.equal(changed[0], timeline.rows[1]);
+    assert.ok(JSON.stringify(timeline.rows[1]?.item).includes('Which colour?\\"=\\"Blue'), 'the answer is on the card');
+  });
+
+  it('a message sent instead of answering stays the person\'s message', () => {
+    const timeline = new SessionTimeline(toRelative);
+    timeline.apply(message({ kind: 'tool_use', toolId: 'q1', toolName: 'AskUserQuestion', toolInput: { questions: [] } }));
+    timeline.apply(message({ kind: 'tool_result', toolId: 'q1', isError: true, toolResult: { content: "[Tool call interrupted: the session ended before this call's result was recorded, so x", isError: true } }));
+    timeline.apply(message({ kind: 'text', role: 'user', content: 'never mind' }));
+    assert.deepEqual(timeline.rows.map((row) => row.item.type), ['tool_call', 'user_message']);
+  });
+
   it('puts the files SendUserFile handed over on the tool call', () => {
     const timeline = new SessionTimeline(toRelative);
     timeline.apply(message({ kind: 'tool_use', toolId: 'f1', toolName: 'SendUserFile', toolInput: { files: ['/workspace/a.csv'] } }));

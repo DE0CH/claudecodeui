@@ -240,4 +240,22 @@ ALTER TABLE sessions ADD COLUMN deleted_at TEXT COLLATE "C";
 UPDATE sessions SET "isArchived" = 0 WHERE "isArchived" = 1;
 CREATE INDEX idx_sessions_deleted_at ON sessions(deleted_at) WHERE deleted_at IS NOT NULL;
 `,
+  // 4: Jarvis mode — questions waiting for the person after their turn let the sandbox go (AskUserQuestion,
+  // ExitPlanMode; DE0CH/YYC yyc-ai/refactor/DECISIONS.md 17): what was asked, of which tool call, what the answer's run
+  // resumes with, and the answer once given (JSON text), so a question survives this process restarting
+  // (jarvis-open-questions.db.ts)
+  `
+CREATE TABLE jarvis_open_questions (
+    request_id TEXT COLLATE "C" PRIMARY KEY,
+    session_id TEXT COLLATE "C" NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    provider_session_id TEXT COLLATE "C",
+    tool_name TEXT COLLATE "C" NOT NULL,
+    tool_use_id TEXT COLLATE "C",
+    input TEXT COLLATE "C" NOT NULL,
+    run_options TEXT COLLATE "C" NOT NULL,
+    asked_at TEXT COLLATE "C" NOT NULL,
+    answer TEXT COLLATE "C"
+);
+CREATE INDEX idx_jarvis_open_questions_session ON jarvis_open_questions(session_id);
+`,
 ];

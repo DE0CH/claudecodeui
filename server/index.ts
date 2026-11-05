@@ -50,6 +50,7 @@ import { createJarvisSharesRouter } from './modules/jarvis/jarvis-shares.routes.
 import { jarvisApiGuard } from './modules/jarvis/jarvis-guard.js';
 import { createJarvisWarmRouter } from './modules/jarvis/jarvis-warm.routes.js';
 import { createJarvisSwitchRouter } from './modules/jarvis/jarvis-switch.routes.js';
+import { openQuestions } from './modules/jarvis/jarvis-open-questions.js';
 
 const __dirname = getModuleDirectory(import.meta.url);
 // The server source runs from /server, while the compiled output runs from /dist-server/server.
@@ -337,6 +338,8 @@ async function startServer() {
             await bootstrapJarvis();
             // Recently deleted empties itself after 30 days
             startRecentlyDeletedPurge();
+            // questions left waiting for the person when this process last stopped (jarvis-open-questions.ts)
+            await openQuestions.load().catch((error) => console.error('[open questions] could not load', error));
         }
 
         // Configure Web Push (VAPID keys)
