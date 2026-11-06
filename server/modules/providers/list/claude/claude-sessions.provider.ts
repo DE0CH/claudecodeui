@@ -1308,6 +1308,23 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const ts = raw.timestamp || new Date().toISOString();
     const baseId = raw.uuid || generateMessageId('claude');
 
+    // A message Claude Code took in while a turn ran (a schedule's, written into the running turn: jarvis/schedules.mjs):
+    // the transcript keeps it as a `queued_command` attachment, not as a user row, so this is where it shows.
+    if (raw.type === 'attachment' && raw.attachment?.type === 'queued_command'
+      && (raw.attachment.commandMode === undefined || raw.attachment.commandMode === 'prompt')
+      && typeof raw.attachment.prompt === 'string' && raw.attachment.prompt.trim()
+      && !isInternalContent(raw.attachment.prompt)) {
+      return [createNormalizedMessage({
+        id: baseId,
+        sessionId,
+        timestamp: ts,
+        provider: PROVIDER,
+        kind: 'text',
+        role: 'user',
+        content: raw.attachment.prompt,
+      })];
+    }
+
     // The live stream reports on background work — a launched workflow, agent
     // or shell command — through four `system` subtypes that the transcript
     // never records. They normalize to one `task_status` kind so the client

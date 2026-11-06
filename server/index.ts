@@ -50,6 +50,8 @@ import { createJarvisSharesRouter } from './modules/jarvis/jarvis-shares.routes.
 import { jarvisApiGuard } from './modules/jarvis/jarvis-guard.js';
 import { createJarvisWarmRouter } from './modules/jarvis/jarvis-warm.routes.js';
 import { createJarvisSwitchRouter } from './modules/jarvis/jarvis-switch.routes.js';
+import { createJarvisSchedulesRouter } from './modules/jarvis/jarvis-schedules.routes.js';
+import { paseoHub } from './modules/paseo/paseo-hub.js';
 import { openQuestions } from './modules/jarvis/jarvis-open-questions.js';
 
 const __dirname = getModuleDirectory(import.meta.url);
@@ -134,6 +136,8 @@ if (jarvisEnabled()) {
     app.use('/api/jarvis', authenticateToken, createJarvisSwitchRouter());
     // shared conversations: share, view, continue, stop sharing (jarvis-shares.routes.ts)
     app.use('/api/jarvis', authenticateToken, createJarvisSharesRouter());
+    // schedules: the router posts a due schedule's message into its conversation (jarvis-schedules.routes.ts)
+    app.use('/api/jarvis', authenticateToken, createJarvisSchedulesRouter(providerRuntimeService, paseoHub));
     // the greeting's name: the router answers this in sandbox mode (from the Access identity); local mode here, where
     // there is no sharing (the UI leaves its menu items out)
     if (jarvisLocal()) {

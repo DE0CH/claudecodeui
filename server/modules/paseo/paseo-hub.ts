@@ -443,6 +443,34 @@ class PaseoHub extends EventEmitter {
     this.socket?.deliver({ type: 'chat.abort', sessionId });
   }
 
+  /** Whether a Paseo tab started the hub's chat client in this process (send() needs it). */
+  isStarted(): boolean {
+    return this.socket !== null;
+  }
+
+  /**
+   * A message written into the running turn (a schedule's, jarvis-schedules.routes.ts): its user row goes on the
+   * timeline now, where the person sees it (the history shows it where Claude Code took it in).
+   */
+  async appendUserRow(sessionId: string, text: string, key: string): Promise<void> {
+    if (!this.timelines.has(sessionId)) return;
+    const timeline = await this.timeline(sessionId);
+    const turnId = this.turnIdFor(sessionId);
+    const rows = timeline.apply(
+      {
+        id: `paseo-user-schedule-${key}`,
+        sessionId,
+        timestamp: new Date().toISOString(),
+        provider: 'claude',
+        kind: 'text',
+        role: 'user',
+        content: text,
+      } as NormalizedMessage,
+      turnId,
+    );
+    this.emitEvent({ type: 'timeline', sessionId, rows, epoch: timeline.epoch, turnId });
+  }
+
   /** The chip, when the conversation's sandbox is being made and one of the person's messages waits on it. */
   private announcePreparing(sessionId: string): void {
     if (this.preparing.has(sessionId) && this.pendingUserMessages.has(sessionId)) {

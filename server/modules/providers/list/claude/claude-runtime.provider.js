@@ -119,6 +119,15 @@ function parkedRunOptions(options) {
 // that never reports at all, so an abandoned session cannot leak a CLI process
 // forever. The timer resets on every message, so it measures silence, not total time.
 const BG_WAIT_CEILING_MS = 30 * 60 * 1000;
+// How long a turn whose `result` came after a message was written into it (a schedule's, injectClaudeSDKMessage) keeps
+// Claude Code's stdin open: a message the model did not take in before it stopped runs next in the same process,
+// which starts at once; one it took in leaves nothing to wait for.
+const INJECTION_WAIT_MS = 15 * 1000;
+// YYC AI (Deyao, 2026-11-06): Claude Code's own timers live in its process and vanish when an idle sandbox is released;
+// the AI arms the router's schedules (jarvis/schedules.mjs) through its managed skill instead.
+export const JARVIS_DISALLOWED_TOOLS = ['CronCreate', 'CronList', 'CronDelete', 'ScheduleWakeup'];
+// The running turn's writer of extra messages, per app session id (injectClaudeSDKMessage).
+const injectors = new Map();
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
@@ -339,7 +348,12 @@ function mapCliOptionsToSDK(options = {}) {
   // but being explicit ensures forward compatibility and clarity.
   sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
 
-  sdkOptions.disallowedTools = settings.disallowedTools || [];
+  sdkOptions.disallowedTools = [...(settings.disallowedTools || [])];
+  if (jarvisEnabled()) {
+    for (const tool of JARVIS_DISALLOWED_TOOLS) {
+      if (!sdkOptions.disallowedTools.includes(tool)) sdkOptions.disallowedTools.push(tool);
+    }
+  }
 
   sdkOptions.model = options.model || CLAUDE_PREDEFINED_MODELS.DEFAULT;
 
@@ -937,18 +951,51 @@ async function buildPromptMessages(command, images, files, cwd, savedImages) {
  * @returns {{ stream: AsyncIterable, release: () => void }} Stream plus its closer
  */
 function createHeldPromptStream(messages) {
-  let release;
-  const held = new Promise((resolve) => { release = resolve; });
+  const queue = [...messages];
+  let released = false;
+  let wake = null;
+  const poke = () => {
+    const w = wake;
+    wake = null;
+    w?.();
+  };
 
   const stream = (async function* () {
-    for (const message of messages) {
-      yield message;
+    for (;;) {
+      while (queue.length > 0) {
+        yield queue.shift();
+      }
+      if (released) return;
+      // Keeps stdin open — the CLI stays alive until release() is called; push() adds a message meanwhile.
+      await new Promise((resolve) => { wake = resolve; });
     }
-    // Keeps stdin open — the CLI stays alive until release() is called.
-    await held;
   })();
 
-  return { stream, release };
+  return {
+    stream,
+    release: () => {
+      released = true;
+      poke();
+    },
+    /** Writes one more SDK user message to the CLI (false once released). */
+    push: (message) => {
+      if (released) return false;
+      queue.push(message);
+      poke();
+      return true;
+    },
+  };
+}
+
+/**
+ * Writes `text` into the session's running turn (a schedule's message while the conversation works, the router's
+ * schedules.mjs through jarvis-schedules.routes.ts): Claude Code takes it in at its next tool result or when the model
+ * stops, as a message typed mid-turn; one left for after the turn's `result` runs next in the same process. False when
+ * no Claude Code of this session is running (or its turn was parked).
+ */
+export function injectClaudeSDKMessage(sessionId, text) {
+  const inject = injectors.get(sessionId);
+  return inject ? inject(text) : false;
 }
 
 /**
@@ -1145,6 +1192,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
   // Hoisted above the try so the catch's cleanup can tell whether this run
   // still owns the activeSessions entry (or was superseded by a newer run).
   let queryInstance = null;
+  // A message written into this turn (injectClaudeSDKMessage) since its last `result`, and the wait after a `result`
+  // for one the model did not take in (INJECTION_WAIT_MS).
+  let injector = null;
+  let injectedThisTurn = false;
+  let injectionTimer = null;
 
   /**
    * Parks the turn when all it waits on is the person: every open main-thread tool call is a question still waiting,
@@ -1167,6 +1219,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
   // or the kept question, never neither.
   const park = (asks) => {
     parked = true;
+    if (sessionId && injector && injectors.get(sessionId) === injector) injectors.delete(sessionId);
     parkedExit = new Promise((resolve) => { parkedExitResolve = resolve; });
     parkedExits.set(sessionId, parkedExit);
     const runOptions = parkedRunOptions(options);
@@ -1436,6 +1489,21 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     }
     let heldPrompt = createHeldPromptStream(promptMessages);
     releasePromptStream = heldPrompt.release;
+    injector = (text) => {
+      if (parked || !heldPrompt.push({
+        type: 'user',
+        message: { role: 'user', content: text },
+        parent_tool_use_id: null,
+        timestamp: new Date().toISOString(),
+      })) return false;
+      injectedThisTurn = true;
+      if (injectionTimer) {
+        clearTimeout(injectionTimer);
+        injectionTimer = null;
+      }
+      return true;
+    };
+    if (sessionId) injectors.set(sessionId, injector);
     try {
       queryInstance = createQuery({
         prompt: heldPrompt.stream,
@@ -1465,6 +1533,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     console.log('Starting async generator loop for session:', capturedSessionId || 'NEW');
     for await (const message of queryInstance) {
       sawSdkMessage = true;
+      // the written message's own run started: its `result` releases the process
+      if (injectionTimer && (message.type === 'assistant' || (message.type === 'system' && message.subtype === 'init'))) {
+        clearTimeout(injectionTimer);
+        injectionTimer = null;
+      }
       // A parked turn has nothing more to tell anyone: the process is stopping.
       if (parked) {
         continue;
@@ -1639,9 +1712,20 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         const holdForTurn = sawTaskEventThisTurn ? stillOutstanding : backgroundWorkPending || stillOutstanding;
         backgroundWorkPending = false;
         sawTaskEventThisTurn = false;
+        const injected = injectedThisTurn;
+        injectedThisTurn = false;
         if (holdForTurn) {
           heldForBackgroundWork = true;
           scheduleRelease();
+        } else if (injected) {
+          // a message written into the turn that the model did not take in runs next in this process: wait for it
+          heldForBackgroundWork = false;
+          if (injectionTimer) clearTimeout(injectionTimer);
+          injectionTimer = setTimeout(() => {
+            injectionTimer = null;
+            releasePromptStream();
+          }, INJECTION_WAIT_MS);
+          injectionTimer.unref?.();
         } else {
           // Either nothing was backgrounded, or the background work just
           // reported in — let the CLI exit now, as it always has.
@@ -1765,6 +1849,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       clearTimeout(idleReleaseTimer);
       idleReleaseTimer = null;
     }
+    if (injectionTimer) {
+      clearTimeout(injectionTimer);
+      injectionTimer = null;
+    }
+    if (sessionId && injector && injectors.get(sessionId) === injector) injectors.delete(sessionId);
     releasePromptStream();
     if (parked) {
       parkedExitResolve();

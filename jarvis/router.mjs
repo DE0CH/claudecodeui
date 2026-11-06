@@ -98,6 +98,8 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { Schedules, API_PATH as SCHEDULES_API, ADMIN_PATH as SCHEDULES_ADMIN, PAUSE_PATH as SCHEDULES_PAUSE, deliverKey } from "./schedules.mjs";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOP = "x-jarvis-ui-hop";
 const PEER_AUTH = "x-jarvis-ui-peer";
@@ -111,6 +113,9 @@ export const VIEW_AS_PARAM = "jarvis_view_as";
 const VIEW_AS_HEADER = "x-jarvis-view-as";
 const VIEWER_HEADER = "x-jarvis-viewer";
 const VIEWER_SESSION_HEADER = "x-jarvis-viewer-session";
+/** The router's key on its own schedule deliveries to a person's process (schedules.mjs); a client's copy is dropped. */
+const SCHEDULES_KEY_HEADER = "x-jarvis-schedules-key";
+const SCHEDULES_PANEL = /^\/api\/jarvis\/sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/schedules$/i;
 /** The only writes while viewing as someone (method, path): warming and an upload for a message sent with the override. */
 const VIEW_AS_WRITES = [["POST", "/api/jarvis/warm"], ["POST", "/api/assets/files"]];
 // Paths that always need a signed-in staff member; keep in step with the Access app's destinations and cloudflared's
@@ -451,7 +456,7 @@ function readLimited(req, max) {
  */
 function upstreamHeaders(req, email, extra = {}, viewer = null) {
   const h = { ...req.headers };
-  for (const k of ["x-jarvis-user", VIEWER_HEADER, VIEWER_SESSION_HEADER, HOP, PEER_AUTH, LU_HEADER, SWITCH_TOKEN_HEADER /* switch window */, "proxy-connection", "keep-alive", "te", "trailer"]) delete h[k];
+  for (const k of ["x-jarvis-user", VIEWER_HEADER, VIEWER_SESSION_HEADER, SCHEDULES_KEY_HEADER, HOP, PEER_AUTH, LU_HEADER, SWITCH_TOKEN_HEADER /* switch window */, "proxy-connection", "keep-alive", "te", "trailer"]) delete h[k];
   if (!req.headers.upgrade) delete h.connection;
   if (email) {
     h["x-jarvis-user"] = email;
@@ -733,6 +738,11 @@ export class Router {
     this.peerAuth = peerSecret ? createHash("sha256").update(`jarvis-ui-peer|${peerSecret}`).digest("hex") : "";
     this.draining = false;
     this.sw = new SwitchWindow(this, o); // switch window
+    // Schedules (schedules.mjs): the AI's API, the panel, the admin page and firing; off without a database (or
+    // `schedules: false` in tests)
+    this.schedulesPool = o.schedulesPool ?? null;
+    this.schedules = null;
+    this.schedulesOff = o.schedules === false;
     this.server = http.createServer((req, res) => this.#onRequest(req, res));
     this.server.on("upgrade", (req, socket, head) => this.#onUpgrade(req, socket, head));
     this.server.keepAliveTimeout = 65_000;
@@ -747,6 +757,53 @@ export class Router {
 
   forget(p) { if (this.procs.get(p.email) === p) this.procs.delete(p.email); }
 
+  /** The schedules store, made on first use (a pg Pool of DATABASE_URL); null when there is no database. */
+  async schedulesStore() {
+    if (this.schedulesOff) return null;
+    if (this.schedules) return this.schedules;
+    let pool = this.schedulesPool;
+    if (!pool) {
+      if (!process.env.DATABASE_URL) return null;
+      const { default: pg } = await import("pg");
+      pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 4 });
+      pool.on("error", (e) => log("warn", "schedules pool error", { error: String(e.message || e) }));
+    }
+    this.schedules = new Schedules({
+      pool,
+      token: this.sentFilesToken,
+      admins: this.admins,
+      now: () => this.now(),
+      log,
+      // this replica fires for the persons it serves, never for one the switch moved (or while draining)
+      servesHere: (email) => !this.draining && !this.ownerFor(email) && !this.sw.armedFor({ status: 200, email }),
+      deliver: (email, body) => this.#deliverSchedule(email, body),
+    });
+    return this.schedules;
+  }
+
+  /** POST the person's process's /api/jarvis/schedules/deliver (starting the process if needed): its JSON answer. */
+  async #deliverSchedule(email, body) {
+    const p = await this.#process(email);
+    p.touch();
+    const data = JSON.stringify(body);
+    return await new Promise((resolve, reject) => {
+      const q = http.request({ host: "127.0.0.1", port: p.port, method: "POST", path: "/api/jarvis/schedules/deliver", timeout: 30_000,
+        headers: { "x-jarvis-user": email, [SCHEDULES_KEY_HEADER]: deliverKey(this.ccToken), "content-type": "application/json",
+          "content-length": Buffer.byteLength(data) } }, (res) => {
+        let text = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => { if (text.length < 65536) text += c; });
+        res.on("end", () => {
+          if (res.statusCode !== 200) return reject(new Error(`the process answered ${res.statusCode}`));
+          try { resolve(JSON.parse(text)); } catch { reject(new Error("the process answered no JSON")); }
+        });
+      });
+      q.on("timeout", () => q.destroy(new Error("the process did not answer")));
+      q.on("error", reject);
+      q.end(data);
+    });
+  }
+
   async listen() {
     await this.refreshPeers();
     await new Promise((r) => this.server.listen(this.port, this.host, r));
@@ -757,6 +814,7 @@ export class Router {
     this.purgeFirst.unref();
     this.purgeTimer = setInterval(() => void this.purgeWake(), this.purgeEveryMs);
     this.purgeTimer.unref();
+    void this.schedulesStore().then((s) => s?.start()).catch((e) => log("warn", "schedules off", { error: String(e.message || e) }));
     if (this.peersName) {
       this.peerTimer = setInterval(() => void this.refreshPeers(), 5000);
       this.peerTimer.unref();
@@ -808,6 +866,29 @@ export class Router {
     const running = p ? await p.runningChats() : 0;
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify({ holds: !!p, running, draining: this.draining }));
+  }
+
+  /** The AI's schedules API (schedules.mjs), from egress's `schedules` route. */
+  async #schedulesApi(req, res) {
+    const store = await this.schedulesStore().catch(() => null);
+    if (!store) { req.resume(); res.writeHead(404, { "cache-control": "no-store" }); return res.end(); }
+    let body = "";
+    try { body = await readLimited(req, 64 * 1024); } catch {
+      res.writeHead(413, { "content-type": "application/json", "cache-control": "no-store" });
+      return res.end(JSON.stringify({ code: "too_large", message: "the body is over 64 KiB" }));
+    }
+    return store.handleApi(req, res, body);
+  }
+
+  /** /ops/schedules and its pause switch, for an admin (schedules.mjs). */
+  async #schedulesAdmin(req, res, actor) {
+    const store = await this.schedulesStore().catch(() => null);
+    if (!store) { req.resume(); return page(res, 404, "Not found", "Schedules are off here."); }
+    let body = "";
+    if (req.method === "POST") {
+      try { body = await readLimited(req, 4096); } catch { /* too large: nothing set */ }
+    } else req.resume();
+    return store.handleAdmin(req, res, actor, body);
   }
 
   /** POST /__jarvis/sent-files/snapshot {toolUseId, files: [/workspace/…]}: copy-on-write copies (top of this file). */
@@ -1041,6 +1122,7 @@ export class Router {
     }
     if (url.startsWith(PEER_PATH)) return this.#peerHolds(req, res);
     if (url === SENT_FILES_PATH || url.startsWith(SENT_FILES_PATH + "?")) return this.#sentFilesSnapshot(req, res);
+    if (url === SCHEDULES_API || url.startsWith(SCHEDULES_API + "/") || url.startsWith(SCHEDULES_API + "?")) return this.#schedulesApi(req, res);
     if (this.sw.handles(req, res)) return; // switch window: its endpoints, and the pass-on once armed for everyone
     const who = await this.#identify(req);
     if (this.sw.passOnPerson(req, res, who)) return; // switch window: the pass-on once armed for this person
@@ -1054,6 +1136,8 @@ export class Router {
       return res.end(JSON.stringify({ success: false, error: { code: "VIEW_AS_REFUSED", message: "This view-as link is not valid for this account, or has expired." } }));
     }
     if (who.status === 403) return page(res, 403, "沒有權限", `${who.email} 沒有使用 YYC AI 的權限。This account is not allowed.`);
+    const schedulesPath = url.split("?")[0];
+    if (schedulesPath === SCHEDULES_ADMIN || schedulesPath === SCHEDULES_PAUSE) return this.#schedulesAdmin(req, res, who.actor);
     if (url === "/ops" || url.startsWith("/ops/") || url.startsWith("/ops?")) return this.#ops(req, res, who.actor);
     const pathname = url.split("?")[0];
     if (pathname === VIEW_AS_PATH) return this.#viewAsStart(req, res, who.actor);
@@ -1072,6 +1156,11 @@ export class Router {
       req.resume();
       res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
       return res.end(JSON.stringify({ success: false, error: { code: "VIEW_AS_READ_ONLY", message: "Read-only while viewing as someone else." } }));
+    }
+    const panel = req.method === "GET" ? SCHEDULES_PANEL.exec(pathname) : null;
+    if (panel) {
+      const store = await this.schedulesStore().catch(() => null);
+      if (store) return store.handlePanel(res, who.email, panel[1].toLowerCase());
     }
     const route = await this.#route(req, who.email);
     if (route.peer) return this.#forwardHttp(req, res, route.peer, route.hop, who.email);
@@ -1451,6 +1540,7 @@ export class Router {
   async drain() {
     if (this.draining) return;
     this.draining = true;
+    this.schedules?.stop();
     this.holderCache.clear();
     log("info", "draining", { processes: this.procs.size, forwarded: this.forwarded.size });
     const deadline = this.now() + this.drainMs;
