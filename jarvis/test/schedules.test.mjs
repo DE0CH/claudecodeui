@@ -189,7 +189,7 @@ db("firing: idle, mid-turn, busy, late, paused, deleted — each once", async ()
     const s = w.make();
     const { body } = await call(s, w.conversation, "POST", "", { prompt: "看看進度", cron: "0 9 * * *" });
     const due = (ago) => w.pool.query(`update cc_shared.schedules set next_at = now() - make_interval(secs => $2) where id = $1`, [body.id, ago]);
-    const runs = async () => (await w.pool.query(`select outcome from cc_shared.schedule_runs where schedule_id = $1 order by due_at`, [body.id])).rows.map((r) => r.outcome);
+    const runs = async () => (await w.pool.query(`select outcome from cc_shared.schedule_runs where schedule_id = $1 order by at, due_at`, [body.id])).rows.map((r) => r.outcome);
     assert.equal(await s.tick(), 0, "nothing due");
     await due(5);
     w.setReply("sent");
@@ -228,7 +228,7 @@ db("firing: idle, mid-turn, busy, late, paused, deleted — each once", async ()
     assert.equal((await runs()).at(-1), "skipped_paused");
     await s.setPaused("admin@example.com", false);
     const view = await s.adminView();
-    assert.ok(view.schedules.some((x) => x.id === body.id && x.runs.length === 7));
+    assert.ok(view.schedules.some((x) => x.id === body.id && x.runs.length === 6));
     // exactly once across two replicas ticking at the same time
     const other = w.make();
     await due(5);
