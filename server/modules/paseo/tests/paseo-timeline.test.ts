@@ -127,6 +127,46 @@ describe('SessionTimeline', () => {
     assert.ok(JSON.stringify(timeline.rows[1]?.item).includes('Which colour?\\"=\\"Blue'), 'the answer is on the card');
   });
 
+  // DECISIONS 17: a question's card says when it was answered, so the app leaves the wait out of the working time
+  it('puts the answer time on a question answered live and on one answered after the restart', () => {
+    const timeline = new SessionTimeline(toRelative);
+    const input = { questions: [{ question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] }] };
+    const answeredAt = (i: number) => (timeline.rows[i]?.item as { metadata?: { answeredAt?: string } }).metadata?.answeredAt;
+    timeline.apply(message({ kind: 'text', role: 'user', content: 'pick one', timestamp: '2026-11-06T05:36:00.000Z' }));
+    timeline.apply(message({ kind: 'tool_use', toolId: 'q1', toolName: 'AskUserQuestion', toolInput: input, timestamp: '2026-11-06T05:36:10.000Z' }));
+    timeline.apply(message({ kind: 'tool_result', toolId: 'q1', toolResult: { content: 'The user answered: "Which colour?"="Red".' }, timestamp: '2026-11-06T05:40:00.000Z' }));
+    assert.equal(answeredAt(1), '2026-11-06T05:40:00.000Z', 'live: the result is the answer');
+    timeline.apply(message({ kind: 'tool_use', toolId: 'b1', toolName: 'Bash', toolInput: { command: 'ls' }, timestamp: '2026-11-06T05:40:02.000Z' }));
+    timeline.apply(message({ kind: 'tool_result', toolId: 'b1', toolResult: { content: 'x' }, timestamp: '2026-11-06T05:40:03.000Z' }));
+    assert.equal(answeredAt(2), undefined, 'not a question');
+    timeline.apply(message({ kind: 'tool_use', toolId: 'q2', toolName: 'AskUserQuestion', toolInput: input, timestamp: '2026-11-06T05:40:05.000Z' }));
+    timeline.apply(message({
+      kind: 'tool_result', toolId: 'q2', isError: true, timestamp: '2026-11-06T06:18:30.000Z',
+      toolResult: { content: "[Tool call interrupted: the session ended before this call's result was recorded, so x", isError: true },
+    }));
+    assert.equal(answeredAt(3), undefined, 'closed by the restart: not answered yet');
+    timeline.apply(message({ kind: 'text', role: 'user', content: 'The user answered: "Which colour?"="Blue".', timestamp: '2026-11-06T06:18:37.000Z' }));
+    assert.equal(answeredAt(3), '2026-11-06T06:18:37.000Z', 'parked: the answer message is the answer');
+    timeline.apply(message({ kind: 'tool_use', toolId: 'p1', toolName: 'ExitPlanMode', toolInput: { plan: '1. go' }, timestamp: '2026-11-06T06:19:00.000Z' }));
+    timeline.apply(message({ kind: 'tool_result', toolId: 'p1', toolResult: { content: 'User has approved your plan.' }, timestamp: '2026-11-06T06:20:00.000Z' }));
+    const plan = timeline.rows[4]?.item as { name: string; metadata?: Record<string, unknown> };
+    assert.deepEqual([plan.name, plan.metadata?.answeredAt, plan.metadata?.approved], ['plan_approval', '2026-11-06T06:20:00.000Z', true]);
+  });
+
+  it("counts a turn's working time from its prompt without its questions' waits", () => {
+    const timeline = new SessionTimeline(toRelative);
+    timeline.apply(message({ kind: 'text', role: 'user', content: 'go', timestamp: '2026-11-06T05:00:00.000Z' }), 'T');
+    timeline.apply(message({ kind: 'tool_use', toolId: 'q1', toolName: 'AskUserQuestion', toolInput: { questions: [] }, timestamp: '2026-11-06T05:00:05.000Z' }), 'T');
+    const now = Date.parse('2026-11-06T05:30:00.000Z');
+    assert.equal(timeline.workingSince('T', now), '2026-11-06T05:25:00.000Z', 'stands still while the question waits');
+    timeline.apply(message({ kind: 'tool_result', toolId: 'q1', toolResult: { content: 'The user answered: x' }, timestamp: '2026-11-06T05:20:05.000Z' }), 'T');
+    assert.equal(timeline.workingSince('T', now), '2026-11-06T05:20:00.000Z');
+    assert.equal(timeline.workingSince('other', now), undefined);
+    const plain = new SessionTimeline(toRelative);
+    plain.apply(message({ kind: 'text', role: 'user', content: 'go' }), 'U');
+    assert.equal(plain.workingSince('U', now), undefined, "no question: the run's own start");
+  });
+
   it('a message sent instead of answering stays the person\'s message', () => {
     const timeline = new SessionTimeline(toRelative);
     timeline.apply(message({ kind: 'tool_use', toolId: 'q1', toolName: 'AskUserQuestion', toolInput: { questions: [] } }));

@@ -272,9 +272,11 @@ export class SessionTimeline {
         const output = toolOutput(message);
         const closed = isClosedQuestion(name, output);
         if (closed) this.closedQuestions.set(callId, name);
+        // a question's result is its answer: when it came is when the wait for the person ended (DECISIONS 17)
+        const answeredAt = !closed && QUESTION_TOOLS.has(name) ? timestamp : undefined;
         const item = closed
           ? this.finishedTool(callId, name, known?.input, null, false)
-          : this.finishedTool(callId, name, known?.input, output, message.isError === true || message.toolResult?.isError === true);
+          : this.finishedTool(callId, name, known?.input, output, message.isError === true || message.toolResult?.isError === true, answeredAt);
         if (!item) return [];
         const row = this.toolRows.get(callId);
         if (!row) {
@@ -305,7 +307,7 @@ export class SessionTimeline {
     const changed: PaseoTimelineRow[] = [];
     for (const [callId, name] of this.closedQuestions) {
       const row = this.toolRows.get(callId);
-      const item = this.finishedTool(callId, name, this.toolInputs.get(callId)?.input, text, false);
+      const item = this.finishedTool(callId, name, this.toolInputs.get(callId)?.input, text, false, timestamp);
       if (!row || !item) continue;
       const seq = this.nextSeq++;
       row.item = item;
@@ -318,13 +320,47 @@ export class SessionTimeline {
     return changed;
   }
 
-  private finishedTool(callId: string, name: string, input: unknown, output: unknown, failed: boolean): ToolCallTimelineItem | null {
+  /**
+   * A finished tool call's item. `answeredAt` (a question's): when the person answered it, as `metadata.answeredAt`;
+   * the app leaves the time from the call to it out of the turn's working time (YYC DECISIONS 17).
+   */
+  private finishedTool(callId: string, name: string, input: unknown, output: unknown, failed: boolean, answeredAt?: string): ToolCallTimelineItem | null {
+    const answered = answeredAt ? { answeredAt } : undefined;
     if (failed) {
       const error = typeof output === 'string' ? { message: output } : output ?? { message: 'Tool call failed' };
-      return mapClaudeFailedToolCall({ callId, name, input, output, error });
+      return mapClaudeFailedToolCall({ callId, name, input, output, error, ...(answered ? { metadata: answered } : {}) });
     }
-    const metadata = name === 'SendUserFile' ? { sentFiles: sentFilesOf(output, this.toRelative, callId) } : undefined;
+    const metadata = name === 'SendUserFile' ? { sentFiles: sentFilesOf(output, this.toRelative, callId) } : answered;
     return mapClaudeCompletedToolCall({ callId, name, input, output, ...(metadata ? { metadata } : {}) });
+  }
+
+  /**
+   * When turn `turnId`'s working-time counter starts (YYC DECISIONS 17): its prompt's time moved on by the time its
+   * questions waited (to their answer; a question not answered yet, or whose answer has not landed, waits until
+   * `now`). Undefined when the timeline has no prompt row or no question of that turn (the run's own start then).
+   */
+  workingSince(turnId: string, now = Date.now()): string | undefined {
+    const rows = this.rows.filter((row) => row.turnId === turnId);
+    const prompt = rows.find((row) => row.item.type === 'user_message');
+    const start = prompt ? Date.parse(prompt.timestamp) : NaN;
+    if (!Number.isFinite(start)) return undefined;
+    let waited = 0;
+    let questions = 0;
+    for (const row of rows) {
+      if (row.item.type !== 'tool_call' || !QUESTION_TOOLS.has(this.toolInputs.get(row.item.callId)?.name ?? '')) continue;
+      const asked = Date.parse(row.timestamp);
+      if (!Number.isFinite(asked)) continue;
+      questions += 1;
+      const answeredAt = Date.parse(String(row.item.metadata?.answeredAt ?? ''));
+      waited += Math.max(0, (Number.isFinite(answeredAt) ? answeredAt : now) - asked);
+    }
+    if (questions === 0) return undefined;
+    return new Date(Math.min(start + waited, now)).toISOString();
+  }
+
+  /** The turn id of the row of tool call `callId` (a parked question's turn, which its answer resumes), if any. */
+  turnOfTool(callId: string): string | undefined {
+    return this.toolRows.get(callId)?.turnId;
   }
 
   /**

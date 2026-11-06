@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { openQuestions } from '../../jarvis/jarvis-open-questions.js';
 import { answersByQuestionText, paseoHub, type HubEvent } from '../paseo-hub.js';
 import { handlePaseoConnection } from '../paseo-connection.js';
+import { SessionTimeline } from '../paseo-timeline.js';
 
 type HubInternals = {
   onChatFrame(frame: Record<string, unknown>): void;
@@ -199,6 +200,36 @@ describe('AskUserQuestion in the Paseo UI', () => {
     } finally {
       hub.isRunning = running;
       openQuestions.close('r8', 'answered');
+    }
+  });
+
+  // DECISIONS 17: the answer resumes the question's own turn (one turn, as on the new stack), and its working-time
+  // counter goes on from where it stood when the question was asked
+  it("the answer resumes the question's turn, whose counter leaves the wait out", async () => {
+    start();
+    hub.socket = { deliver: (frame) => { delivered.push(frame); openQuestions.answer(String(frame.requestId), { allow: frame.allow === true, updatedInput: frame.updatedInput }); } };
+    const running = hub.isRunning;
+    hub.isRunning = () => false;
+    const timeline = new SessionTimeline(() => null);
+    const at = (iso: string) => ({ id: iso, sessionId: 's9', provider: 'claude', timestamp: iso });
+    timeline.apply({ ...at('2026-11-01T05:36:00.000Z'), kind: 'text', role: 'user', content: 'ask me' } as never, 'turn-q');
+    timeline.apply({ ...at('2026-11-01T05:36:10.000Z'), kind: 'tool_use', toolId: 'toolu_r9', toolName: 'AskUserQuestion', toolInput: INPUT } as never, 'turn-q');
+    (paseoHub as unknown as { timelines: Map<string, SessionTimeline> }).timelines.set('s9', timeline);
+    await keep('r9', 's9');
+    try {
+      assert.equal(paseoHub.answer('s9', 'r9', { behavior: 'allow', updatedInput: { ...INPUT, answers: { 語言: 'English' } } }), true);
+      const started = events.find((e) => e.type === 'turn' && e.sessionId === 's9' && e.phase === 'started');
+      assert.equal(started && 'turnId' in started ? started.turnId : null, 'turn-q', 'the same turn');
+      hub.isRunning = () => true;
+      // the answer lands (the resumed Claude Code's message, after its sandbox was made) and the reply follows
+      timeline.apply({ ...at('2026-11-01T05:36:12.000Z'), kind: 'tool_result', toolId: 'toolu_r9', isError: true, toolResult: { content: "[Tool call interrupted: the session ended before this call's result was recorded, so x", isError: true } } as never, 'turn-q');
+      timeline.apply({ ...at('2026-11-01T06:18:37.000Z'), kind: 'text', role: 'user', content: 'The user answered: "語言"="English".' } as never, 'turn-q');
+      // 10 s before the question
+      assert.equal(paseoHub.activeTurn('s9')?.startedAt, new Date(Date.parse('2026-11-01T06:18:37.000Z') - 10_000).toISOString());
+      assert.equal(paseoHub.activeTurn('s9')?.turnId, 'turn-q');
+    } finally {
+      hub.isRunning = running;
+      openQuestions.close('r9', 'answered');
     }
   });
 

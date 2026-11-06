@@ -280,8 +280,11 @@ class PaseoHub extends EventEmitter {
   activeTurn(sessionId: string): { turnId: string; startedAt: string } | null {
     if (!this.isRunning(sessionId)) return null;
     const run = chatRunRegistry.getRun(sessionId) as { startedAt?: number | string } | undefined;
-    const startedAt = run?.startedAt ? new Date(run.startedAt).toISOString() : new Date().toISOString();
-    return { turnId: this.turnIdFor(sessionId), startedAt };
+    const turnId = this.turnIdFor(sessionId);
+    // a turn resumed by its question's answer counts on from its prompt, without the wait (DECISIONS 17)
+    const since = this.timelines.get(sessionId)?.workingSince(turnId);
+    const startedAt = since ?? (run?.startedAt ? new Date(run.startedAt).toISOString() : new Date().toISOString());
+    return { turnId, startedAt };
   }
 
   private turnIdFor(sessionId: string): string {
@@ -613,7 +616,9 @@ class PaseoHub extends EventEmitter {
     const kept = Boolean(openQuestions.get(requestId));
     this.deliverAnswer(requestId, request, response);
     if (kept && openQuestions.get(requestId)?.answer && openQuestions.allAnswered(sessionId) && !this.isRunning(sessionId)) {
-      const turnId = randomUUID();
+      // the answer resumes the question's turn (as on the new stack): one turn, one working time without the wait
+      const toolUseId = openQuestions.get(requestId)?.toolUseId;
+      const turnId = (toolUseId ? this.timelines.get(sessionId)?.turnOfTool(toolUseId) : undefined) ?? randomUUID();
       this.turnIds.set(sessionId, turnId);
       this.pendingUserMessages.set(sessionId, { text: '', clientMessageId: `answer:${requestId}` });
       this.announcePreparing(sessionId);
