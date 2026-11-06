@@ -87,6 +87,19 @@ describe('SessionTimeline', () => {
     assert.deepEqual(row?.collapsed, ['tool_lifecycle']);
   });
 
+  it("shows a Bash call's stdout and stderr (Claude Code's toolUseResult) as its output", () => {
+    const timeline = new SessionTimeline(toRelative);
+    timeline.apply(message({ kind: 'tool_use', toolId: 't1', toolName: 'Bash', toolInput: { command: 'curl x' } }));
+    timeline.apply(message({
+      kind: 'tool_result',
+      toolId: 't1',
+      toolResult: { content: '{"id":"sch_1"}', toolUseResult: { stdout: '{"id":"sch_1"}', stderr: 'warn', interrupted: false } },
+    }));
+    const detail = (timeline.rows[0]?.item as { detail: { type: string; output?: string } }).detail;
+    assert.equal(detail.type, 'shell');
+    assert.equal(detail.output, '{"id":"sch_1"}\nwarn');
+  });
+
   it('marks a failed tool call', () => {
     const timeline = new SessionTimeline(toRelative);
     timeline.apply(message({ kind: 'tool_use', toolId: 't1', toolName: 'Read', toolInput: { file_path: '/x' } }));

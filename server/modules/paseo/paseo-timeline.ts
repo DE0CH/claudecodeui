@@ -182,9 +182,23 @@ const ANSWER_PREFIXES = [
 
 function toolOutput(message: NormalizedMessage): unknown {
   const result = message.toolResult;
-  if (result?.toolUseResult !== undefined) return result.toolUseResult;
-  if (message.toolUseResult !== undefined) return message.toolUseResult;
+  if (result?.toolUseResult !== undefined) return shellResult(result.toolUseResult);
+  if (message.toolUseResult !== undefined) return shellResult(message.toolUseResult);
   return result?.content ?? message.content ?? null;
+}
+
+/**
+ * Claude Code's Bash result is `{stdout, stderr, interrupted, …}`; Paseo's shell parser reads `output` and knows no
+ * `stdout`, so without this every command's row came without its output (and the schedules card, which reads the
+ * API's answer from it, never showed).
+ */
+function shellResult(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const { stdout, stderr } = value as { stdout?: unknown; stderr?: unknown };
+  if (typeof stdout !== 'string' && typeof stderr !== 'string') return value;
+  if ('output' in value) return value;
+  const parts = [stdout, stderr].filter((part): part is string => typeof part === 'string' && part.length > 0);
+  return { ...value, output: parts.join('\n') };
 }
 
 export class SessionTimeline {
