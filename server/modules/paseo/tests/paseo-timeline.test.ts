@@ -158,7 +158,7 @@ describe('SessionTimeline', () => {
     timeline.apply(message({ kind: 'text', role: 'user', content: 'go', timestamp: '2026-11-06T05:00:00.000Z' }), 'T');
     timeline.apply(message({ kind: 'tool_use', toolId: 'q1', toolName: 'AskUserQuestion', toolInput: { questions: [] }, timestamp: '2026-11-06T05:00:05.000Z' }), 'T');
     const now = Date.parse('2026-11-06T05:30:00.000Z');
-    assert.equal(timeline.workingSince('T', now), '2026-11-06T05:25:00.000Z', 'stands still while the question waits');
+    assert.equal(timeline.workingSince('T', now), '2026-11-06T05:29:55.000Z', 'stands still at the 5 s worked before the question');
     timeline.apply(message({ kind: 'tool_result', toolId: 'q1', toolResult: { content: 'The user answered: x' }, timestamp: '2026-11-06T05:20:05.000Z' }), 'T');
     assert.equal(timeline.workingSince('T', now), '2026-11-06T05:20:00.000Z');
     assert.equal(timeline.workingSince('other', now), undefined);
