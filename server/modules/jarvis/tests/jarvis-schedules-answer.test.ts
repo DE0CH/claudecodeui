@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { get, initializeDatabase, run } from '@/modules/database/index.js';
 import { releaseTestDatabase } from '@/modules/database/testing.js';
+import { deleteSchedulesOf } from '@/modules/jarvis/jarvis-conversations.js';
 import { recordScheduleAnswers } from '@/modules/jarvis/jarvis-schedules.routes.js';
 import {
   awaitScheduleAnswer,
@@ -80,6 +81,42 @@ test('the route records answered, answered mid-turn and unanswered, and waits fo
     await recordScheduleAnswers([`${id('f')}:${due}`], true, undefined, undefined, async () => { tries += 1; });
     assert.equal(tries, 5);
     await run('DELETE FROM cc_shared.schedule_runs WHERE schedule_id LIKE ?', [`sch_${tag}%`]);
+  } finally {
+    await releaseTestDatabase();
+    delete process.env.DATABASE_PATH;
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('a conversation deleted for good takes its schedules with it, but not the rows moved to the new stack', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'jarvis-schedules-delete-'));
+  process.env.DATABASE_PATH = path.join(temp, 'delete.db');
+  try {
+    await initializeDatabase();
+    await run('CREATE SCHEMA IF NOT EXISTS cc_shared');
+    await run(`CREATE TABLE IF NOT EXISTS cc_shared.schedules (
+      id text primary key, person text not null, conversation_id text not null, kind text not null, prompt text not null,
+      at timestamptz, cron text, tz text not null, until timestamptz, describe text not null, next_at timestamptz,
+      state text not null, created_at timestamptz not null default now(), created_by text not null,
+      updated_at timestamptz not null default now(), deleted_at timestamptz)`);
+    const conv = randomUUID();
+    const other = randomUUID();
+    const add = (id: string, c: string, state: string) =>
+      run(`INSERT INTO cc_shared.schedules (id, person, conversation_id, kind, prompt, cron, tz, describe, next_at, state, created_by)
+           VALUES (?, 'p@example.com', ?, 'cron', 'x', '0 9 * * *', 'Asia/Hong_Kong', 'd', now(), ?, 'p@example.com')`, [id, c, state]);
+    const tag = randomUUID().replace(/-/g, '').slice(0, 12);
+    await add(`sch_${tag}1`, conv, 'active');
+    await add(`sch_${tag}2`, conv, 'done');
+    await add(`sch_${tag}3`, conv, 'moved');
+    await add(`sch_${tag}4`, other, 'active');
+    await deleteSchedulesOf(conv);
+    const state = async (id: string) =>
+      (await get<{ state: string; next_at: string | null }>('SELECT state, next_at FROM cc_shared.schedules WHERE id = ?', [id]));
+    assert.deepEqual(await state(`sch_${tag}1`), { state: 'deleted', next_at: null });
+    assert.equal((await state(`sch_${tag}2`))?.state, 'deleted');
+    assert.equal((await state(`sch_${tag}3`))?.state, 'moved');
+    assert.equal((await state(`sch_${tag}4`))?.state, 'active');
+    await run('DELETE FROM cc_shared.schedules WHERE id LIKE ?', [`sch_${tag}%`]);
   } finally {
     await releaseTestDatabase();
     delete process.env.DATABASE_PATH;

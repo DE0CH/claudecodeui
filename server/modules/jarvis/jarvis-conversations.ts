@@ -7,7 +7,7 @@
 import { copyFile, cp, mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { jarvisTurnsDb } from '@/modules/database/index.js';
+import { jarvisTurnsDb, run } from '@/modules/database/index.js';
 import { cloneTree } from '@/modules/jarvis/jarvis-clone.js';
 import { conversationSentDir, conversationUploads, conversationWorkspaceDir, isConversationId, jarvisEnabled, jarvisLocal } from '@/modules/jarvis/jarvis-config.js';
 import { releaseSandbox } from '@/modules/jarvis/sandbox-process.js';
@@ -17,7 +17,21 @@ type Deps = {
   release: (conversationId: string) => Promise<void>;
   removeDir: (dir: string) => Promise<void>;
   revokeShares?: (conversationId: string) => Promise<void>;
+  deleteSchedules?: (conversationId: string) => Promise<void>;
 };
+
+/**
+ * A conversation deleted for good takes its schedules with it (the router's cc_shared.schedules, jarvis/schedules.mjs;
+ * magpie's rows go with their conversation): they are marked `deleted` (their runs kept, as the AI's own delete does),
+ * so none fires again or stays on the admin page. Rows moved to the new stack are magpie's and left as they are.
+ */
+export async function deleteSchedulesOf(conversationId: string): Promise<void> {
+  const exists = await run(`SELECT 1 AS one WHERE to_regclass('cc_shared.schedules') IS NOT NULL`);
+  if (!exists.changes) return;
+  const r = await run(`UPDATE cc_shared.schedules SET state = 'deleted', next_at = NULL, deleted_at = now(), updated_at = now()
+    WHERE conversation_id = ? AND state NOT IN ('deleted', 'moved')`, [conversationId]);
+  if (r.changes) console.log('[jarvis] schedules of a deleted conversation deleted', { sessionId: conversationId, schedules: r.changes });
+}
 
 /**
  * Empties the folder, then removes it. ws/ itself belongs to root on the volume (the sandbox hosts make each
@@ -45,6 +59,7 @@ const defaultDeps: Deps = {
   release: releaseSandbox,
   removeDir: removeWorkspaceDir,
   revokeShares: revokeSharesOf,
+  deleteSchedules: deleteSchedulesOf,
 };
 
 /**
@@ -54,6 +69,11 @@ const defaultDeps: Deps = {
 export async function onConversationDeleted(sessionId: string, deps: Deps = defaultDeps): Promise<void> {
   if (!jarvisEnabled() || jarvisLocal() || !isConversationId(sessionId)) return;
   await deps.revokeShares?.(sessionId);
+  try {
+    await deps.deleteSchedules?.(sessionId);
+  } catch (error) {
+    console.warn('[jarvis] schedules of a deleted conversation not deleted', { sessionId, error: error instanceof Error ? error.message : error });
+  }
   try {
     await deps.release(sessionId);
   } catch (error) {
