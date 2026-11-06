@@ -347,8 +347,11 @@ function checkPrompt(p) {
 
 /** The words of a run's outcome on the admin page. */
 export const OUTCOME_WORDS = {
-  sent: "sent (a new turn)",
-  sent_mid_turn: "sent into the running turn",
+  answered: "answered (a new turn)",
+  answered_mid_turn: "answered (sent into the running turn)",
+  unanswered: "sent, not answered (the turn failed or was stopped)",
+  sent: "sent (a new turn), not answered yet",
+  sent_mid_turn: "sent into the running turn, not answered yet",
   pending: "being delivered into the running turn",
   redeliver: "to be sent again",
   skipped_late: "skipped: the service was down for more than 10 minutes",
@@ -423,6 +426,7 @@ export class Schedules {
     this.log = opts.log ?? (() => {});
     this.ready = null;
     this.owners = new Map();
+    this.schemas = new Map();
     this.timer = null;
     this.firing = false;
   }
@@ -442,21 +446,49 @@ export class Schedules {
 
   nowSec() { return Math.floor(this.now() / 1000); }
 
-  /** The owner of conversation `id`: the person whose CloudCLI schema has its sessions row (cached). */
-  async ownerOf(id) {
-    if (this.owners.has(id)) return this.owners.get(id);
+  /** The CloudCLI schema (`cc_u…`) that has conversation `id`'s sessions row (cached), or null. */
+  async schemaOf(id) {
+    if (this.schemas.has(id)) return this.schemas.get(id);
     const { rows: schemas } = await this.pool.query(
       `select nspname from pg_namespace where nspname like 'cc\\_u%' and to_regclass(quote_ident(nspname) || '.sessions') is not null`);
     for (const { nspname } of schemas) {
       const { rows } = await this.pool.query(`select 1 from "${nspname}".sessions where session_id = $1 limit 1`, [id]);
       if (!rows.length) continue;
-      const { rows: users } = await this.pool.query(`select username from "${nspname}".users order by id limit 1`);
-      const email = String(users[0]?.username ?? "").trim().toLowerCase();
-      if (!email) return null;
-      this.owners.set(id, email);
-      return email;
+      this.schemas.set(id, nspname);
+      return nspname;
     }
     return null;
+  }
+
+  /** The owner of conversation `id`: the person whose CloudCLI schema has its sessions row (cached). */
+  async ownerOf(id) {
+    if (this.owners.has(id)) return this.owners.get(id);
+    const nspname = await this.schemaOf(id);
+    if (!nspname) return null;
+    const { rows: users } = await this.pool.query(`select username from "${nspname}".users order by id limit 1`);
+    const email = String(users[0]?.username ?? "").trim().toLowerCase();
+    if (!email) return null;
+    this.owners.set(id, email);
+    return email;
+  }
+
+  /**
+   * `rows` with `title`: each conversation's name as its sidebar shows it (`sessions.custom_name`), as magpie joins
+   * `conversations.title` (the AI's list and one schedule, and the admin page; the panel's own list goes without it).
+   */
+  async withTitles(rows) {
+    const titles = new Map();
+    for (const id of new Set(rows.map((r) => r.conversation_id))) {
+      try {
+        const nspname = await this.schemaOf(id);
+        if (!nspname) continue;
+        const { rows: [t] } = await this.pool.query(`select custom_name from "${nspname}".sessions where session_id = $1`, [id]);
+        if (t?.custom_name) titles.set(id, t.custom_name);
+      } catch (e) {
+        this.log("warn", "schedules: a conversation title was not read", { conversation: id, error: String(e?.message || e) });
+      }
+    }
+    return rows.map((r) => (titles.has(r.conversation_id) ? { ...r, title: titles.get(r.conversation_id) } : r));
   }
 
   api(row, runs = undefined, title = false) {
@@ -518,14 +550,15 @@ export class Schedules {
   async list(person) {
     const { rows } = await this.pool.query(
       `select ${COLUMNS} from ${SCHEMA}.schedules where person = $1 and state not in ('deleted', 'moved') order by created_at desc`, [person]);
-    return { schedules: rows.map((r) => this.api(r)) };
+    return { schedules: (await this.withTitles(rows)).map((r) => this.api(r, undefined, true)) };
   }
 
   async get(person, id) {
     const row = await this.one(id, person);
     if (!row) throw new NotFound("not found");
     const runs = await this.runsOf([id]);
-    return this.api(row, runs.get(id));
+    const [titled] = await this.withTitles([row]);
+    return this.api(titled, runs.get(id), true);
   }
 
   async update(person, id, body) {
@@ -602,7 +635,7 @@ export class Schedules {
     return {
       pausedAll: !!s?.paused_all, ...(s?.paused_by ? { pausedBy: s.paused_by } : {}),
       ...(s?.paused_at ? { pausedAt: new Date(s.paused_at).toISOString() } : {}),
-      schedules: rows.map((r) => this.api(r, runs.get(r.id))),
+      schedules: (await this.withTitles(rows)).map((r) => this.api(r, runs.get(r.id), true)),
     };
   }
 

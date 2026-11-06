@@ -8,13 +8,23 @@
  *                                        result or when the model stops, as a message typed mid-turn)
  *     → 200 {outcome: "skipped_deleted"} the conversation is gone or in Recently deleted
  *     → 200 {outcome: "busy"}            a turn is starting (its sandbox is being made): the router tries again
+ *
+ * The answer (the approved mock's 已回覆): a delivered message's run (`key` = `<schedule>:<due, Unix s>`, the router's
+ * row in cc_shared.schedule_runs) waits for the conversation's next answer (claude-runtime's awaitScheduleAnswer); when
+ * its result comes the run becomes `answered` / `answered_mid_turn`, or `unanswered` when the turn failed or was
+ * stopped (recordScheduleAnswers). The router writes the row after this answer, so a missing row is waited for.
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
 
 import express, { type Request, type Response } from 'express';
 
-import { sessionsDb, userDb } from '@/modules/database/index.js';
-import { injectClaudeSDKMessage } from '@/modules/providers/list/claude/claude-runtime.provider.js';
+import { run, sessionsDb, userDb } from '@/modules/database/index.js';
+import {
+  awaitScheduleAnswer,
+  injectClaudeSDKMessage,
+  onScheduleAnswer,
+  settleScheduleAnswers,
+} from '@/modules/providers/list/claude/claude-runtime.provider.js';
 import { chatRunRegistry, runDetachedChatTurn } from '@/modules/websocket/index.js';
 import type { ProviderRuntimeGateway } from '@/modules/websocket/index.js';
 
@@ -34,7 +44,53 @@ export type ScheduleDeps = {
   inject?: (sessionId: string, text: string) => boolean;
   isRunning?: (sessionId: string) => boolean;
   ccToken?: string;
+  /** Records the runs' answers (default recordScheduleAnswers on the process's database). */
+  record?: (keys: string[], answered: boolean) => Promise<void>;
 };
+
+type Exec = (sql: string, params: unknown[]) => Promise<{ changes: number }>;
+
+const ANSWER_SQL = `UPDATE cc_shared.schedule_runs
+  SET outcome = CASE WHEN ?::boolean THEN (CASE outcome WHEN 'sent' THEN 'answered' ELSE 'answered_mid_turn' END) ELSE 'unanswered' END
+  WHERE schedule_id = ? AND due_at = to_timestamp(?::double precision) AND outcome IN ('sent', 'sent_mid_turn')`;
+const RUN_EXISTS_SQL = `SELECT 1 AS one FROM cc_shared.schedule_runs WHERE schedule_id = ? AND due_at = to_timestamp(?::double precision)`;
+
+/**
+ * Writes each run's answer: `answered` / `answered_mid_turn` (from `sent` / `sent_mid_turn`), or `unanswered`. A run
+ * the router has not written yet (it records the run after the delivery's answer, in its fire transaction) is tried
+ * again, about 30 s in all; a run already settled or moved is left as it is.
+ */
+export async function recordScheduleAnswers(
+  keys: string[],
+  answered: boolean,
+  exec: Exec = run,
+  exists: (scheduleId: string, due: number) => Promise<boolean> = async (id, due) =>
+    (await exec(RUN_EXISTS_SQL, [id, due])).changes > 0,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<void> {
+  for (const key of keys) {
+    const at = key.lastIndexOf(':');
+    const scheduleId = key.slice(0, at);
+    const due = Number(key.slice(at + 1));
+    if (at <= 0 || !Number.isFinite(due)) continue;
+    let wait = 1000;
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      try {
+        if ((await exec(ANSWER_SQL, [answered, scheduleId, due])).changes > 0) {
+          console.log('[jarvis] schedule run answered', { schedule: scheduleId, answered });
+          break;
+        }
+        if (await exists(scheduleId, due)) break;
+      } catch (error) {
+        console.warn('[jarvis] schedule answer not recorded', { schedule: scheduleId, error: error instanceof Error ? error.message : String(error) });
+      }
+      if (attempt < 6) {
+        await sleep(wait);
+        wait *= 2;
+      }
+    }
+  }
+}
 
 export function createJarvisSchedulesRouter(
   runtime: ProviderRuntimeGateway,
@@ -44,6 +100,10 @@ export function createJarvisSchedulesRouter(
   const router = express.Router();
   const inject = deps.inject ?? injectClaudeSDKMessage;
   const isRunning = deps.isRunning ?? ((sessionId: string) => chatRunRegistry.isProcessing(sessionId));
+  const record = deps.record ?? ((keys: string[], answered: boolean) => recordScheduleAnswers(keys, answered));
+  onScheduleAnswer((keys: string[], answered: boolean) => {
+    void record(keys, answered).catch(() => undefined);
+  });
 
   router.post('/schedules/deliver', async (req: Request, res: Response) => {
     const token = deps.ccToken ?? process.env.JARVIS_CC_TOKEN ?? '';
@@ -70,6 +130,7 @@ export function createJarvisSchedulesRouter(
     // Claude Code runs for this conversation (a turn, or the process held after one for its background work): the
     // message goes into it now
     if (inject(sessionId, text)) {
+      awaitScheduleAnswer(sessionId, key);
       await hub.appendUserRow(sessionId, text, key).catch(() => undefined);
       console.log('[jarvis] schedule delivered into the running turn', { sessionId });
       res.json({ outcome: 'sent_mid_turn' });
@@ -80,6 +141,7 @@ export function createJarvisSchedulesRouter(
       res.json({ outcome: 'busy' });
       return;
     }
+    awaitScheduleAnswer(sessionId, key);
     if (hub.isStarted()) {
       // a Paseo tab is open in this process: the user row shows at once, as for a typed message
       await hub.send(sessionId, text, `schedule-${key}`);
@@ -87,7 +149,10 @@ export function createJarvisSchedulesRouter(
       const user = await userDb.getFirstUser();
       void runDetachedChatTurn({ sessionId, userId: user ? Number(user.id) : null, content: text }, { runtime })
         .then((result) => {
-          if (!result.started) console.warn(`[jarvis] schedule: the turn did not start (${result.error})`);
+          if (!result.started) {
+            console.warn(`[jarvis] schedule: the turn did not start (${result.error})`);
+            settleScheduleAnswers(sessionId, false);
+          }
         })
         .catch((error) => console.error('[jarvis] schedule turn failed', error instanceof Error ? error.message : error));
     }

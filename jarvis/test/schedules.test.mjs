@@ -118,10 +118,10 @@ async function world() {
   const schema = `cc_u${tag}`;
   await pool.query(`create schema ${schema}`);
   await pool.query(`create table ${schema}.users (id serial primary key, username text not null)`);
-  await pool.query(`create table ${schema}.sessions (session_id text primary key)`);
+  await pool.query(`create table ${schema}.sessions (session_id text primary key, custom_name text)`);
   await pool.query(`insert into ${schema}.users (username) values ($1)`, [person]);
   const conversation = randomUUID();
-  await pool.query(`insert into ${schema}.sessions values ($1)`, [conversation]);
+  await pool.query(`insert into ${schema}.sessions values ($1, '每日新聞摘要')`, [conversation]);
   const delivered = [];
   let reply = "sent";
   const make = (now = Date.now) => new Schedules({
@@ -180,6 +180,26 @@ db("the AI's API: arm, list, read, change, delete; others refused", async () => 
     assert.equal((await call(s, w.conversation, "GET", `/${id}`)).status, 404);
     // the panel: the owner's only
     assert.equal((await s.panel(w.person, w.conversation)).schedules.length, 0);
+  } finally { await w.close(); }
+});
+
+db("the conversation's title: in the AI's list, one schedule and the admin page (as magpie), not the panel's list", async () => {
+  const w = await world();
+  try {
+    const s = w.make();
+    const { body } = await call(s, w.conversation, "POST", "", { prompt: "整理新聞", cron: "30 8 * * 1-5" });
+    assert.equal((await call(s, w.conversation, "GET", "")).body.schedules[0].conversationTitle, "每日新聞摘要");
+    assert.equal((await call(s, w.conversation, "GET", `/${body.id}`)).body.conversationTitle, "每日新聞摘要");
+    const view = await s.adminView();
+    const mine = view.schedules.find((x) => x.id === body.id);
+    assert.equal(mine.conversationTitle, "每日新聞摘要");
+    assert.ok(renderAdmin({ ...view, schedules: [mine] }).includes(`每日新聞摘要 · ${w.conversation}`));
+    assert.equal((await s.panel(w.person, w.conversation)).schedules[0].conversationTitle, undefined);
+    // the process records the answer in the run's outcome; the admin page reads it
+    await w.pool.query(`insert into cc_shared.schedule_runs (schedule_id, due_at, outcome, conversation_id) values ($1, now(), 'answered', $2)`, [body.id, w.conversation]);
+    const answered = (await s.adminView()).schedules.find((x) => x.id === body.id);
+    assert.equal(answered.runs[0].outcome, "answered");
+    assert.ok(renderAdmin({ pausedAll: false, schedules: [answered] }).includes("answered (a new turn)"));
   } finally { await w.close(); }
 });
 

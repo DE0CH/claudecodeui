@@ -128,6 +128,35 @@ const INJECTION_WAIT_MS = 15 * 1000;
 export const JARVIS_DISALLOWED_TOOLS = ['CronCreate', 'CronList', 'CronDelete', 'ScheduleWakeup'];
 // The running turn's writer of extra messages, per app session id (injectClaudeSDKMessage).
 const injectors = new Map();
+// Schedules whose fired message waits for its answer, per app session id: the keys (`<schedule>:<due s>`) the next
+// `result` settles (jarvis-schedules.routes.ts records it as the run's outcome, 已回覆 in the panel).
+const scheduleAnswerWaits = new Map();
+let scheduleAnswerListener = null;
+
+/** Marks schedule run `key` as waiting for session `sessionId`'s next answer (a fired message just went in). */
+export function awaitScheduleAnswer(sessionId, key) {
+  if (!sessionId || !key) return;
+  const keys = scheduleAnswerWaits.get(sessionId) ?? new Set();
+  keys.add(key);
+  scheduleAnswerWaits.set(sessionId, keys);
+}
+
+/** Who is told `(keys, answered)` when a session's answer settles the runs waiting on it. */
+export function onScheduleAnswer(listener) {
+  scheduleAnswerListener = listener;
+}
+
+/** Settles session `sessionId`'s waiting runs: `answered` (the turn's result came) or not (it failed or stopped). */
+export function settleScheduleAnswers(sessionId, answered) {
+  const keys = sessionId ? scheduleAnswerWaits.get(sessionId) : null;
+  if (!keys || keys.size === 0) return;
+  scheduleAnswerWaits.delete(sessionId);
+  try {
+    scheduleAnswerListener?.([...keys], answered);
+  } catch (error) {
+    console.warn('[jarvis] schedule answers not recorded', error instanceof Error ? error.message : error);
+  }
+}
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
@@ -1714,6 +1743,10 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         sawTaskEventThisTurn = false;
         const injected = injectedThisTurn;
         injectedThisTurn = false;
+        // a fired schedule's message is answered by this result, unless a message was written in since the last one
+        // (it may not have been taken in and then runs next: the wait below or the next result settles it)
+        const resultOk = !message.is_error && !abortPending;
+        if (!injected) settleScheduleAnswers(sessionId, resultOk);
         if (holdForTurn) {
           heldForBackgroundWork = true;
           scheduleRelease();
@@ -1723,6 +1756,8 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
           if (injectionTimer) clearTimeout(injectionTimer);
           injectionTimer = setTimeout(() => {
             injectionTimer = null;
+            // nothing ran after the result: the written message was taken in before it
+            settleScheduleAnswers(sessionId, resultOk);
             releasePromptStream();
           }, INJECTION_WAIT_MS);
           injectionTimer.unref?.();
@@ -1797,6 +1832,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
 
     const wasAborted = sessionKey() ? abortedSessionIds.delete(sessionKey()) : false;
     if (wasAborted) {
+      settleScheduleAnswers(sessionId, false);
       // Jarvis: stopped while its sandbox was being prepared. Claude Code never read the message, so it is kept in
       // our own table (no error): after a reload it shows as sent and not answered, as a stopped turn upstream.
       if (error instanceof SandboxWaitCancelled) {
@@ -1831,6 +1867,7 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       });
       errorTimestamp = failed.errorAt;
     }
+    settleScheduleAnswers(sessionId, false);
     ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'claude', ...(errorTimestamp ? { timestamp: errorTimestamp } : {}) }));
     if (!turnCompleteSent) {
       ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: 1 }));
