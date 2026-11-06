@@ -23,7 +23,7 @@ import {
 
 test('the runtime settles the runs waiting on a conversation once, with whether it answered', () => {
   const seen: Array<[string[], boolean]> = [];
-  onScheduleAnswer((keys, answered) => seen.push([keys, answered]));
+  onScheduleAnswer((keys: string[], answered: boolean) => seen.push([keys, answered]));
   awaitScheduleAnswer('conv-a', 'sch_1:100');
   awaitScheduleAnswer('conv-a', 'sch_2:200');
   awaitScheduleAnswer('conv-b', 'sch_3:300');
