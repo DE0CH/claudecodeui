@@ -5,7 +5,6 @@ import readline from 'node:readline';
 
 import { jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
 import { readableClaudeApiError } from '@/modules/jarvis/jarvis-errors.js';
-import { stripLegacySandboxResetNote } from '@/modules/jarvis/jarvis-history.js';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import type {
   AnyRecord,
@@ -1308,7 +1307,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const ts = raw.timestamp || new Date().toISOString();
     const baseId = raw.uuid || generateMessageId('claude');
 
-    // A message Claude Code took in while a turn ran (a schedule's, written into the running turn: jarvis/schedules.mjs):
+    // A message Claude Code took in while a turn ran (one written into the running turn, injectClaudeSDKMessage):
     // the transcript keeps it as a `queued_command` attachment, not as a user row, so this is where it shows.
     if (raw.type === 'attachment' && raw.attachment?.type === 'queued_command'
       && (raw.attachment.commandMode === undefined || raw.attachment.commandMode === 'prompt')
@@ -1443,7 +1442,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             }));
           } else if (part.type === 'text') {
             const text = part.text || '';
-            const parsedFiles = parseFilesInputTag(parseImageUploadsTag(stripLegacySandboxResetNote(text)).text);
+            const parsedFiles = parseFilesInputTag(parseImageUploadsTag(text).text);
             if (
               (parsedFiles.text || parsedFiles.attachments.length > 0)
               && !isInternalContent(parsedFiles.text)
@@ -1472,7 +1471,6 @@ export class ClaudeSessionsProvider implements IProviderSessions {
             .filter((part: AnyRecord) => part.type === 'text')
             .map((part: AnyRecord) => part.text)
             .filter(Boolean)
-            .map((part: string) => stripLegacySandboxResetNote(part))
             .join('\n');
           if (textParts && !isInternalContent(textParts)) {
             messages.push(createNormalizedMessage({
@@ -1578,7 +1576,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
           return messages;
         }
 
-        const parsedFiles = parseFilesInputTag(parseImageUploadsTag(stripLegacySandboxResetNote(text)).text);
+        const parsedFiles = parseFilesInputTag(parseImageUploadsTag(text).text);
         if (
           (parsedFiles.text || parsedFiles.attachments.length > 0)
           && !isInternalContent(parsedFiles.text)

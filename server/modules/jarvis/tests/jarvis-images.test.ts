@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 
 import sharp from 'sharp';
 
-import { resetJarvisInstanceConfig } from '@/modules/jarvis/jarvis-config.js';
 import {
   isConvertibleImage,
   MODEL_IMAGE_MAX_BYTES,
@@ -20,23 +19,20 @@ import { appendFilesInputTag, appendImageUploadsTag, parseFilesInputTag, parseIm
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
-/** Jarvis mode with HOME (the upload store is ~/.claude/cloudcli-assets) and the JuiceFS root in a temp folder. */
-async function withJarvisHome(run: (ctx: { assets: string; jfs: string }) => Promise<void>): Promise<void> {
+/** Jarvis mode with HOME in a temp folder (the upload store is ~/.claude/cloudcli-assets, attachments go to ~/uploads). */
+async function withJarvisHome(run: (ctx: { assets: string; uploads: string }) => Promise<void>): Promise<void> {
   const saved = { ...process.env };
   const temp = await mkdtemp(path.join(os.tmpdir(), 'jarvis-images-'));
   process.env.HOME = temp;
-  process.env.JARVIS_WEB_URL = 'http://127.0.0.1:9';
-  process.env.JARVIS_JFS_ROOT = path.join(temp, 'jfs');
-  process.env.JARVIS_CONFIG = path.join(temp, 'no-config.json');
-  resetJarvisInstanceConfig();
+  process.env.JARVIS_LOCAL_WORKSPACE = path.join(temp, 'workspace');
+  delete process.env.JARVIS_LOCAL_UPLOADS;
   const assets = path.join(temp, '.claude', 'cloudcli-assets');
   await mkdir(assets, { recursive: true });
   try {
-    await run({ assets, jfs: path.join(temp, 'jfs') });
+    await run({ assets, uploads: path.join(temp, 'uploads') });
   } finally {
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);
-    resetJarvisInstanceConfig();
     await rm(temp, { recursive: true, force: true });
   }
 }
@@ -106,8 +102,8 @@ test('a large transparent PNG stays a PNG', async () => {
   });
 });
 
-test('a turn\'s uploads: originals in /workspace/uploads, images also as model copies, broken images as files', async () => {
-  await withJarvisHome(async ({ assets, jfs }) => {
+test('a turn\'s uploads: originals in ~/uploads, images also as model copies, broken images as files', async () => {
+  await withJarvisHome(async ({ assets, uploads }) => {
     const sessionId = randomUUID();
     const heic = path.join(assets, '1-IMG_0001.HEIC');
     await copyFile(path.join(FIXTURES, 'tiny.heic'), heic);
@@ -122,10 +118,10 @@ test('a turn\'s uploads: originals in /workspace/uploads, images also as model c
       [{ path: heic, name: 'IMG_0001.HEIC', mimeType: 'image/heic' }, { path: pdf, name: 'report.pdf', mimeType: 'application/pdf' }],
     );
     assert.deepEqual(out.images.map((i) => [path.basename(i.path), i.mimeType]), [['1-IMG_0001.HEIC.claude.jpg', 'image/jpeg']]);
-    assert.deepEqual(out.savedImages.map((i) => [i.path, i.name]), [['/workspace/uploads/IMG_0001.HEIC', 'IMG_0001.HEIC']]);
-    assert.deepEqual((out.files as Array<{ path: string }>).map((f) => f.path).sort(), ['/workspace/uploads/broken.jpg', '/workspace/uploads/report.pdf']);
-    // the original bytes are in the conversation's workspace
-    assert.deepEqual(await readFile(path.join(jfs, 'ws', sessionId, 'uploads', 'IMG_0001.HEIC')), await readFile(path.join(FIXTURES, 'tiny.heic')));
+    assert.deepEqual(out.savedImages.map((i) => [i.path, i.name]), [[path.join(uploads, 'IMG_0001.HEIC'), 'IMG_0001.HEIC']]);
+    assert.deepEqual((out.files as Array<{ path: string }>).map((f) => f.path).sort(), [path.join(uploads, 'broken.jpg'), path.join(uploads, 'report.pdf')]);
+    // the original bytes are in the uploads folder
+    assert.deepEqual(await readFile(path.join(uploads, 'IMG_0001.HEIC')), await readFile(path.join(FIXTURES, 'tiny.heic')));
   });
 });
 

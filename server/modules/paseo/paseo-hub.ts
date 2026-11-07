@@ -268,7 +268,7 @@ class PaseoHub extends EventEmitter {
     return rows.filter((row): row is NonNullable<typeof row> => !!row) as SessionRowLite[];
   }
 
-  /** Conversations whose sandbox is being made, and those with a Paseo message not yet completed (jarvis-switch.routes.ts). */
+  /** Conversations whose sandbox is being made, and those with a Paseo message not yet completed. */
   busyState(): { preparing: string[]; pending: string[] } {
     return { preparing: [...this.preparing], pending: [...this.pendingUserMessages.keys()] };
   }
@@ -354,7 +354,7 @@ class PaseoHub extends EventEmitter {
 
   /** Creates a conversation (CloudCLI's session row) and starts its first turn. */
   /**
-   * A new conversation with its first message. `beforeSend` (view as: the record of the send) runs once the
+   * A new conversation with its first message. `beforeSend` (optional) runs once the
    * conversation exists and before anything is sent; if it throws, the empty conversation is removed for good and the
    * error passed on.
    */
@@ -452,7 +452,7 @@ class PaseoHub extends EventEmitter {
   }
 
   /**
-   * A message written into the running turn (a schedule's, jarvis-schedules.routes.ts): its user row goes on the
+   * A message written into the running turn: its user row goes on the
    * timeline now, where the person sees it (the history shows it where Claude Code took it in).
    */
   async appendUserRow(sessionId: string, text: string, key: string): Promise<void> {

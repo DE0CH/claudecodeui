@@ -1,7 +1,7 @@
 # The Jarvis 4 runtime bundle (jarvis/runtime-bundle.sh) on every push to main: published on release
 # `de0ch-<first 12 characters of the commit>` as `cloudcli-runtime-linux-x64.tar.gz`, then DE0CH/jarvis4 is asked to pin
 # it (its .github/workflows/fork-pin.yml -> session-image/cloudcli-runtime.json, by sha256), so the next session image
-# runs this commit in every `cloudcli` session. YYC AI's image is jarvis-image.yml; one push updates both.
+# runs this commit in every `cloudcli` session.
 name: jarvis4-runtime
 
 on:

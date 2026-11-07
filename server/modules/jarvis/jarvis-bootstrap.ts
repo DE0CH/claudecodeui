@@ -1,7 +1,7 @@
 /**
- * Jarvis mode start-up: the process's one user (the signed-in staff member, JARVIS_CC_OWNER) and its one project
- * (/workspace, named after the product) exist before the first request. There is no setup or sign-in screen: the
- * router in front of this process has already verified Cloudflare Access, and it is the only client.
+ * Jarvis mode start-up: the process's one user (JARVIS_CC_OWNER) and its one project (the workspace, named after the
+ * product) exist before the first request. There is no setup or sign-in screen: Cloudflare Access in front of the
+ * session's origin has already signed the user in.
  */
 import { randomBytes } from 'node:crypto';
 
@@ -9,12 +9,12 @@ import { projectsDb, userDb } from '@/modules/database/index.js';
 import { jarvisWorkspacePath, jarvisOwner, jarvisProductName } from '@/modules/jarvis/jarvis-config.js';
 
 /**
- * Creates the owner's user row on first start. A different user already in this schema means the router pointed
- * this process at someone else's data: refuse to start rather than serve it.
+ * Creates the owner's user row on first start. A different user already in this schema means this process was
+ * pointed at someone else's data: refuse to start rather than serve it.
  */
 export async function ensureJarvisUser(): Promise<{ id: number; username: string }> {
   const owner = jarvisOwner();
-  if (!owner) throw new Error('JARVIS_CC_OWNER must be set when JARVIS_WEB_URL is set');
+  if (!owner) throw new Error('JARVIS_CC_OWNER must be set in Jarvis mode');
 
   let user = await userDb.getFirstUser();
   if (!user) {
@@ -32,12 +32,12 @@ export async function ensureJarvisUser(): Promise<{ id: number; username: string
   return { id: Number(user.id), username: user.username };
 }
 
-/** The one project, /workspace, active and named after the product. */
+/** The one project, the workspace, active and named after the product. */
 export async function ensureJarvisProject(): Promise<void> {
   const name = jarvisProductName();
   await projectsDb.createProjectPath(jarvisWorkspacePath(), name);
   const project = await projectsDb.getProjectPath(jarvisWorkspacePath());
-  if (!project) throw new Error('could not create the /workspace project');
+  if (!project) throw new Error('could not create the workspace project');
   if (project.custom_project_name !== name) {
     await projectsDb.updateCustomProjectName(jarvisWorkspacePath(), name);
   }

@@ -1,5 +1,5 @@
 # The staff UI (paseo/, docs/paseo-ui.md): typecheck and the tests of what this fork changed in the Paseo app, on
-# every push touching it. The image build (jarvis-image.yml) compiles it again; this is where its tests run. Paseo's
+# every push touching it. The builds (pigeon-app.yml, jarvis4-runtime.yml) compile it again; this is where its tests run. Paseo's
 # whole suite is not run here (upstream runs it; most of it covers parts this UI does not use).
 name: paseo-ui
 

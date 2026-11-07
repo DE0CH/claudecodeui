@@ -43,15 +43,10 @@ import { initializeDatabase, sessionsDb } from './modules/database/index.js';
 import { configureWebPush } from './modules/notifications/index.js';
 import { bootstrapJarvis } from './modules/jarvis/jarvis-bootstrap.js';
 import { startRecentlyDeletedPurge } from './modules/jarvis/jarvis-purge.js';
-import { jarvisEnabled, jarvisLocal, jarvisOwnerFirstName, jarvisProductName } from './modules/jarvis/jarvis-config.js';
+import { jarvisEnabled, jarvisOwnerFirstName, jarvisProductName } from './modules/jarvis/jarvis-config.js';
 import { createJarvisLocalRouter } from './modules/jarvis/jarvis-local.routes.js';
 import { createJarvisFilesRouter } from './modules/jarvis/jarvis-files.routes.js';
-import { createJarvisSharesRouter } from './modules/jarvis/jarvis-shares.routes.js';
 import { jarvisApiGuard } from './modules/jarvis/jarvis-guard.js';
-import { createJarvisWarmRouter } from './modules/jarvis/jarvis-warm.routes.js';
-import { createJarvisSwitchRouter } from './modules/jarvis/jarvis-switch.routes.js';
-import { createJarvisSchedulesRouter } from './modules/jarvis/jarvis-schedules.routes.js';
-import { paseoHub } from './modules/paseo/paseo-hub.js';
 import { openQuestions } from './modules/jarvis/jarvis-open-questions.js';
 
 const __dirname = getModuleDirectory(import.meta.url);
@@ -125,26 +120,15 @@ app.get('/health', (req, res) => {
 // Optional API key validation (if configured)
 app.use('/api', validateApiKey);
 
-// Jarvis mode: only the router's requests for this process's user, and only the routes staff use
+// Jarvis mode: only the routes Jarvis mode offers
 app.use('/api', jarvisApiGuard);
 if (jarvisEnabled()) {
-    // a conversation's /workspace files, read-only (jarvis-files.routes.ts)
+    // the files Claude sent in a conversation, read-only (jarvis-files.routes.ts)
     app.use('/api/jarvis', authenticateToken, createJarvisFilesRouter());
-    // typing in the composer warms a sandbox host (jarvis-warm.routes.ts)
-    app.use('/api/jarvis', authenticateToken, createJarvisWarmRouter());
-    // the old router's switch module: is this process idle enough to restart (jarvis-switch.routes.ts)
-    app.use('/api/jarvis', authenticateToken, createJarvisSwitchRouter());
-    // shared conversations: share, view, continue, stop sharing (jarvis-shares.routes.ts)
-    app.use('/api/jarvis', authenticateToken, createJarvisSharesRouter());
-    // schedules: the router posts a due schedule's message into its conversation (jarvis-schedules.routes.ts)
-    app.use('/api/jarvis', authenticateToken, createJarvisSchedulesRouter(providerRuntimeService, paseoHub));
-    // the greeting's name: the router answers this in sandbox mode (from the Access identity); local mode here, where
-    // there is no sharing (the UI leaves its menu items out)
-    if (jarvisLocal()) {
-        app.get('/api/jarvis/me', (req, res) => res.json({ firstName: jarvisOwnerFirstName(), sharing: false }));
-        // the Jarvis 4 harness's main-conversation status and prompt delivery (jarvis-local.routes.ts)
-        app.use('/api/jarvis', authenticateToken, createJarvisLocalRouter(providerRuntimeService));
-    }
+    // the greeting's name; there is no sharing (the UI leaves its menu items out)
+    app.get('/api/jarvis/me', (req, res) => res.json({ firstName: jarvisOwnerFirstName(), sharing: false }));
+    // the Jarvis 4 harness's main-conversation status and prompt delivery (jarvis-local.routes.ts)
+    app.use('/api/jarvis', authenticateToken, createJarvisLocalRouter(providerRuntimeService));
 }
 
 // Authentication routes (public)
@@ -337,7 +321,7 @@ async function startServer() {
         // Initialize authentication database
         await initializeDatabase();
 
-        // Jarvis mode: the process's one user and its one project, /workspace
+        // Jarvis mode: the process's one user and its one project, the workspace
         if (jarvisEnabled()) {
             await bootstrapJarvis();
             // Recently deleted empties itself after 30 days

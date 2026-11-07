@@ -1,129 +1,18 @@
 /**
- * What a conversation's lifecycle means outside this process in Jarvis mode: deleting a session lets Jarvis 3 drop
- * its sandbox (/internal/cc/release) and removes the conversation's /workspace folder ($JARVIS_JFS_ROOT/ws/<id>);
- * forking one gives the fork a copy of the files, since every conversation has its own /workspace. Local mode has
- * neither (no sandboxes; every conversation shares the machine's folders, which are never copied or removed).
+ * What Jarvis mode adds to a conversation's turns: attachments staged where Claude Code reads them, and failed turns
+ * kept in the history.
  */
-import { copyFile, cp, mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises';
+import { copyFile, mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { jarvisTurnsDb, run } from '@/modules/database/index.js';
-import { cloneTree } from '@/modules/jarvis/jarvis-clone.js';
-import { conversationSentDir, conversationUploads, conversationWorkspaceDir, isConversationId, jarvisEnabled, jarvisLocal } from '@/modules/jarvis/jarvis-config.js';
-import { releaseSandbox } from '@/modules/jarvis/sandbox-process.js';
-import { revokeSharesOf } from '@/modules/jarvis/jarvis-shares.js';
-
-type Deps = {
-  release: (conversationId: string) => Promise<void>;
-  removeDir: (dir: string) => Promise<void>;
-  revokeShares?: (conversationId: string) => Promise<void>;
-  deleteSchedules?: (conversationId: string) => Promise<void>;
-};
-
-/**
- * A conversation deleted for good takes its schedules with it (the router's cc_shared.schedules, jarvis/schedules.mjs;
- * magpie's rows go with their conversation): they are marked `deleted` (their runs kept, as the AI's own delete does),
- * so none fires again or stays on the admin page. Rows moved to the new stack are magpie's and left as they are.
- */
-export async function deleteSchedulesOf(conversationId: string): Promise<void> {
-  const exists = await run(`SELECT 1 AS one WHERE to_regclass('cc_shared.schedules') IS NOT NULL`);
-  if (!exists.changes) return;
-  const r = await run(`UPDATE cc_shared.schedules SET state = 'deleted', next_at = NULL, deleted_at = now(), updated_at = now()
-    WHERE conversation_id = ? AND state NOT IN ('deleted', 'moved')`, [conversationId]);
-  if (r.changes) console.log('[jarvis] schedules of a deleted conversation deleted', { sessionId: conversationId, schedules: r.changes });
-}
-
-/**
- * Empties the folder, then removes it. ws/ itself belongs to root on the volume (the sandbox hosts make each
- * ws/<id> and hand it to uid 1000, the sandbox user and this pod's user), so removing the emptied folder's own entry
- * can be refused; an empty folder is left then.
- */
-async function removeWorkspaceDir(dir: string): Promise<void> {
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-  for (const entry of entries) await rm(path.join(dir, entry), { recursive: true, force: true });
-  try {
-    await rmdir(dir);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'EACCES' && code !== 'EPERM' && code !== 'ENOENT') throw error;
-  }
-}
-
-const defaultDeps: Deps = {
-  release: releaseSandbox,
-  removeDir: removeWorkspaceDir,
-  revokeShares: revokeSharesOf,
-  deleteSchedules: deleteSchedulesOf,
-};
-
-/**
- * After a session row was deleted: its share links stop working, then its sandbox is released and its files deleted. Failures are logged, not thrown: the
- * conversation is already gone for the user, and the control plane releases idle sandboxes on its own.
- */
-export async function onConversationDeleted(sessionId: string, deps: Deps = defaultDeps): Promise<void> {
-  if (!jarvisEnabled() || jarvisLocal() || !isConversationId(sessionId)) return;
-  await deps.revokeShares?.(sessionId);
-  try {
-    await deps.deleteSchedules?.(sessionId);
-  } catch (error) {
-    console.warn('[jarvis] schedules of a deleted conversation not deleted', { sessionId, error: error instanceof Error ? error.message : error });
-  }
-  try {
-    await deps.release(sessionId);
-  } catch (error) {
-    console.warn('[jarvis] sandbox release failed', { sessionId, error: error instanceof Error ? error.message : error });
-  }
-  try {
-    await deps.removeDir(conversationWorkspaceDir(sessionId));
-  } catch (error) {
-    console.warn('[jarvis] workspace removal failed', { sessionId, error: error instanceof Error ? error.message : error });
-  }
-  try {
-    await deps.removeDir(conversationSentDir(sessionId));
-  } catch (error) {
-    console.warn('[jarvis] sent files removal failed', { sessionId, error: error instanceof Error ? error.message : error });
-  }
-}
-
-/** After a fork: the new conversation starts with a copy of the source's /workspace (when it has one). */
-export async function onConversationForked(sourceSessionId: string, forkSessionId: string): Promise<void> {
-  if (!jarvisEnabled() || jarvisLocal() || !isConversationId(sourceSessionId) || !isConversationId(forkSessionId)) return;
-  const from = conversationWorkspaceDir(sourceSessionId);
-  const to = conversationWorkspaceDir(forkSessionId);
-  try {
-    if (!(await stat(from)).isDirectory()) return;
-  } catch {
-    return;
-  }
-  try {
-    // symlinks are copied as links (never followed), like the sandbox would see them
-    await cp(from, to, { recursive: true, errorOnExist: false, force: false, verbatimSymlinks: true });
-  } catch (error) {
-    console.warn('[jarvis] workspace copy for fork failed', { sourceSessionId, forkSessionId, error: error instanceof Error ? error.message : error });
-  }
-  // the sent-file snapshots too, so the fork's cards keep their files
-  const sent = conversationSentDir(sourceSessionId);
-  try {
-    if ((await stat(sent)).isDirectory()) await cloneTree(sent, conversationSentDir(forkSessionId));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn('[jarvis] sent files copy for fork failed', { sourceSessionId, forkSessionId, error: error instanceof Error ? error.message : error });
-    }
-  }
-}
+import { jarvisTurnsDb } from '@/modules/database/index.js';
+import { conversationUploads, isConversationId, jarvisEnabled } from '@/modules/jarvis/jarvis-config.js';
 
 type AttachmentDescriptor = { path: string; name?: string; mimeType?: string; size?: number };
 
 /**
- * Non-image chat attachments as the sandbox sees them: each uploaded file is copied into the conversation's
- * /workspace/uploads/ (on JuiceFS, so the sandbox and the file panel see it; local mode: ~/uploads), and its
- * descriptor points there.
+ * Non-image chat attachments as Claude Code sees them: each uploaded file is copied into ~/uploads
+ * (JARVIS_LOCAL_UPLOADS), and its descriptor points there.
  * Images need no copy: they go into the prompt itself. A file that cannot be copied keeps its descriptor.
  */
 export async function stageAttachmentsInWorkspace(sessionId: string, files: unknown): Promise<unknown> {
@@ -157,7 +46,7 @@ export async function stageAttachmentsInWorkspace(sessionId: string, files: unkn
 }
 
 /**
- * A turn that failed (no sandbox, the run broke): records the error, and the user's text when Claude Code never read
+ * A turn that failed (the run broke): records the error, and the user's text when Claude Code never read
  * it, so both are in the history after a reload. Times: the user's message at the client's `sentAt` (else when the
  * server got it), the error strictly after it and not before now. Never throws (logged).
  */

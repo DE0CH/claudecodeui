@@ -1,20 +1,16 @@
 /**
- * Staff file access to a conversation's /workspace (the contract between this server and the UI):
+ * File access to a conversation's files (the contract between this server and the UI):
  *
  *   GET /api/jarvis/sessions/:sessionId/files               → { files: [{ path, size, mtime, sentAt, caption?, toolUseId? }] }
  *                                                             the files Claude sent with SendUserFile, newest first
  *   GET /api/jarvis/sessions/:sessionId/files/raw?path=REL  → the bytes, as an attachment;
- *                                                             `inline=1` shows images and PDFs in the page;
- *                                                             `sent=<toolUseId>` reads the file as that send kept it
- *                                                             (its snapshot, jarvis-config.ts conversationSentDir)
+ *                                                             `inline=1` shows images and PDFs in the page
  *
- * The folder is $JARVIS_JFS_ROOT/ws/<sessionId> on the shared JuiceFS volume, written by the conversation's sandbox
- * (local mode: the home folder; jarvis-config.ts conversationFilesRoot).
- * Read-only. Only sessions of this process's user exist here (the session row must be in its database). The listing
- * holds only what Claude sent (jarvis-sent-files.ts), never the scripts and scratch files around it; a download may
- * name any file of the workspace (the chat links to files too). The sandbox can put symlinks in its /workspace that
- * point anywhere on the volume (another user's folder), so symlinks are never followed: a file is opened without
- * following a final symlink and then checked for where the open file really is (/proc/self/fd) before a byte is sent.
+ * The folder is the home folder (jarvis-config.ts conversationFilesRoot). Read-only. The session row must be in this
+ * process's database. The listing holds only what Claude sent (jarvis-sent-files.ts), never the scripts and scratch
+ * files around it; a download may name any file under the folder (the chat links to files too). Symlinks are never
+ * followed: a file is opened without following a final symlink and then checked for where the open file really is
+ * (/proc/self/fd) before a byte is sent.
  */
 import { constants as fsConstants } from 'node:fs';
 import { open, readlink, realpath } from 'node:fs/promises';
@@ -24,7 +20,7 @@ import express, { type Request, type Response } from 'express';
 import mime from 'mime-types';
 
 import { sessionsDb } from '@/modules/database/index.js';
-import { conversationFilesRoot, conversationSentDir, isConversationId, jarvisLocal, TOOL_USE_ID } from '@/modules/jarvis/jarvis-config.js';
+import { conversationFilesRoot, isConversationId } from '@/modules/jarvis/jarvis-config.js';
 import { readSentFiles, transcriptPathFor } from '@/modules/jarvis/jarvis-sent-files.js';
 
 export type SentWorkspaceFile = { path: string; size: number; mtime: string; sentAt: string; caption?: string; toolUseId?: string };
@@ -47,33 +43,18 @@ function sendError(res: Response, error: unknown): void {
 async function sessionFor(sessionId: string) {
   const row = isConversationId(sessionId) ? await sessionsDb.getSessionById(sessionId) : null;
   if (!row) throw new FilesError(404, 'SESSION_NOT_FOUND', 'This conversation was not found.');
-  return { row, root: conversationFilesRoot(sessionId).dir, sentDir: jarvisLocal() ? null : conversationSentDir(sessionId) };
-}
-
-/**
- * A sent file as it was when Claude sent it: the send's snapshot (`sentDir/<toolUseId>/<rel>`) when there is one, else
- * the live file in `root` (a file sent before snapshots existed, or local mode).
- */
-export async function openSentFile(root: string, sentDir: string | null, rel: string, toolUseId: unknown) {
-  if (sentDir && typeof toolUseId === 'string' && TOOL_USE_ID.test(toolUseId)) {
-    try {
-      return await openWorkspaceFile(path.join(sentDir, toolUseId), rel);
-    } catch (error) {
-      if (!(error instanceof FilesError) || error.status !== 404) throw error;
-    }
-  }
-  return await openWorkspaceFile(root, rel);
+  return { row, root: conversationFilesRoot(sessionId).dir };
 }
 
 /**
  * The files Claude sent in this conversation (SendUserFile, from its transcript), newest first, each with its size
  * and modification time now. A sent file that is gone, or is a symlink or not inside the workspace, is left out.
  */
-export async function listSentWorkspaceFiles(root: string, transcriptPath: string, sentDir: string | null = null): Promise<SentWorkspaceFile[]> {
+export async function listSentWorkspaceFiles(root: string, transcriptPath: string): Promise<SentWorkspaceFile[]> {
   const out: SentWorkspaceFile[] = [];
   for (const sent of await readSentFiles(transcriptPath)) {
     try {
-      const { handle, size, mtime } = await openSentFile(root, sentDir, sent.path, sent.toolUseId);
+      const { handle, size, mtime } = await openWorkspaceFile(root, sent.path);
       await handle.close().catch(() => {});
       out.push({ ...sent, size, mtime: mtime.toISOString() });
     } catch (error) {
@@ -147,9 +128,9 @@ export function createJarvisFilesRouter(): express.Router {
 
   router.get('/sessions/:sessionId/files', async (req: Request, res: Response) => {
     try {
-      const { row, root, sentDir } = await sessionFor(String(req.params.sessionId));
+      const { row, root } = await sessionFor(String(req.params.sessionId));
       res.setHeader('Cache-Control', 'no-store');
-      res.json({ files: await listSentWorkspaceFiles(root, transcriptPathFor(row), sentDir) });
+      res.json({ files: await listSentWorkspaceFiles(root, transcriptPathFor(row)) });
     } catch (error) {
       sendError(res, error);
     }
@@ -157,10 +138,9 @@ export function createJarvisFilesRouter(): express.Router {
 
   router.get('/sessions/:sessionId/files/raw', async (req: Request, res: Response) => {
     try {
-      const { root, sentDir } = await sessionFor(String(req.params.sessionId));
+      const { root } = await sessionFor(String(req.params.sessionId));
       const rel = safeRelativePath(req.query.path);
-      // `sent`: the SendUserFile call the card belongs to; its snapshot is the file as it was sent
-      const { handle, size, mtime } = await openSentFile(root, sentDir, rel, req.query.sent);
+      const { handle, size, mtime } = await openWorkspaceFile(root, rel);
       const fileName = path.posix.basename(rel);
       const contentType = mime.lookup(fileName) || 'application/octet-stream';
       const inline = req.query.inline === '1' && previewable(contentType);

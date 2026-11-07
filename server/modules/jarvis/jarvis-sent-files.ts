@@ -1,10 +1,9 @@
 /**
- * The files Claude sent to the staff member in a conversation: Claude Code's own `SendUserFile` tool (enabled in
- * the sandbox by CLAUDE_CODE_ATTACHMENTS_BY_PATH=1, DE0CH/jarvis3 docs/CLAUDE-CODE.md "Sent files"). Claude calls it
- * with paths in its /workspace; the conversation's transcript (the session's .jsonl) holds the call and its result,
- * so it is the record: no table of our own. Only calls whose result came back without an error count, and only paths
- * inside the files root (jarvis-config.ts conversationFilesRoot: /workspace, the sandbox's cwd; in local mode the
- * home folder) — anything else the tool may have accepted is not reachable here.
+ * The files Claude sent to the person in a conversation: Claude Code's own `SendUserFile` tool. Claude calls it with
+ * paths on this machine; the conversation's transcript (the session's .jsonl) holds the call and its result, so it is
+ * the record: no table of our own. Only calls whose result came back without an error count, and only paths inside
+ * the files root (jarvis-config.ts conversationFilesRoot: the home folder) — anything else the tool may have accepted
+ * is not reachable here.
  */
 import { createReadStream } from 'node:fs';
 import os from 'node:os';
@@ -21,14 +20,14 @@ export type SentFileRecord = {
   /** When the tool's result was written (ISO 8601). */
   sentAt: string;
   caption?: string;
-  /** The SendUserFile call's id: names its snapshot folder (jarvis-config.ts conversationSentDir). */
+  /** The SendUserFile call's id. */
   toolUseId?: string;
 };
 
 /**
  * A path the tool was given or reported (absolute under the files root `root`, or relative to Claude Code's cwd) as
- * a root-relative path, or null when it is outside the root or not a plain path. Defaults: /workspace for both (local
- * mode: the home folder and the workspace).
+ * a root-relative path, or null when it is outside the root or not a plain path. Defaults: in Jarvis mode the home
+ * folder and the workspace, else /workspace for both.
  */
 export function sentPathToWorkspaceRelative(
   value: unknown,

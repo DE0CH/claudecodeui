@@ -20,7 +20,7 @@ import {
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
 import type { NormalizedMessage, ProviderRuntimeContext } from '@/shared/types.js';
 
-/** What the switch's busy route (jarvis-switch.routes.ts) is made of. */
+/** What the process is busy with: running sessions, Claude Code processes, parked questions. */
 async function switchBusy() {
   return {
     running: (await sessionsService.listRunningSessions()).map((entry) => entry.sessionId),

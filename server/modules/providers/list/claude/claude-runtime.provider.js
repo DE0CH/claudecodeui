@@ -21,12 +21,8 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 
 import { recordJarvisFailedTurn } from '@/modules/jarvis/jarvis-conversations.js';
 import { prepareJarvisAttachments } from '@/modules/jarvis/jarvis-images.js';
-import { readableSandboxError } from '@/modules/jarvis/jarvis-errors.js';
-import { acquireSandboxReporting, jarvisEnabled, SandboxWaitCancelled, spawnInSandbox } from '@/modules/jarvis/sandbox-process.js';
-import { jarvisLocal, jarvisLocalPermissionMode, jarvisModel, jarvisWorkspacePath } from '@/modules/jarvis/jarvis-config.js';
+import { jarvisEnabled, jarvisLocalPermissionMode, jarvisModel, jarvisWorkspacePath } from '@/modules/jarvis/jarvis-config.js';
 import { answerContinuation, ASK_SAFETY_LIMIT_MS, formatAskDuration, openQuestions } from '@/modules/jarvis/index.js';
-import { sessionsDb } from '@/modules/database/index.js';
-import { titleConversation } from '@/modules/jarvis/jarvis-title.js';
 
 import {
   appendFilesInputTag,
@@ -63,8 +59,6 @@ const pendingToolApprovals = new Map();
 // terminal `complete` (aborted: true) to the client, so the run loop must not
 // emit a second one when its generator winds down.
 const abortedSessionIds = new Set();
-// Jarvis: turns waiting for their sandbox (no Claude Code process yet), by app session id, so Stop can cancel the wait.
-const pendingSandboxWaits = new Map();
 // Query instances interrupted because a newer run took over their session id
 // (see addSession). Their run loops must stay silent on wind-down: the map
 // entry, the abort flag, and all client-facing events belong to the new run.
@@ -119,44 +113,14 @@ function parkedRunOptions(options) {
 // that never reports at all, so an abandoned session cannot leak a CLI process
 // forever. The timer resets on every message, so it measures silence, not total time.
 const BG_WAIT_CEILING_MS = 30 * 60 * 1000;
-// How long a turn whose `result` came after a message was written into it (a schedule's, injectClaudeSDKMessage) keeps
+// How long a turn whose `result` came after a message was written into it (injectClaudeSDKMessage) keeps
 // Claude Code's stdin open: a message the model did not take in before it stopped runs next in the same process,
 // which starts at once; one it took in leaves nothing to wait for.
 const INJECTION_WAIT_MS = 15 * 1000;
-// YYC AI (Deyao, 2026-11-06): Claude Code's own timers live in its process and vanish when an idle sandbox is released;
-// the AI arms the router's schedules (jarvis/schedules.mjs) through its managed skill instead.
+// Jarvis mode (Deyao, 2026-11-06): Claude Code's own timers are not offered.
 export const JARVIS_DISALLOWED_TOOLS = ['CronCreate', 'CronList', 'CronDelete', 'ScheduleWakeup'];
 // The running turn's writer of extra messages, per app session id (injectClaudeSDKMessage).
 const injectors = new Map();
-// Schedules whose fired message waits for its answer, per app session id: the keys (`<schedule>:<due s>`) the next
-// `result` settles (jarvis-schedules.routes.ts records it as the run's outcome, 已回覆 in the panel).
-const scheduleAnswerWaits = new Map();
-let scheduleAnswerListener = null;
-
-/** Marks schedule run `key` as waiting for session `sessionId`'s next answer (a fired message just went in). */
-export function awaitScheduleAnswer(sessionId, key) {
-  if (!sessionId || !key) return;
-  const keys = scheduleAnswerWaits.get(sessionId) ?? new Set();
-  keys.add(key);
-  scheduleAnswerWaits.set(sessionId, keys);
-}
-
-/** Who is told `(keys, answered)` when a session's answer settles the runs waiting on it. */
-export function onScheduleAnswer(listener) {
-  scheduleAnswerListener = listener;
-}
-
-/** Settles session `sessionId`'s waiting runs: `answered` (the turn's result came) or not (it failed or stopped). */
-export function settleScheduleAnswers(sessionId, answered) {
-  const keys = sessionId ? scheduleAnswerWaits.get(sessionId) : null;
-  if (!keys || keys.size === 0) return;
-  scheduleAnswerWaits.delete(sessionId);
-  try {
-    scheduleAnswerListener?.([...keys], answered);
-  } catch (error) {
-    console.warn('[jarvis] schedule answers not recorded', error instanceof Error ? error.message : error);
-  }
-}
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
@@ -1017,8 +981,7 @@ function createHeldPromptStream(messages) {
 }
 
 /**
- * Writes `text` into the session's running turn (a schedule's message while the conversation works, the router's
- * schedules.mjs through jarvis-schedules.routes.ts): Claude Code takes it in at its next tool result or when the model
+ * Writes `text` into the session's running turn: Claude Code takes it in at its next tool result or when the model
  * stops, as a message typed mid-turn; one left for after the turn's `result` runs next in the same process. False when
  * no Claude Code of this session is running (or its turn was parked).
  */
@@ -1185,11 +1148,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
     .join('\n\n');
 
   // Park (DECISIONS 17): while the turn waits only on questions (no other tool call open, no background work, the model's
-  // reply finished), the turn ends for the client, Claude Code is stopped and the questions wait in openQuestions; the
-  // sandbox then idles and is released like any idle one. Only where this process starts Claude Code itself (the
-  // sandbox), since the stop must be a plain SIGTERM: an SDK close() is an interrupt, which records a rejection.
-  const parkingEnabled = Boolean(sessionId) && (context.parkQuestions ?? (jarvisEnabled() && !jarvisLocal()));
-  // the Claude Code process (jarvis: the sandbox's, through spawnInSandbox)
+  // reply finished), the turn ends for the client, Claude Code is stopped and the questions wait in openQuestions. Off
+  // unless the caller asks for it (context.parkQuestions), since the stop must be a plain SIGTERM of a process this
+  // server started itself: an SDK close() is an interrupt, which records a rejection.
+  const parkingEnabled = Boolean(sessionId) && (context.parkQuestions ?? false);
+  // the Claude Code process, when this server spawned it itself
   let spawnedProcess = null;
   // live waits on interactive tools: requestId -> { toolName, toolUseId, input, askedAt }
   const waitingAsks = new Map();
@@ -1315,13 +1278,11 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       sdkOptions.mcpServers = mcpServers;
     }
 
-    // Jarvis 3 (docs/CLAUDE-CODE.md in DE0CH/jarvis3): Claude Code runs in the conversation's sandbox, with its
-    // /workspace; the instance's instructions and MCP tools are the sandbox's managed settings, not this host's.
     let promptFiles = options.files;
     let promptImages = options.images;
     let savedImages = [];
-    if (jarvisLocal()) {
-      // local mode (a Jarvis 4 session): Claude Code runs here, in the session's workspace, with the machine's own
+    if (jarvisEnabled()) {
+      // Jarvis mode (a Jarvis 4 session): Claude Code runs here, in the session's workspace, with the machine's own
       // settings, MCP servers and Claude login, in the session's permission mode (not the client's); uploads are
       // saved to ~/uploads, images also as a model-ready copy (jarvis-images.ts). The session has its own title.
       ({ images: promptImages, files: promptFiles, savedImages } = await prepareJarvisAttachments(sessionId, options.images, options.files));
@@ -1330,35 +1291,6 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       if (sdkOptions.permissionMode === 'bypassPermissions') sdkOptions.allowDangerouslySkipPermissions = true;
       // the session's model (JARVIS_MODEL), whatever the client named
       sdkOptions.model = jarvisModel().value;
-    } else if (jarvisEnabled()) {
-      // uploads are on this pod's side: originals go into the conversation's /workspace/uploads for the sandbox,
-      // images also as a copy Claude can see (HEIC converted, large photos downscaled; jarvis-images.ts)
-      ({ images: promptImages, files: promptFiles, savedImages } = await prepareJarvisAttachments(sessionId, options.images, options.files));
-      // a wait for the sandbox (a host booting) is its own state in the UI, not "thinking"
-      const sandboxWait = new AbortController();
-      pendingSandboxWaits.set(sessionId, sandboxWait);
-      let sandbox;
-      try {
-        sandbox = await acquireSandboxReporting(sessionId, ({ jarvisSandbox, canInterrupt }) => {
-          ws.send(createNormalizedMessage({ kind: 'status', jarvisSandbox, canInterrupt, sessionId, provider: 'claude' }));
-        }, { signal: sandboxWait.signal });
-      } finally {
-        if (pendingSandboxWaits.get(sessionId) === sandboxWait) pendingSandboxWaits.delete(sessionId);
-      }
-      sdkOptions.cwd = '/workspace';
-      delete sdkOptions.mcpServers;
-      // the instance's model is the sandbox's ANTHROPIC_MODEL (egress allows only the instance's models)
-      delete sdkOptions.model;
-      sdkOptions.spawnClaudeCodeProcess = (spawnOptions) => {
-        spawnedProcess = spawnInSandbox(sandbox, sessionId, spawnOptions);
-        return spawnedProcess;
-      };
-      // a new conversation (no Claude Code session yet) still on its provisional name gets a title from the title
-      // model, alongside the turn (jarvis-title.ts)
-      if (!providerSessionId && typeof command === 'string' && command.trim()) {
-        const row = await sessionsDb.getSessionById(sessionId).catch(() => null);
-        if (row && row.name_source == null) void titleConversation(sandbox, sessionId, command);
-      }
     }
 
     // Every turn uses streaming input so stdin stays open past the turn's
@@ -1743,10 +1675,6 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
         sawTaskEventThisTurn = false;
         const injected = injectedThisTurn;
         injectedThisTurn = false;
-        // a fired schedule's message is answered by this result, unless a message was written in since the last one
-        // (it may not have been taken in and then runs next: the wait below or the next result settles it)
-        const resultOk = !message.is_error && !abortPending;
-        if (!injected) settleScheduleAnswers(sessionId, resultOk);
         if (holdForTurn) {
           heldForBackgroundWork = true;
           scheduleRelease();
@@ -1757,7 +1685,6 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
           injectionTimer = setTimeout(() => {
             injectionTimer = null;
             // nothing ran after the result: the written message was taken in before it
-            settleScheduleAnswers(sessionId, resultOk);
             releasePromptStream();
           }, INJECTION_WAIT_MS);
           injectionTimer.unref?.();
@@ -1832,12 +1759,6 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
 
     const wasAborted = sessionKey() ? abortedSessionIds.delete(sessionKey()) : false;
     if (wasAborted) {
-      settleScheduleAnswers(sessionId, false);
-      // Jarvis: stopped while its sandbox was being prepared. Claude Code never read the message, so it is kept in
-      // our own table (no error): after a reload it shows as sent and not answered, as a stopped turn upstream.
-      if (error instanceof SandboxWaitCancelled) {
-        await recordJarvisFailedTurn({ sessionId, userText: prompt, sentAt: options.sentAt, receivedAt: turnReceivedAt, error: '' });
-      }
       // The abort already produced the terminal complete; a generator throw
       // caused by interrupt() is expected noise, not a user-facing error.
       return;
@@ -1845,13 +1766,9 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
 
     // Check if Claude CLI is installed for a clearer error message
     const installed = await context.isProviderInstalled();
-    // Jarvis mode: the sandbox's failures in words staff can act on (the full error is logged above); local mode has
-    // no sandbox, so the error as it is
-    const errorContent = jarvisEnabled() && !jarvisLocal()
-      ? readableSandboxError(error)
-      : !installed
-        ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'
-        : error.message;
+    const errorContent = !installed
+      ? 'Claude Code is not installed. Please install it first: https://docs.anthropic.com/en/docs/claude-code'
+      : error.message;
 
     // Send error to WebSocket, then the terminal complete. A run that already
     // reported completion and then failed during its post-turn hold still
@@ -1867,7 +1784,6 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       });
       errorTimestamp = failed.errorAt;
     }
-    settleScheduleAnswers(sessionId, false);
     ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'claude', ...(errorTimestamp ? { timestamp: errorTimestamp } : {}) }));
     if (!turnCompleteSent) {
       ws.send(createCompleteMessage({ provider: 'claude', sessionId: capturedSessionId || sessionId || null, exitCode: 1 }));
@@ -1906,15 +1822,6 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
  */
 async function abortClaudeSDKSession(sessionId) {
   const session = getSession(sessionId);
-
-  // Jarvis: the turn is still waiting for its sandbox; stop the wait (the run then ends quietly, no Claude Code ran)
-  const sandboxWait = pendingSandboxWaits.get(sessionId);
-  if (!session && sandboxWait) {
-    abortedSessionIds.add(sessionId);
-    pendingSandboxWaits.delete(sessionId);
-    sandboxWait.abort();
-    return true;
-  }
 
   if (!session) {
     console.log(`Session ${sessionId} not found`);
@@ -2046,10 +1953,7 @@ function getPendingApprovalsForSession(sessionId) {
   return pending;
 }
 
-/**
- * Conversations with a question waiting for the person after their turn let the sandbox go, for the switch's busy
- * route (jarvis-switch.routes.ts `asking`): not running work, but the old router's importer must not lose them.
- */
+/** Conversations with a question waiting for the person after their turn was parked: not running work. */
 function listClaudeSDKOpenQuestions() {
   return openQuestions.list().map((question) => ({
     sessionId: question.sessionId,

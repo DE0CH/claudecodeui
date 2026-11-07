@@ -11,7 +11,6 @@ import {
   readFileTimestamps,
 } from '@/shared/utils.js';
 import type { IProviderSessionSynchronizer } from '@/shared/interfaces.js';
-import { stripLegacySandboxResetNote } from '@/modules/jarvis/jarvis-history.js';
 import { jarvisProjectDirName, jarvisWorkspacePath, jarvisEnabled, jarvisUntitledName } from '@/modules/jarvis/jarvis-config.js';
 
 type ParsedSession = {
@@ -49,7 +48,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
    */
   async synchronize(since?: Date): Promise<number> {
     const nameMap = await buildLookupMap(path.join(this.claudeHome, 'history.jsonl'), 'sessionId', 'display');
-    // Jarvis mode: only the one project's transcripts (cwd /workspace in every sandbox)
+    // Jarvis mode: only the one project's transcripts (Claude Code's cwd is the workspace)
     const projectsRoot = jarvisEnabled()
       ? path.join(this.claudeHome, 'projects', jarvisProjectDirName())
       : path.join(this.claudeHome, 'projects');
@@ -228,7 +227,7 @@ export class ClaudeSessionSynchronizer implements IProviderSessionSynchronizer {
             foundAiTitle = title;
           }
         } else if (eventType === 'last-prompt') {
-          const prompt = typeof data.lastPrompt === 'string' ? stripLegacySandboxResetNote(data.lastPrompt) : undefined;
+          const prompt = typeof data.lastPrompt === 'string' ? data.lastPrompt : undefined;
           if (prompt?.trim()) {
             foundLastPrompt = prompt;
           }

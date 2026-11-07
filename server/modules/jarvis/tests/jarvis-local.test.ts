@@ -15,16 +15,14 @@ import { ensureJarvisProject, ensureJarvisUser } from '@/modules/jarvis/jarvis-b
 import {
   conversationFilesRoot,
   conversationUploads,
-  conversationWorkspaceDir,
   jarvisEnabled,
   jarvisLocal,
   jarvisLocalPermissionMode,
   jarvisProjectDirName,
   jarvisTranscriptPath,
   jarvisWorkspacePath,
-  resetJarvisInstanceConfig,
 } from '@/modules/jarvis/jarvis-config.js';
-import { onConversationDeleted, onConversationForked, stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
+import { stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversations.js';
 import { createJarvisFilesRouter } from '@/modules/jarvis/jarvis-files.routes.js';
 import { createJarvisLocalRouter } from '@/modules/jarvis/jarvis-local.routes.js';
 import { sentPathToWorkspaceRelative } from '@/modules/jarvis/jarvis-sent-files.js';
@@ -45,18 +43,14 @@ async function withLocal(run: (ctx: { home: string; workspace: string }) => Prom
   await closeConnection();
   process.env.HOME = home;
   process.env.DATABASE_PATH = path.join(temp, 'auth.db');
-  delete process.env.JARVIS_WEB_URL;
-  delete process.env.JARVIS_CC_TOKEN;
   process.env.JARVIS_LOCAL_WORKSPACE = workspace;
   process.env.JARVIS_CC_OWNER = OWNER;
   process.env.JARVIS_PRODUCT_NAME = 'Jarvis 4';
   process.env.JARVIS_MODEL = 'claude-opus-5-5';
   process.env.JARVIS_MODEL_LABEL = 'Opus 5.5';
-  process.env.JARVIS_CONFIG = path.join(temp, 'no-config.json');
   delete process.env.JARVIS_LOCAL_UPLOADS;
   delete process.env.JARVIS_LOCAL_PERMISSION_MODE;
   delete process.env.JARVIS_LOCAL_PERMISSION_FILE;
-  resetJarvisInstanceConfig();
   await initializeDatabase();
   try {
     await run({ home, workspace });
@@ -108,26 +102,15 @@ test('local mode: no X-Jarvis-User needed, and no share links', async () => {
     });
     assert.equal(isUnavailableInJarvis('GET', '/jarvis/sessions/x/files'), false);
   });
-  // sandbox mode keeps its share links
-  assert.equal(isUnavailableInJarvis('POST', '/jarvis/sessions/x/shares'), false);
 });
 
-test('local mode: deleting or forking a conversation never touches the machine\'s folders', async () => {
+test('local mode: deleting a conversation never touches the machine\'s folders', async () => {
   await withLocal(async ({ workspace }) => {
     await writeFile(path.join(workspace, 'keep.txt'), 'k');
     const id = randomUUID();
-    const order: string[] = [];
-    await onConversationDeleted(id, {
-      release: async () => { order.push('release'); },
-      removeDir: async () => { order.push('rm'); },
-      revokeShares: async () => { order.push('revoke'); },
-    });
-    assert.deepEqual(order, []);
     await sessionsDb.createAppSession(id, 'claude', workspace, 'Delete me');
     await sessionsService.deleteOrArchiveSessionById(id, { force: true });
     assert.equal(await readFile(path.join(workspace, 'keep.txt'), 'utf8'), 'k');
-    await onConversationForked(id, randomUUID());
-    assert.throws(() => conversationWorkspaceDir(id), /no folder of their own/);
   });
 });
 

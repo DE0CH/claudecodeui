@@ -684,8 +684,8 @@ export type ProviderRuntimeContext = {
     close?(): void;
   };
   /**
-   * Whether a turn waiting only on a question parks (DECISIONS 17). Production leaves it unset: on in Jarvis sandbox
-   * mode, where this process starts Claude Code itself. Tests set it with a scripted stream.
+   * Whether a turn waiting only on a question parks (DECISIONS 17). Production leaves it unset (off). Tests set it with a
+   * scripted stream.
    */
   parkQuestions?: boolean;
 };

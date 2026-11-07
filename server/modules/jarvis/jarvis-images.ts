@@ -8,13 +8,13 @@ import { stageAttachmentsInWorkspace } from '@/modules/jarvis/jarvis-conversatio
 import { getGlobalImageAssetsDir, type ChatAttachmentDescriptor } from '@/shared/image-attachments.js';
 
 /**
- * Images attached to a Jarvis 3 chat message (docs/CLAUDE-CODE.md in DE0CH/jarvis3, "Uploads").
+ * Images attached to a chat message in Jarvis mode.
  *
  * Every image goes to Claude twice:
  * - as an `image` content block it can SEE: a copy the Claude API accepts (JPEG/PNG/GIF/WebP, long edge at most
  *   MODEL_IMAGE_MAX_EDGE px, at most MODEL_IMAGE_MAX_BYTES), made here: iPhone HEIC/HEIF and other formats are
  *   converted to JPEG, large photos downscaled, EXIF rotation applied;
- * - as the untouched original in the conversation's /workspace/uploads/, named in the message text (an
+ * - as the untouched original in ~/uploads/ (jarvis-config.ts conversationUploads), named in the message text (an
  *   `<image_uploads>` block, stripped back out of the history the UI shows), so Claude can process it with tools.
  * An image that can't be decoded is handed over as a plain file (`<files_input>`), like any other upload.
  */
@@ -103,15 +103,15 @@ export async function prepareModelImage(descriptor: ChatAttachmentDescriptor): P
 export type JarvisAttachments = {
   /** model-ready copies, sent as image blocks */
   images: ChatAttachmentDescriptor[];
-  /** files for the `<files_input>` block (already in /workspace/uploads) */
+  /** files for the `<files_input>` block (already in the uploads folder) */
   files: unknown;
-  /** the originals of `images` in /workspace/uploads, for the `<image_uploads>` block */
+  /** the originals of `images` in the uploads folder, for the `<image_uploads>` block */
   savedImages: ChatAttachmentDescriptor[];
 };
 
 /**
- * Splits a turn's uploads for the sandbox: every upload's original is copied into /workspace/uploads; images get a
- * model-ready copy (prepareModelImage). Runs only in Jarvis mode, with a conversation id.
+ * Splits a turn's uploads: every upload's original is copied into the uploads folder; images get a model-ready copy
+ * (prepareModelImage). Runs only in Jarvis mode, with a conversation id.
  */
 export async function prepareJarvisAttachments(sessionId: string, images: unknown, files: unknown): Promise<JarvisAttachments> {
   const all = [
@@ -130,7 +130,7 @@ export async function prepareJarvisAttachments(sessionId: string, images: unknow
     const saved = stagedImages[i];
     try {
       out.images.push(await prepareModelImage(original));
-      // only a copy that made it into the uploads folder is worth naming (the sandbox can't see this pod's paths)
+      // only a copy that made it into the uploads folder is worth naming
       if (saved?.path?.startsWith(`${conversationUploads(sessionId).claudePath}/`)) out.savedImages.push(saved);
     } catch (error) {
       console.warn('[jarvis] image could not be prepared for the model; sent as a file', {

@@ -35,15 +35,6 @@ on:
       - "scripts/check-chunks.mjs"
       - "scripts/pigeon-app/**"
       - ".github/workflows/pigeon-app.yml"
-      # while jarvis-image.yml builds the ui image: what that image ships beyond the app, so a commit that changes only
-      # the ui (the A1 commit, WP-56's switch module in jarvis/router.mjs) still gets its pigeon-app build, which seeds
-      # and checks that very ui image (the step "the ui image of this commit"). Removed with jarvis-image.yml.
-      - "jarvis/**"
-      - "server/**"
-      - "shared/**"
-      - "public/**"
-      - "package.json"
-      - "package-lock.json"
   workflow_dispatch:
 
 permissions:
@@ -184,39 +175,9 @@ jobs:
           done < "$RUNNER_TEMP/app-pins.txt"
           rm -f "$RUNNER_TEMP/yyc-key"
 
-      # while the ui image is still built (jarvis-image.yml, until the switch's cleanup), the ui image of this commit is
-      # seeded too: at A1 it is the image YYC is about to pin, and pigeon-app stays at this commit until A5
-      # (not on a pigeon-app-fix branch: jarvis-image builds main only, and the A1 ui image is in the pin history by then)
-      - name: the ui image of this commit
-        if: hashFiles('.github/workflows/jarvis-image.yml') != '' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag=${GITHUB_SHA::12}
-          deadline=$(( $(date +%s) + 90 * 60 ))
-          while :; do
-            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/jarvis-image.yml/runs?head_sha=$GITHUB_SHA&per_page=20" \
-              --jq '[.workflow_runs[] | {status, conclusion}] | (map(select(.conclusion == "success")) | first) // (map(select(.status != "completed")) | first) // first // empty')
-            [ -n "$run" ] || run='{}'
-            status=$(jq -r '.status // ""' <<<"$run")
-            conclusion=$(jq -r '.conclusion // ""' <<<"$run")
-            if [ "$conclusion" = success ]; then
-              crane digest --platform linux/amd64 "$UI_IMAGE:$tag" >/dev/null
-              echo "$tag" >> "$RUNNER_TEMP/seed-tags.txt"
-              echo "seeding $UI_IMAGE:$tag (this commit's ui image)"
-              break
-            fi
-            if [ "$status" = completed ]; then
-              echo "::notice::jarvis-image ended $conclusion for this commit: there is no $UI_IMAGE:$tag to seed"
-              break
-            fi
-            [ "$(date +%s)" -lt "$deadline" ] || { echo "::error::jarvis-image has not finished for $GITHUB_SHA after 90 min"; exit 1; }
-            sleep 30
-          done
-
       - name: the seeds' commits
         run: |
-          # in pin order, oldest first (pins.mjs's order, this commit's ui image last), without repeats: assemble's report
+          # in pin order, oldest first (pins.mjs's order), without repeats: assemble's report
           # charges the seeds newest pin first
           awk '!seen[$0]++' "$RUNNER_TEMP/seed-tags.txt" > "$RUNNER_TEMP/seed-tags.dedup" && mv "$RUNNER_TEMP/seed-tags.dedup" "$RUNNER_TEMP/seed-tags.txt"
           : > "$RUNNER_TEMP/seeds.txt"

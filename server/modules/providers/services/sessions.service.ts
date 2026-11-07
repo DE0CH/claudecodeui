@@ -3,9 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { jarvisTurnsDb, projectsDb, sessionsDb, type JarvisFailedTurn } from '@/modules/database/index.js';
-import { jarvisWorkspacePath, jarvisEnabled, jarvisLocal, jarvisSessionName } from '@/modules/jarvis/jarvis-config.js';
-import { onConversationDeleted, onConversationForked } from '@/modules/jarvis/jarvis-conversations.js';
-import { conversationTooLongMessage, transcriptTooLongToOpen } from '@/modules/jarvis/jarvis-errors.js';
+import { jarvisWorkspacePath, jarvisEnabled, jarvisSessionName } from '@/modules/jarvis/jarvis-config.js';
 import { broadcastSessionRemoved, broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { listBusyClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
@@ -418,7 +416,6 @@ export const sessionsService = {
       effort: source.effort,
     });
 
-    await onConversationForked(sessionId, forkSessionId);
     await broadcastSessionUpserted(forkSessionId);
 
     return {
@@ -538,21 +535,6 @@ export const sessionsService = {
         code: 'SESSION_NOT_FOUND',
         statusCode: 404,
       });
-    }
-
-    // Jarvis mode on a staff instance (not Jarvis 4's local mode): a transcript too big for this process's heap is not
-    // read at all (reading it crashed the process in a loop, 2026-11-02); the conversation shows one line saying so,
-    // at the bottom (jarvis-errors.ts)
-    if (jarvisEnabled() && !jarvisLocal() && session.jsonl_path) {
-      const bytes = await fsp.stat(session.jsonl_path).then((st) => st.size, () => 0);
-      if (transcriptTooLongToOpen(bytes)) {
-        console.warn('[sessions] transcript too long to open', { sessionId, bytes });
-        const message = createNormalizedMessage({
-          id: `jarvis-too-long-${sessionId}`, sessionId, timestamp: new Date().toISOString(), provider: 'claude',
-          kind: 'error', content: conversationTooLongMessage(),
-        });
-        return { messages: [message], total: 1, hasMore: false, offset: options.offset ?? 0, limit: options.limit ?? null };
-      }
     }
 
     // Jarvis mode: turns that failed before or while running are in our own table, not the transcript
@@ -892,7 +874,6 @@ export const sessionsService = {
       });
     }
     announceRemoved(sessionId, 'deleted');
-    await onConversationDeleted(sessionId);
 
     return {
       sessionId,

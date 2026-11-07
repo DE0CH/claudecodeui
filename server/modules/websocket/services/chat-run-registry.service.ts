@@ -153,8 +153,8 @@ async function recordProviderSessionId(run: ChatRun, providerSessionId: string):
   run.providerSessionId = providerSessionId;
 
   try {
-    // Jarvis mode: the transcript's place is known from the id (the sandbox writes it on the user's JuiceFS
-    // folder), so the row is complete without waiting for a scan of the transcript folder.
+    // Jarvis mode: the transcript's place is known from the id (jarvis-config.ts jarvisTranscriptPath), so the row is
+    // complete without waiting for a scan of the transcript folder.
     const jsonlPath = jarvisEnabled() && run.provider === 'claude' ? jarvisTranscriptPath(providerSessionId) : null;
     await sessionsDb.assignProviderSessionId(run.appSessionId, providerSessionId, jsonlPath);
     void broadcastSessionUpserted(run.appSessionId).catch((error) => {

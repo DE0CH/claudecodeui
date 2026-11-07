@@ -2,13 +2,6 @@
 export { jarvisModel, jarvisProductName, jarvisWorkspacePath } from './jarvis-config.js';
 export { sentPathToWorkspaceRelative } from './jarvis-sent-files.js';
 export {
-  recordViewAs,
-  VIEW_AS_NOT_RECORDED,
-  VIEW_AS_READ_ONLY,
-  viewerOf,
-  type Viewer,
-} from './jarvis-view-as.js';
-export {
   answerContinuation,
   ASK_SAFETY_LIMIT_MS,
   formatAskDuration,

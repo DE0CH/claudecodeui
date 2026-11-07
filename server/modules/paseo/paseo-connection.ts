@@ -11,13 +11,6 @@ import { randomUUID } from 'node:crypto';
 
 import type { WebSocket } from 'ws';
 
-import {
-  recordViewAs,
-  VIEW_AS_NOT_RECORDED,
-  VIEW_AS_READ_ONLY,
-  viewerOf,
-  type Viewer,
-} from '@/modules/jarvis/index.js';
 import { sessionsService } from '@/modules/providers/index.js';
 import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 
@@ -108,8 +101,7 @@ function toIso(value: string): string {
 
 export function handlePaseoConnection(ws: WebSocket, request: AuthenticatedWebSocketRequest, chat: ChatDependencies): void {
   paseoHub.ensureStarted(request, chat);
-  // view as (jarvis-view-as.ts): the admin the router says is viewing as this process's user, else null
-  const connection = new PaseoConnection(ws, viewerOf(request.headers ?? {}));
+  const connection = new PaseoConnection(ws);
   const onHubEvent = (event: HubEvent) => {
     void connection.onHubEvent(event).catch((error) => console.error('[paseo] hub event failed', error));
   };
@@ -128,12 +120,8 @@ class PaseoConnection {
   private timelineSubscription: string | null = null;
   private timelineAgents = new Set<string>();
 
-  constructor(
-    private readonly ws: WebSocket,
-    private readonly viewer: Viewer | null = null,
-  ) {}
+  constructor(private readonly ws: WebSocket) {}
 
-  /** Viewing as someone: a change other than sending is refused with an rpc_error (true = refused). */
   /**
    * Switch window: a write whose `aviaryNotAfter` passed is refused (rpc_error `not_after`), never applied; called right
    * before each write's commit (not-after.ts).
@@ -141,12 +129,6 @@ class PaseoConnection {
   private refuseLate(message: AnyRecord, type: string, requestId: string): boolean {
     if (!pastNotAfter(message[NOT_AFTER_FIELD])) return false;
     this.reply('rpc_error', { requestId, requestType: type, error: 'the write arrived after its bound', code: NOT_AFTER_CODE });
-    return true;
-  }
-
-  private refuseWhileViewing(type: string, requestId: string): boolean {
-    if (!this.viewer) return false;
-    this.reply('rpc_error', { requestId, requestType: type, error: VIEW_AS_READ_ONLY, code: 'view_as_read_only' });
     return true;
   }
 
@@ -390,24 +372,11 @@ class PaseoConnection {
         if (paseoHub.isRunning(agentId)) {
           error = '對話仍在進行中，請稍候。';
         } else {
-          // view as: recorded in the operator page's History first; nothing is sent without that record
-          const recorded = this.viewer
-            ? await recordViewAs(this.viewer, { event: 'message', conversation: agentId, chars: text.length }).then(
-                () => true,
-                (e: unknown) => {
-                  console.error('[paseo] view-as send not recorded', e);
-                  return false;
-                },
-              )
-            : true;
-          if (!recorded) error = VIEW_AS_NOT_RECORDED;
-          else {
-            try {
-              await paseoHub.send(agentId, text, clientMessageId, { images: message.images, attachments: message.attachments }, message[NOT_AFTER_FIELD]);
-            } catch (e) {
-              if (!(e instanceof NotAfterError)) throw e;
-              error = NOT_AFTER_CODE;
-            }
+          try {
+            await paseoHub.send(agentId, text, clientMessageId, { images: message.images, attachments: message.attachments }, message[NOT_AFTER_FIELD]);
+          } catch (e) {
+            if (!(e instanceof NotAfterError)) throw e;
+            error = NOT_AFTER_CODE;
           }
         }
         this.reply('send_agent_message_response', { requestId, agentId, accepted: error === null, error });
@@ -423,18 +392,6 @@ class PaseoConnection {
           ? { behavior: 'allow' as const, updatedInput: response.updatedInput && typeof response.updatedInput === 'object' ? response.updatedInput : undefined }
           : { behavior: 'deny' as const, message: typeof response.message === 'string' ? response.message : undefined };
         if (!paseoHub.pendingQuestions(agentId).some((q) => q.id === permissionId)) return;
-        // view as: an answer is sent as the person, so it is recorded like a message first
-        if (this.viewer) {
-          const chars = JSON.stringify(answer.behavior === 'allow' ? answer.updatedInput?.answers ?? {} : {}).length;
-          const recorded = await recordViewAs(this.viewer, { event: 'message', conversation: agentId, chars }).then(
-            () => true,
-            (e: unknown) => {
-              console.error('[paseo] view-as answer not recorded', e);
-              return false;
-            },
-          );
-          if (!recorded) return;
-        }
         if (this.refuseLate(message, type, permissionId)) return;
         paseoHub.answer(agentId, permissionId, answer);
         return;
@@ -454,7 +411,6 @@ class PaseoConnection {
         return;
 
       case 'update_agent_request': {
-        if (this.refuseWhileViewing(type, requestId)) return;
         const agentId = String(message.agentId ?? '');
         const title = typeof message.title === 'string' ? message.title.trim() : '';
         let error: string | null = null;
@@ -472,7 +428,6 @@ class PaseoConnection {
 
       // A workspace's title is the conversation's name (a rename nothing overwrites later)
       case 'workspace.title.set.request': {
-        if (this.refuseWhileViewing(type, requestId)) return;
         const sessionId = sessionIdFromWorkspace(String(message.workspaceId ?? '')) ?? '';
         const title = typeof message.title === 'string' ? message.title.trim() : '';
         let error: string | null = null;
@@ -504,7 +459,6 @@ class PaseoConnection {
       case 'refresh_agent_request': {
         const agentId = String(message.agentId ?? '');
         const row = await paseoHub.getSession(agentId, { includeDeleted: true });
-        if (row && Number(row.isArchived) === 1 && this.refuseWhileViewing(type, requestId)) return;
         if (row && Number(row.isArchived) === 1) {
           if (this.refuseLate(message, type, requestId)) return;
           await sessionsService.restoreSessionById(agentId);
@@ -518,7 +472,6 @@ class PaseoConnection {
       case 'archive_workspace_request':
       case 'archive_agent_request':
       case 'delete_agent_request': {
-        if (this.refuseWhileViewing(type, requestId)) return;
         const sessionId = type === 'archive_workspace_request'
           ? sessionIdFromWorkspace(String(message.workspaceId ?? '')) ?? ''
           : String(message.agentId ?? '');
@@ -887,7 +840,6 @@ class PaseoConnection {
     const clientMessageId = typeof agent.clientMessageId === 'string' ? agent.clientMessageId : `${idempotencyKey}:initial-message`;
 
     const firstContext = (message.firstAgentContext ?? {}) as AnyRecord;
-    const viewer = this.viewer;
     let sessionId: string;
     try {
       sessionId = await paseoHub.createOnce(idempotencyKey, () =>
@@ -895,8 +847,7 @@ class PaseoConnection {
           text,
           clientMessageId,
           { images: agent.images ?? firstContext.images, attachments: agent.attachments ?? firstContext.attachments },
-          // view as: recorded in the operator page's History before the first message goes
-          viewer ? (id) => recordViewAs(viewer, { event: 'conversation', conversation: id, chars: text.length }) : undefined,
+          undefined,
           message[NOT_AFTER_FIELD],
         ),
       );
@@ -905,10 +856,7 @@ class PaseoConnection {
         this.reply('rpc_error', { requestId, requestType: 'workspace.create.request', error: error.message, code: NOT_AFTER_CODE });
         return;
       }
-      if (!viewer) throw error;
-      console.error('[paseo] view-as conversation not recorded', error);
-      this.reply('workspace.create.response', { requestId, workspace: null, setupTerminalId: null, error: VIEW_AS_NOT_RECORDED });
-      return;
+      throw error;
     }
     const row = await paseoHub.getSession(sessionId);
     if (!row) {
