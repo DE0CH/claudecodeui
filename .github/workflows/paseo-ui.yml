@@ -1,6 +1,6 @@
-# The staff UI (paseo/, docs/paseo-ui.md): typecheck and the tests of what this fork changed in the Paseo app, on
-# every push touching it. The builds (pigeon-app.yml, jarvis4-runtime.yml) compile it again; this is where its tests run. Paseo's
-# whole suite is not run here (upstream runs it; most of it covers parts this UI does not use).
+# The staff UI (paseo/, docs/paseo-ui.md): typecheck and every test suite of paseo/packages (the app's unit and browser
+# projects, protocol, client, relay, highlight, plugin) and the bridge's, on every push touching it. YYC AI is test-first
+# (claude-env yyc-ai skill): pigeon-app.yml and yyc-ios.yml call this workflow and build only after it passes.
 name: paseo-ui
 
 on:
@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths: ["paseo/**", "server/modules/paseo/**", ".github/workflows/paseo-ui.yml"]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -15,7 +16,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: paseo
@@ -28,20 +29,21 @@ jobs:
       - run: npm run build:app-deps
       - name: Typecheck the app
         run: npx tsgo --noEmit -p packages/app/tsconfig.json
-      - name: Tests of the changed areas
+      - name: Chromium for the browser tests
+        run: npx playwright install --with-deps chromium
+      - name: App tests (unit and browser)
         working-directory: paseo/packages/app
-        run: >
-          npx vitest run --project unit
-          src/i18n src/provider-selection src/sidebar-nav src/hooks/use-settings/storage.test.ts
-          src/tool-calls src/agent-stream/turn-collapse src/composer/actions.test.ts
-          src/command-center src/keyboard src/components/sidebar src/composer/input/state.test.ts
-          src/workspace-tabs src/timeline/turn-time.test.ts src/agent-stream/model.test.ts
-          src/types/stream-user-attachments.test.ts src/yyc/view-as.test.ts src/yyc/early-input.test.ts src/yyc/schedules.test.ts
-      - name: Protocol endpoint tests
-        working-directory: paseo/packages/protocol
-        run: npx vitest run src/daemon-endpoints.test.ts
+        run: npx vitest run
+      - name: Protocol, client, relay, highlight and plugin tests
+        if: success() || failure()   # every suite reports, not only the first red one
+        run: |
+          set -e
+          for p in protocol client relay highlight plugin; do
+            echo "::group::$p"; (cd "packages/$p" && npx vitest run); echo "::endgroup::"
+          done
       # The bridge's tests parse its replies with paseo/packages/protocol's schemas
       - name: Bridge tests
+        if: success() || failure()   # every suite reports, not only the first red one
         working-directory: .
         run: |
           HUSKY=0 ELECTRON_SKIP_BINARY_DOWNLOAD=1 PUPPETEER_SKIP_DOWNLOAD=1 npm ci
