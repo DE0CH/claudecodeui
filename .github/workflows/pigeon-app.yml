@@ -41,7 +41,12 @@ permissions:
   contents: read
 
 jobs:
+  # the staff UI's whole test suite first (YYC AI is test-first, claude-env yyc-ai skill): nothing is built from a red commit
+  tests:
+    uses: ./.github/workflows/paseo-ui.yml
+
   build:
+    needs: tests
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/pigeon-app-fix/')
     # the standard runner for public repositories (4 vCPU, 16 GiB): the export needs a 6 GiB heap, which
     # build-paseo-ui.mjs sets itself; a smaller runner fails or is OOM-killed
