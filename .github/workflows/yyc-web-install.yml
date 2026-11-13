@@ -45,6 +45,10 @@ jobs:
           target: google_apis_playstore
           arch: x86_64
           profile: pixel_7
+          # the default 2 GB runs out with Chrome, Play and the launcher up: Android's low-memory killer then takes
+          # the installed app (or Play in the middle of the install) and steps fail at random
+          ram-size: 6144M
+          cores: 4
           disable-animations: true
           script: python3 scripts/web-install/emulator_test.py "$GITHUB_WORKSPACE/out/screens"
 
