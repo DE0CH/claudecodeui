@@ -11,7 +11,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "scripts/web-install/**"
+      - "scripts/web-install/emulator_test.py"
       - ".github/workflows/yyc-web-install.yml"
 
 concurrency:
