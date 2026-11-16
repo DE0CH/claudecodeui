@@ -241,7 +241,7 @@ UPDATE sessions SET "isArchived" = 0 WHERE "isArchived" = 1;
 CREATE INDEX idx_sessions_deleted_at ON sessions(deleted_at) WHERE deleted_at IS NOT NULL;
 `,
   // 4: Jarvis mode — questions waiting for the person after their turn let the sandbox go (AskUserQuestion,
-  // ExitPlanMode; DE0CH/YYC yyc-ai/refactor/DECISIONS.md 17): what was asked, of which tool call, what the answer's run
+  // ExitPlanMode; DE0CH/yyc-code yyc-ai/refactor/DECISIONS.md 17): what was asked, of which tool call, what the answer's run
   // resumes with, and the answer once given (JSON text), so a question survives this process restarting
   // (jarvis-open-questions.db.ts)
   `

@@ -30,7 +30,7 @@ async function switchBusy() {
 }
 
 /**
- * DECISIONS 17 (DE0CH/YYC yyc-ai/refactor, Deyao, 2026-11-05): a question nobody answers never holds the sandbox, and
+ * DECISIONS 17 (DE0CH/yyc-code yyc-ai/refactor, Deyao, 2026-11-05): a question nobody answers never holds the sandbox, and
  * the person never sees it time out. A turn that waits only on AskUserQuestion parks: the turn ends for the client, its
  * Claude Code process is stopped (the sandbox then idles like any idle one), and the question is kept and stays
  * pending; the answer starts a turn that resumes the conversation and carries the answer as its message.

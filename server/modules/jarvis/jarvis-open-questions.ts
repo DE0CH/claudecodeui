@@ -1,5 +1,5 @@
 /**
- * Questions that wait for the person without holding a sandbox (DE0CH/YYC yyc-ai/refactor/DECISIONS.md 17, Deyao,
+ * Questions that wait for the person without holding a sandbox (DE0CH/yyc-code yyc-ai/refactor/DECISIONS.md 17, Deyao,
  * 2026-11-05).
  *
  * When a turn waits only on an AskUserQuestion or ExitPlanMode (no tool running, no background work), the Claude runtime

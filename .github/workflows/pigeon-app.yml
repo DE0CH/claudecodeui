@@ -1,6 +1,6 @@
 # The Paseo web app as an image for pigeon (DE0CH/aviary; pigeon spec 17.1, cutover D13, DESIGN 9.6):
 # ghcr.io/de0ch/pigeon-app:<first 12 characters of the commit>, files under /app plus a static /cp. pigeon's
-# initContainer copies /app into the emptyDir pigeon serves. Pinned by hand in DE0CH/YYC yyc-ai/deploy; this workflow
+# initContainer copies /app into the emptyDir pigeon serves. Pinned by hand in DE0CH/yyc-code yyc-ai/deploy; this workflow
 # deploys nothing.
 #
 # build: the Expo web export (scripts/build-paseo-ui.mjs), the patch assertion, the chunk budgets, and the contract
@@ -9,7 +9,7 @@
 # image: merges in the hashed assets of recent pigeon-app builds (any pigeon-app image served within the 720 h Access
 #   session lifetime, restored from its own image if :main lost it, and while the size budget allows the last 5 and
 #   any of the last 30 days) and of every yyc-ai-ui image served within that lifetime
-#   (both from the pin history in DE0CH/YYC's git log, read with a read-only deploy key; plus the ui image of this very
+#   (both from the pin history in DE0CH/yyc-code's git log, a public repository; plus the ui image of this very
 #   commit, which is how the A1 image gets in before YYC pins it), writes .br/.gz siblings for the pigeon-app builds'
 #   files, checks the size budget, pushes the image, checks the pushed image holds every seeded file byte for byte and
 #   that /cp works as pigeon's uid, then sends this commit and the seeded ui commits to aviary's clients.txt in ONE
@@ -19,8 +19,8 @@
 # Branches: main, and pigeon-app-fix/* (a fix cut from the A1 commit during the A1-A5 freeze, which may change nothing
 #   but scripts/pigeon-app/ and this file: the image job refuses anything else; README "The A1-A5 freeze").
 #
-# Secrets: YYC_PIN_HISTORY_KEY (a read-only deploy key of DE0CH/YYC), AVIARY_DISPATCH_TOKEN (a fine-grained token,
-# DE0CH/aviary only, Contents read and write: what repository_dispatch needs). A missing one fails the job.
+# Secrets: AVIARY_DISPATCH_TOKEN (a fine-grained token, DE0CH/aviary only, Contents read and write: what
+# repository_dispatch needs). A missing one fails the job.
 name: pigeon-app
 
 on:
@@ -124,7 +124,7 @@ jobs:
           fetch-depth: 0
           filter: tree:0
       # a fix branch is cut from the A1 commit and changes only pigeon-app's own files: the freeze lets YYC pin it
-      # (DE0CH/YYC cutover freeze-check: its diff from the A1 commit touches nothing else)
+      # (DE0CH/yyc-code cutover freeze-check: its diff from the A1 commit touches nothing else)
       - name: a pigeon-app-fix branch changes nothing but pigeon-app
         if: startsWith(github.ref, 'refs/heads/pigeon-app-fix/')
         run: |
@@ -152,18 +152,10 @@ jobs:
           crane auth login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
           docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
 
-      - name: the images served within the Access session lifetime (DE0CH/YYC's pin history)
-        env:
-          KEY: ${{ secrets.YYC_PIN_HISTORY_KEY }}
+      - name: the images served within the Access session lifetime (DE0CH/yyc-code's pin history)
         run: |
-          [ -n "$KEY" ] || { echo "::error::secret YYC_PIN_HISTORY_KEY (a read-only deploy key of DE0CH/YYC) is not set"; exit 1; }
-          umask 077
-          printf '%s\n' "$KEY" > "$RUNNER_TEMP/yyc-key"
-          # GitHub's published host key
-          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$RUNNER_TEMP/known_hosts"
-          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/yyc-key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
-          # a blobless clone: pins.mjs fetches the kustomizations it reads, with the key
-          git clone -q --bare --filter=blob:none git@github.com:DE0CH/YYC.git "$RUNNER_TEMP/yyc.git"
+          # a blobless clone of the public deploy repository: pins.mjs fetches the kustomizations it reads
+          git clone -q --bare --filter=blob:none https://github.com/DE0CH/yyc-code.git "$RUNNER_TEMP/yyc.git"
           echo "yyc-ai-ui (the seeds):"
           # 720 h plus a 24 h margin for push and rollout delays (pins.mjs). An empty list is an error only while YYC
           # still pins yyc-ai-ui: after the switch's cleanup removes the ui pin, the seeds run out 744 h later
@@ -178,7 +170,6 @@ jobs:
               || { echo "::error::pigeon-app tag $tag is not a single claudecodeui commit"; exit 1; }
             echo "$commit" >> "$RUNNER_TEMP/served-builds.txt"
           done < "$RUNNER_TEMP/app-pins.txt"
-          rm -f "$RUNNER_TEMP/yyc-key"
 
       - name: the seeds' commits
         run: |

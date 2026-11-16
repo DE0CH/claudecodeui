@@ -66,7 +66,7 @@ const supersededInstances = new WeakSet();
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 // An interactive tool (AskUserQuestion, ExitPlanMode) waits for its answer without holding the sandbox (DECISIONS 17 in
-// DE0CH/YYC yyc-ai/refactor, Deyao, 2026-11-05; see "park" in queryClaudeSDK). CLAUDE_INTERACTIVE_TOOL_TIMEOUT_MS
+// DE0CH/yyc-code yyc-ai/refactor, Deyao, 2026-11-05; see "park" in queryClaudeSDK). CLAUDE_INTERACTIVE_TOOL_TIMEOUT_MS
 // (default 7 days, jarvis-open-questions.ts) is only a safety limit: past it a question is closed, and a live Claude
 // Code still waiting on one (a turn that could not let its sandbox go) is told so in these words.
 const INTERACTIVE_TOOL_TIMEOUT_MS = ASK_SAFETY_LIMIT_MS;

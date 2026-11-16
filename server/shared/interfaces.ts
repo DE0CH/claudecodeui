@@ -55,7 +55,7 @@ export interface IProviderRuntime {
   /**
    * Questions waiting for the person after their turn let its process (and
    * sandbox) go: not running work. Only the Claude runtime parks questions
-   * (DE0CH/YYC yyc-ai/refactor/DECISIONS.md 17).
+   * (DE0CH/yyc-code yyc-ai/refactor/DECISIONS.md 17).
    */
   listOpenQuestions?(): OpenQuestionSummary[];
 }

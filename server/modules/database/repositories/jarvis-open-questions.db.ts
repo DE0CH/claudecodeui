@@ -1,5 +1,5 @@
 /**
- * Jarvis mode: questions waiting for the person after their turn let the sandbox go (DECISIONS 17 in DE0CH/YYC
+ * Jarvis mode: questions waiting for the person after their turn let the sandbox go (DECISIONS 17 in DE0CH/yyc-code
  * yyc-ai/refactor; jarvis-open-questions.ts keeps them in memory and writes them through here). One row per question
  * (`request_id`, the id the client answers by); `input`, `run_options` and `answer` are JSON text.
  */
