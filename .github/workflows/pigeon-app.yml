@@ -254,7 +254,7 @@ jobs:
         with:
           name: web-export
           path: ${{ runner.temp }}/dist
-      # pigeon's emptyDir for these files is 512 MiB (pigeon spec 17.1): the tree may take 480 MiB of it on disk. This
+      # pigeon's emptyDir for these files is 2 GiB (DE0CH/yyc-code yyc-ai/deploy/pigeon.yaml): the tree may take 2016 MiB of it on disk. This
       # holds only once the pigeon container's ephemeral-storage limit covers the emptyDir too (kubelet counts a
       # disk-backed emptyDir against the pod's summed limits; scripts/pigeon-app/README.md "Size"): the budget follows
       # the lower of the two
@@ -264,7 +264,7 @@ jobs:
         run: |
           # --pins: the report gives the mandatory part's headroom and projects it over 744 h at the ui pin rate of the
           # last 7 days (a warning when it would go over the budget; README design gap 1)
-          args=(--dist "$RUNNER_TEMP/dist" --sw public/sw.js --commit "$GITHUB_SHA" --out "$RUNNER_TEMP/pigeon-app" --seeds "$RUNNER_TEMP/seeds" --budget-mib 480 --pins "$RUNNER_TEMP/pins.txt")
+          args=(--dist "$RUNNER_TEMP/dist" --sw public/sw.js --commit "$GITHUB_SHA" --out "$RUNNER_TEMP/pigeon-app" --seeds "$RUNNER_TEMP/seeds" --budget-mib 2016 --pins "$RUNNER_TEMP/pins.txt")
           [ -z "$PREVIOUS" ] || args+=(--previous "$PREVIOUS")
           while read -r tag commit; do args+=(--seed "$tag=$commit"); done < "$RUNNER_TEMP/seeds.txt"
           while read -r commit; do args+=(--served-build "$commit"); done < "$RUNNER_TEMP/served-builds.txt"
@@ -291,7 +291,7 @@ jobs:
       # reports the lowest limit that worked on this host.
       - name: the pushed image holds every seeded file, and /cp copies it as pigeon's uid within the initContainer's memory limit
         env:
-          CP_MEMORY_MIB: 512
+          CP_MEMORY_MIB: 2048
         run: |
           tag=${GITHUB_SHA::12}
           mkdir -p "$RUNNER_TEMP/pushed"
@@ -300,7 +300,7 @@ jobs:
           node scripts/pigeon-app/verify-seeds.mjs "$RUNNER_TEMP/pushed/app" "$RUNNER_TEMP/seeds" "${tags[@]}"
           docker pull -q "$IMAGE:$tag" >/dev/null
           echo "host: kernel $(uname -r), $(docker info -f 'cgroup v{{.CgroupVersion}}, docker {{.ServerVersion}}')"
-          for mib in 32 64 128 256 512; do
+          for mib in 32 64 128 256 512 1024 2048; do
             [ "$mib" -le "$CP_MEMORY_MIB" ] || break
             dir="$RUNNER_TEMP/srv-app-$mib"
             mkdir -p "$dir"
