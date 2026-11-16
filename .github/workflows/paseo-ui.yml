@@ -45,6 +45,10 @@ jobs:
       - name: Bridge tests
         if: success() || failure()   # every suite reports, not only the first red one
         working-directory: .
+        env:
+          # @vscode/ripgrep's postinstall asks GitHub's API for its release: unauthenticated, a runner's
+          # shared address is over the limit often enough (403) to turn the whole run red
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           HUSKY=0 ELECTRON_SKIP_BINARY_DOWNLOAD=1 PUPPETEER_SKIP_DOWNLOAD=1 npm ci
           npx tsx --tsconfig server/tsconfig.json --test server/modules/paseo/tests/*.test.ts
