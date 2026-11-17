@@ -99,7 +99,9 @@ jobs:
           tail -n 5 "$RUNNER_TEMP/sim-build.log"
 
       - name: Simulator test
-        timeout-minutes: 25
+        # ios/simulator-test.sh gives Maestro's driver 10 min to start and tries once more: two tries plus the boot.
+        # 25 cut a passing second try off 9 s after its last step (run 70)
+        timeout-minutes: 40
         run: ios/simulator-test.sh "$(ls -d packages/app/ios/build/sim/Build/Products/Release-iphonesimulator/*.app | head -1)"
 
       - name: Keep the test screenshots
