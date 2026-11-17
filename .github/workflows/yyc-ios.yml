@@ -53,6 +53,8 @@ jobs:
       APP_VARIANT: ${{ matrix.variant }}
       YYC_SITE: ${{ matrix.site || secrets.YYC_SITE }}
       PRODUCT_NAME: ${{ matrix.product }}
+      # the server's address may show in the simulator test's screenshots (ios/simulator-test.sh)
+      SITE_IS_PUBLIC: ${{ matrix.site && '1' || '' }}
     defaults:
       run:
         working-directory: paseo
