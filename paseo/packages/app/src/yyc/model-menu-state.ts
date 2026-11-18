@@ -68,6 +68,31 @@ export function menuState(
   return { models, model, row, level };
 }
 
+/** The menu's width when its levels need no more (and before their labels are measured). */
+export const MENU_MIN_WIDTH = 272;
+/** The room each side of a level's label, as a menu row's label has (its 8 px padding). */
+export const LEVEL_LABEL_ROOM = 8;
+/** A level cell's border, each side. */
+export const LEVEL_CELL_BORDER = 1;
+/** The track's padding around the cells, each side. */
+export const LEVEL_TRACK_PADDING = 2;
+/** The track's margin from the menu's edges, each side. */
+export const LEVEL_TRACK_MARGIN = 8;
+/** The gap kept between the menu and the window's edges, each side. */
+const WINDOW_EDGE = 8;
+
+/**
+ * The menu's width: wide enough that every thinking cell holds the widest level label as it renders (`labelWidth`,
+ * measured: it differs by language and font) with a menu row's room each side, since the cells are equal. Never
+ * narrower than MENU_MIN_WIDTH and never wider than the window. `labelWidth` null: not measured yet.
+ */
+export function menuWidth(labelWidth: number | null, positions: number, windowWidth: number): number {
+  const cell = (labelWidth ?? 0) + 2 * (LEVEL_LABEL_ROOM + LEVEL_CELL_BORDER);
+  const row = positions * cell + 2 * (LEVEL_TRACK_PADDING + LEVEL_TRACK_MARGIN);
+  const wanted = labelWidth === null ? MENU_MIN_WIDTH : Math.max(MENU_MIN_WIDTH, Math.ceil(row));
+  return Math.min(wanted, Math.max(0, windowWidth - 2 * WINDOW_EDGE));
+}
+
 /**
  * Whether picking `toId` in a conversation on `fromId` moves it to another harness. The harnesses keep separate
  * sessions, so the conversation so far is carried over as a summary: the person is asked first.
