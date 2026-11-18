@@ -7,6 +7,17 @@ import { useIsCompactFormFactor } from "@/constants/layout";
 import type { AttachmentMetadata } from "@/attachments/types";
 import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
 import type { Theme } from "@/styles/theme";
+import { lazyArea } from "@/components/lazy-area";
+
+// The bar and share an upload draws on its chip are their own chunk (components/upload-overlay.tsx), fetched with the
+// uploader when something is attached: out of the first load (docs/paseo-ui.md "Budgets").
+const UploadOverlay = lazyArea(
+  "upload-overlay",
+  () => import("./upload-overlay"),
+  (module) => module.UploadOverlay,
+  null,
+);
+import { serverImageSource } from "@/yyc/open-file";
 
 // Every attachment pill body — image thumbnail or labelled — renders at this
 // height so mixed attachment trays line up.
@@ -19,6 +30,10 @@ interface AttachmentPillProps {
   removeAccessibilityLabel: string;
   disabled?: boolean;
   testID?: string;
+  /** The share of its upload done (0 to 1) while it uploads; drawn as a bar along the chip's foot. */
+  uploadProgress?: number;
+  /** Said over the chip body while it uploads ("Uploading 45%"): for a chip with no other text. */
+  uploadLabel?: string;
   children: ReactNode;
 }
 
@@ -29,6 +44,8 @@ export function AttachmentPill({
   removeAccessibilityLabel,
   disabled = false,
   testID,
+  uploadProgress,
+  uploadLabel,
   children,
 }: AttachmentPillProps) {
   const isCompact = useIsCompactFormFactor();
@@ -57,6 +74,9 @@ export function AttachmentPill({
         style={styles.frame}
       >
         {children}
+        {uploadProgress === undefined ? null : (
+          <UploadOverlay fraction={uploadProgress} label={uploadLabel} />
+        )}
       </Pressable>
       <Pressable
         onPress={onRemove}
@@ -78,6 +98,9 @@ interface AttachmentFrameProps {
   onPress?: () => void;
   accessibilityLabel?: string;
   testID?: string;
+  /** As AttachmentPill's. */
+  uploadProgress?: number;
+  uploadLabel?: string;
   children: ReactNode;
 }
 
@@ -86,12 +109,17 @@ export function AttachmentFrame({
   onPress,
   accessibilityLabel,
   testID,
+  uploadProgress,
+  uploadLabel,
   children,
 }: AttachmentFrameProps) {
   if (!onPress) {
     return (
       <View testID={testID} style={styles.frame}>
         {children}
+        {uploadProgress === undefined ? null : (
+          <UploadOverlay fraction={uploadProgress} label={uploadLabel} />
+        )}
       </View>
     );
   }
@@ -131,12 +159,13 @@ export function AttachmentLabel({ icon, title, subtitle }: AttachmentLabelProps)
   );
 }
 
+
 /** Square image preview pill body. */
 export function AttachmentThumbnail({ metadata }: { metadata: AttachmentMetadata }) {
   const full = useAttachmentPreviewUrl(metadata);
   // the server's small rendition when it sent one: a chip never needs the full image
   const uri = metadata.previewKey ?? full;
-  const source = useMemo(() => ({ uri: uri ?? "" }), [uri]);
+  const source = useMemo(() => serverImageSource(uri ?? ""), [uri]);
   if (!uri) {
     return <View style={styles.thumbnailPlaceholder} />;
   }

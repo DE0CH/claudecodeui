@@ -79,6 +79,20 @@ server (`server/`) serves no deployment.
   `clientMessageId` (magpie admits an id once), when the host comes online, when the outbox loads after a reload,
   and 15 s after a failed try; the server's refusal or 取消 takes it out of the chat and puts its text back into an
   empty message box (a refusal also shows its error there).
+- **Touch targets** (Deyao, 2026-11-18, design B): on a phone (the compact layout, below `md`) every control is at least
+  a finger's 44 px either way; from `md` up controls keep their desktop sizes. One number, `TOUCH_TARGET`, and
+  `touchSize(desktop)` (a Unistyles breakpoint value, `components/ui/control-geometry.ts`) size the shared buttons, fields,
+  switches and segmented controls; icon buttons (`components/ui/icon-button-chrome.ts`) are 44 x 44 with their glyph a
+  size up (16 to 20, 14 to 18); menu rows (`MENU_ITEM_HEIGHT`), the "/" list, tool and step rows are 44 tall. The
+  message box's +, model button and send are 44 tall and send/stop draw a 36 px disc inside their 44 px target (the box
+  grows 4 px). Small things that sit on a line of text (copy buttons, 「工作了」, the schedule and activity chips,
+  「取消」) are 44 px targets drawn as before: negative margins give the space back, so no line moves. The check is
+  `scripts/touch-targets/check.mjs DIST [OUT]` (run by `pigeon-app.yml` on every export): the export served with a
+  stand-in for pigeon (`stand-in.mjs`, pigeon's recorded answers in `pigeon-answers.json`, the sample conversations of
+  `content.mjs`), every screen and state opened on a 390 px touch phone in Chromium and every control measured; one
+  under 44 px fails it by screen, label and size. A new screen or state is a new entry in its `STATES`. An inline link
+  inside running text is exempt (WCAG 2.5.8). A question asked about a model pick (the harness switch) closes the model
+  menu first: left open, its backdrop took the first tap on 繼續 or 取消.
 - **One sidebar row**: the items at the top of the sidebar (新對話 / 最近刪除 / 搜尋), the conversation rows and the
   settings list share one geometry: `density.rowHeight` tall, 8 + 8 px inset, a 14 px label on
   `SIDEBAR_ROW_LINE_HEIGHT` (`styles/density.ts`), the icon in a conversation status slot; the settings items are
@@ -86,10 +100,25 @@ server (`server/`) serves no deployment.
   page, 最近刪除 and the loading skeleton take the same values as the screens they stand for.
 - **YYC features** (`src/yyc/`): sent-file cards (`sent-files.tsx`; kept visible when a turn folds,
   `agent-stream/turn-collapse/model.ts`), paths in replies download through the server, uploads through
-  `/api/assets/files` (`composer/actions.ts`), the "preparing the workspace" chip (`sandbox-status.ts`,
+  `/api/assets/files` the moment a file or a picture is attached (`yyc/asset-upload.ts`, XMLHttpRequest for the bytes
+  sent: the chip draws a bar along its foot, `components/upload-overlay.tsx`, its own chunk, and the send waits for it;
+  Deyao, 2026-11-18). A picture goes up as an image (`?kind=image`, `uploadAttachedImage`) and the send names it by
+  `images[].uploadId` (an empty `data` beside it, so every listed app build accepts the frame) instead of carrying its
+  bytes, so a send between replies and one during a reply carry the same small message and never wait on the store.
+  A picture that fails to upload leaves the message box with the server's sentence, as a file does (sending its bytes
+  instead waited on the same store and showed only as 「等待網絡」: Jarvis's chat, 2026-11-18, its bucket unreachable);
+  one uploaded over 23 h ago (magpie keeps an unsent upload a day), or to a pigeon before `?kind=image` (its answer
+  names no upload: YYC AI and the Jarvis chat move their pins apart), is sent with its bytes (`attachments/service.ts`
+  `encodeAttachmentsForSend`, `uploadAttachedImage`). The uploader is a chunk of its own, fetched when something is
+  attached; the entry keeps only `yyc/upload-progress.ts`. The entry was at 1,099.5 KB of its 1,100 KB budget
+  (2026-11-18): the upload's 1.6 KB went over it, so the uploader, the chip's upload overlay and the queue's rows
+  (`composer/queue-rows.tsx`: a queue shows only after a send during a reply) are their own chunks, the "preparing the workspace" chip (`sandbox-status.ts`,
   `sandbox-chip.tsx`; only while a sent message waits on the sandbox, the hub never shows it for a turn nobody sent:
   Deyao, 2026-11-03; a start that waits for the person's approval elsewhere, hermit's phase `approval`, says
-  "waiting for your approval" instead: the message's `waiting`, `nextPreparing`), typing warms a host (`warm.ts`), the greeting with the person's first name (`greeting.ts`,
+  "waiting for your approval" instead: the message's `waiting`, `nextPreparing`; a socket that connects again starts
+  with no chips and pigeon says again which are still preparing, so a `ready` sent while an iPhone app was in the
+  background does not leave the chip up), the history's images (paths on the server, `/api/blobs/…`) read from the
+  server with the iOS app's Access token (`serverImageSource`, used by every attachment image), typing warms a host (`warm.ts`), the greeting with the person's first name (`greeting.ts`,
   `me.ts`), sharing (`share.tsx`, and the read-only page `app/s/[id].tsx`: the server sends the snapshot as timeline
   rows built by the same `SessionTimeline`, the page hydrates them like a conversation's history and renders the chat's
   own `AgentStreamView` read only, its files read through the share via `ConversationFilesContext`), the conversation menu

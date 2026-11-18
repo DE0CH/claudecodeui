@@ -6,6 +6,7 @@ import {
 } from "@/loading/stages";
 import { ReplyDisplayLoadFailed } from "@/components/loading-frame";
 import { warmSandbox } from "@/yyc/warm";
+import { uploadFraction, type UploadProgress } from "@/yyc/upload-progress";
 import {
   useComposerEditingSession,
   useComposerFullscreen,
@@ -42,10 +43,7 @@ import { usePanelStore } from "@/stores/panel-store";
 import { useHasFinePointer } from "@/hooks/use-fine-pointer";
 import { useShallow } from "zustand/shallow";
 import {
-  ArrowUp,
-  X,
   Square,
-  Pencil,
   AudioLines,
   CircleDot,
   FileText,
@@ -77,6 +75,7 @@ import {
 } from "./input/input";
 import type { ImageAttachment, MessagePayload, TextReplacement } from "./types";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
+import { touchSize } from "@/components/ui/control-geometry";
 import type { DraftCommandTarget } from "@/hooks/use-agent-commands-query";
 import { focusWithRetries } from "@/utils/web-focus";
 import {
@@ -138,11 +137,9 @@ import {
 import { createUserMessage, generateMessageId } from "@/types/stream";
 import {
   addToOutbox,
-  cancelOutboxEntry,
   subscribeOutboxReturns,
   useOutboxEntries,
 } from "@/yyc/outbox-store";
-import { PENDING_BUBBLE_OPACITY } from "@/yyc/outbox";
 import { chatSendBehavior, resolveActiveSendBehavior } from "./input/state";
 import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
 import type { KeyboardActionDefinition } from "@/keyboard/keyboard-action-dispatcher";
@@ -228,8 +225,9 @@ const EMPTY_ATTACHMENT_SCOPE_KEYS: readonly string[] = [];
 function noop() {}
 const noopCallback = () => {};
 
-function resolveComposerButtonIconSize(): number {
-  return isWeb ? ICON_SIZE.md : ICON_SIZE.lg;
+function resolveComposerButtonIconSize(isCompact: boolean): number {
+  // A size up on a phone, where the buttons are a finger's 44 px
+  return isCompact || !isWeb ? ICON_SIZE.lg : ICON_SIZE.md;
 }
 
 function resolveIsComposerLocked(
@@ -324,15 +322,21 @@ function buildAgentStateSelector(serverId: string, agentId: string) {
   };
 }
 
-// The forge's brand icon in the attach menu (only where the server searches a forge; never in YYC) is its own chunk
-// The line under a queued message the server has not confirmed lives in the reply chunk, which has arrived before
-// anything can be sent (loading/stages.ts), so it draws offline too and adds nothing to the first load.
-const PendingSendLine = lazyArea(
-  "pending-send",
-  loadReplyChunk,
-  (module) => module.PendingSendLine,
+// The queue's rows (the server's queue and the app's own) are their own chunk, composer/queue-rows.tsx: a queue shows
+// only after a message is sent during a reply, so they stay out of the first load (docs/paseo-ui.md "Budgets").
+const ServerQueuedRow = lazyArea(
+  "queue-rows",
+  () => import("./queue-rows"),
+  (module) => module.ServerQueuedRow,
   null,
 );
+const QueuedMessageRow = lazyArea(
+  "queue-rows",
+  () => import("./queue-rows"),
+  (module) => module.QueuedMessageRow,
+  null,
+);
+// The forge's brand icon in the attach menu (only where the server searches a forge; never in YYC) is its own chunk
 const ForgeBrandIcon = lazyArea(
   "forge-icon",
   () => import("@/git/forge-icon"),
@@ -382,12 +386,16 @@ function renderLeftContent(args: RenderLeftContentArgs): ReactElement | null {
 interface PendingFileAttachment {
   id: number;
   file: SelectedFile;
+  /** How far its upload has come (yyc/asset-upload.ts). */
+  progress?: UploadProgress;
 }
 
 interface RenderAttachmentTrayArgs {
   serverId: string;
   selectedAttachments: ComposerAttachment[];
   pendingFiles: PendingFileAttachment[];
+  /** The pictures still uploading (by attachment id): their chips draw the progress. */
+  imageUploads: Readonly<Record<string, UploadProgress>>;
   isComposerLocked: boolean;
   handleOpenAttachment: (attachment: ComposerAttachment) => void;
   handleRemoveAttachment: (index: number) => void;
@@ -395,6 +403,8 @@ interface RenderAttachmentTrayArgs {
     openImage: string;
     removeImage: string;
     removeFile: string;
+    /** "Uploading 45%" for a chip whose upload runs. */
+    uploading: (percent: number) => string;
     openGithub: (kind: string, numberLabel: string) => string;
     removeGithub: (kind: string, numberLabel: string) => string;
   };
@@ -405,6 +415,7 @@ function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | nu
     serverId,
     selectedAttachments,
     pendingFiles,
+    imageUploads,
     isComposerLocked,
     handleOpenAttachment,
     handleRemoveAttachment,
@@ -422,14 +433,30 @@ function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | nu
           onOpen: handleOpenAttachment,
           onRemove: handleRemoveAttachment,
           labels,
+          uploadProgress:
+            attachment.kind === "image" && imageUploads[attachment.metadata.id]
+              ? uploadFraction(imageUploads[attachment.metadata.id])
+              : undefined,
+          uploadLabel:
+            attachment.kind === "image" && imageUploads[attachment.metadata.id]
+              ? labels.uploading(Math.round(uploadFraction(imageUploads[attachment.metadata.id]) * 100))
+              : undefined,
         }),
       )}
-      {pendingFiles.map(({ id, file }) => (
-        <AttachmentFrame key={id} testID="composer-pending-file-attachment">
+      {pendingFiles.map(({ id, file, progress }) => (
+        <AttachmentFrame
+          key={id}
+          testID="composer-pending-file-attachment"
+          uploadProgress={uploadFraction(progress)}
+        >
           <AttachmentLabel
             icon={pendingFilePillIcon}
             title={file.fileName}
-            subtitle={getFileTypeLabel(file.fileName) ?? ""}
+            subtitle={
+              progress
+                ? labels.uploading(Math.round(uploadFraction(progress) * 100))
+                : (getFileTypeLabel(file.fileName) ?? "")
+            }
           />
         </AttachmentFrame>
       ))}
@@ -490,6 +517,8 @@ interface RenderComposerAttachmentPillArgs {
   onOpen: (attachment: ComposerAttachment) => void;
   onRemove: (index: number) => void;
   labels: RenderAttachmentTrayArgs["labels"];
+  uploadProgress?: number;
+  uploadLabel?: string;
 }
 
 function renderComposerAttachmentPill(args: RenderComposerAttachmentPillArgs): ReactElement {
@@ -505,6 +534,8 @@ function renderComposerAttachmentPill(args: RenderComposerAttachmentPillArgs): R
         onRemove={onRemove}
         openLabel={labels.openImage}
         removeLabel={labels.removeImage}
+        uploadProgress={args.uploadProgress}
+        uploadLabel={args.uploadLabel}
       />
     );
   }
@@ -739,135 +770,6 @@ function resolveMessageInputPassthroughAction(
   }
 }
 
-interface ServerQueuedRowProps {
-  item: ServerQueueItem;
-  onTakeBack: (id: string) => void;
-  onSendNow: () => void;
-  takeBackLabel: string;
-  sendNowLabel: string;
-  cancelLabel: string;
-}
-
-/**
- * A message of the server's queue: its text, "send now" (the reply stops, so the queue's first message runs), and
- * for one the server holds until the reply ends, taking it back.
- */
-function ServerQueuedRow({
-  item,
-  onTakeBack,
-  onSendNow,
-  takeBackLabel,
-  sendNowLabel,
-  cancelLabel,
-}: ServerQueuedRowProps) {
-  const handleTakeBack = useCallback(() => {
-    onTakeBack(item.id);
-  }, [onTakeBack, item.id]);
-  const handleCancelPending = useCallback(() => {
-    cancelOutboxEntry(item.id);
-  }, [item.id]);
-  if (item.pendingSinceMs !== undefined) {
-    // the server has not confirmed it (yyc/outbox.ts): faded, its line under the text, and 取消 takes it back
-    return (
-      <View style={styles.queueItem} testID="server-queue-item" aria-busy>
-        <View style={styles.queueBody}>
-          <Text style={[styles.queueText, styles.queueTextPending]} numberOfLines={2} ellipsizeMode="tail">
-            {item.text}
-          </Text>
-          <PendingSendLine sinceMs={item.pendingSinceMs} compact />
-        </View>
-        <View style={styles.queueActions}>
-          <Pressable
-            onPress={handleCancelPending}
-            style={styles.queueActionButton}
-            accessibilityLabel={cancelLabel}
-            accessibilityRole="button"
-            testID="server-queue-cancel-pending"
-          >
-            <ThemedX size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
-          </Pressable>
-        </View>
-      </View>
-    );
-  }
-  return (
-    <View style={styles.queueItem} testID="server-queue-item">
-      <Text style={styles.queueText} numberOfLines={2} ellipsizeMode="tail">
-        {item.text}
-      </Text>
-      <View style={styles.queueActions}>
-        {item.held ? (
-          <Pressable
-            onPress={handleTakeBack}
-            style={styles.queueActionButton}
-            accessibilityLabel={takeBackLabel}
-            accessibilityRole="button"
-            testID="server-queue-take-back"
-          >
-            <ThemedPencil size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
-          </Pressable>
-        ) : null}
-        <Pressable
-          onPress={onSendNow}
-          style={[styles.queueActionButton, styles.queueSendButton]}
-          accessibilityLabel={sendNowLabel}
-          accessibilityRole="button"
-          testID="server-queue-send-now"
-        >
-          <ThemedArrowUp size={ICON_SIZE.sm} uniProps={iconAccentForegroundMapping} />
-        </Pressable>
-      </View>
-    </View>
-  );
-}
-
-interface QueuedMessageRowProps {
-  item: QueuedMessage;
-  onEdit: (id: string) => void;
-  onSendNow: (id: string) => void;
-  editLabel: string;
-  sendNowLabel: string;
-}
-
-function QueuedMessageRow({
-  item,
-  onEdit,
-  onSendNow,
-  editLabel,
-  sendNowLabel,
-}: QueuedMessageRowProps) {
-  const handleEdit = useCallback(() => {
-    onEdit(item.id);
-  }, [onEdit, item.id]);
-  const handleSendNow = useCallback(() => {
-    onSendNow(item.id);
-  }, [onSendNow, item.id]);
-  return (
-    <View style={styles.queueItem}>
-      <Text style={styles.queueText} numberOfLines={2} ellipsizeMode="tail">
-        {item.text}
-      </Text>
-      <View style={styles.queueActions}>
-        <Pressable
-          onPress={handleEdit}
-          style={styles.queueActionButton}
-          accessibilityLabel={editLabel}
-          accessibilityRole="button"
-        >
-          <ThemedPencil size={ICON_SIZE.sm} uniProps={iconForegroundMapping} />
-        </Pressable>
-        <Pressable
-          onPress={handleSendNow}
-          style={[styles.queueActionButton, styles.queueSendButton]}
-          accessibilityLabel={sendNowLabel}
-          accessibilityRole="button"
-        >
-          <ThemedArrowUp size={ICON_SIZE.sm} uniProps={iconAccentForegroundMapping} />
-        </Pressable>
-      </View>
-    </View>
-  );
-}
 
 interface ImageAttachmentPillProps {
   attachment: Extract<ComposerAttachment, { kind: "image" }>;
@@ -877,6 +779,8 @@ interface ImageAttachmentPillProps {
   onRemove: (index: number) => void;
   openLabel: string;
   removeLabel: string;
+  uploadProgress?: number;
+  uploadLabel?: string;
 }
 
 function ImageAttachmentPill({
@@ -887,6 +791,8 @@ function ImageAttachmentPill({
   onRemove,
   openLabel,
   removeLabel,
+  uploadProgress,
+  uploadLabel,
 }: ImageAttachmentPillProps) {
   const handleOpen = useCallback(() => {
     onOpen(attachment);
@@ -902,6 +808,8 @@ function ImageAttachmentPill({
       openAccessibilityLabel={openLabel}
       removeAccessibilityLabel={removeLabel}
       disabled={disabled}
+      uploadProgress={uploadProgress}
+      uploadLabel={uploadLabel}
     >
       <AttachmentThumbnail metadata={attachment.metadata} />
     </AttachmentPill>
@@ -1173,7 +1081,7 @@ function ComposerCancelButton({
         accessibilityRole="button"
         style={cancelButtonStyle}
       >
-        {icon}
+        <View style={styles.cancelDisc}>{icon}</View>
       </TooltipTrigger>
       <TooltipContent side="top" align="center" offset={8}>
         <View style={styles.tooltipRow}>
@@ -1339,7 +1247,6 @@ function ComposerContentImpl({
 }: ComposerContentProps) {
   const mode = resolveComposerInputMode(inputMode);
   const { t } = useTranslation();
-  const buttonIconSize = resolveComposerButtonIconSize();
   const client = useHostRuntimeClient(serverId);
   const isConnected = useHostRuntimeIsConnected(serverId);
   const agentDirectoryStatus = useHostRuntimeAgentDirectoryStatus(serverId);
@@ -1368,6 +1275,7 @@ function ComposerContentImpl({
 
   const isCompactFormFactor = useIsCompactFormFactor();
   const isCompactLayout = resolveCompactLayout(isCompactLayoutOverride, isCompactFormFactor);
+  const buttonIconSize = resolveComposerButtonIconSize(isCompactFormFactor);
   const isDesktopWebBreakpoint = resolveIsDesktopWebBreakpoint(isCompactFormFactor);
   const hasFinePointer = useHasFinePointer();
   const isDesktopLayout = resolveIsDesktopWebBreakpoint(isCompactLayout);
@@ -1444,7 +1352,9 @@ function ComposerContentImpl({
   const [isProcessing, setIsProcessing] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<PendingFileAttachment[]>([]);
   const nextPendingFileId = useRef(0);
-  const isUploadingFile = pendingFiles.length > 0;
+  // pictures upload when they are attached (yyc/asset-upload.ts); the send waits for them as for files
+  const [imageUploads, setImageUploads] = useState<Readonly<Record<string, UploadProgress>>>({});
+  const isUploadingFile = pendingFiles.length > 0 || Object.keys(imageUploads).length > 0;
   const [pendingNativeImagePastes, setPendingNativeImagePastes] = useState(0);
   const editingSession = useComposerEditingSession(inputMode, providedEditingSession);
   const isFullscreen = useComposerFullscreen(editingSession);
@@ -1564,8 +1474,47 @@ function ComposerContentImpl({
         ...prev,
         ...images.map((metadata) => ({ kind: "image" as const, metadata })),
       ]);
+      // each picture goes up now, with its progress on its chip; the send names it by its upload. One that fails to
+      // upload leaves the message box with the server's sentence, as a file does: sending its bytes instead would wait
+      // on the same store and show only as a message that never leaves (「等待網絡」).
+      for (const image of images) {
+        if (image.uploadId || image.storageType === "remote-url") continue;
+        setImageUploads((prev) => ({ ...prev, [image.id]: { sent: 0, total: 0 } }));
+        void import("@/yyc/asset-upload")
+          .then(({ uploadAttachedImage }) =>
+            uploadAttachedImage(image, (progress) =>
+              setImageUploads((prev) => (prev[image.id] ? { ...prev, [image.id]: progress } : prev)),
+            ),
+          )
+          .then((uploaded) => {
+            if (!uploaded) return;
+            setSelectedAttachments((prev) =>
+              prev.map((a) =>
+                a.kind === "image" && a.metadata.id === image.id
+                  ? { ...a, metadata: { ...a.metadata, ...uploaded } }
+                  : a,
+              ),
+            );
+          })
+          .catch((error) => {
+            console.error("[Composer] Failed to upload a picture:", error);
+            setSelectedAttachments((prev) =>
+              prev.filter((a) => !(a.kind === "image" && a.metadata.id === image.id)),
+            );
+            toastErrorRef.current(
+              error instanceof Error ? error.message : t("composer.errors.uploadFailed"),
+            );
+          })
+          .finally(() => {
+            setImageUploads((prev) => {
+              const next = { ...prev };
+              delete next[image.id];
+              return next;
+            });
+          });
+      }
     },
-    [setSelectedAttachments],
+    [setSelectedAttachments, t],
   );
 
   const addFiles = useCallback(
@@ -2033,7 +1982,16 @@ function ComposerContentImpl({
       const placeholders = files.map((file) => ({ id: nextPendingFileId.current++, file }));
       setPendingFiles((pending) => [...pending, ...placeholders]);
       try {
-        const uploaded = await uploadFileAttachments({ client, files });
+        const uploaded = await uploadFileAttachments({
+          client,
+          files,
+          onProgress: (index, progress) => {
+            const id = placeholders[index]?.id;
+            setPendingFiles((pending) =>
+              pending.map((entry) => (entry.id === id ? { ...entry, progress } : entry)),
+            );
+          },
+        });
         addFiles(uploaded);
       } catch (error) {
         console.error("[Composer] Failed to upload file:", error);
@@ -2365,7 +2323,7 @@ function ComposerContentImpl({
     ],
   );
 
-  const contextWindowMeterGlyphSize = isCompactLayout ? ICON_SIZE.md : buttonIconSize;
+  const contextWindowMeterGlyphSize = buttonIconSize;
   const beforeVoiceContent = useMemo(
     () =>
       hasAgent ? (
@@ -2608,6 +2566,7 @@ function ComposerContentImpl({
         serverId,
         selectedAttachments,
         pendingFiles,
+        imageUploads,
         isComposerLocked,
         handleOpenAttachment,
         handleRemoveAttachment,
@@ -2615,6 +2574,7 @@ function ComposerContentImpl({
           openImage: t("composer.attachments.openImage"),
           removeImage: t("composer.attachments.removeImage"),
           removeFile: t("composer.attachments.removeFile"),
+          uploading: (percent: number) => t("composer.attachments.uploading", { percent }),
           openGithub: (kind: string, numberLabel: string) =>
             t("composer.attachments.openGithub", { kind, number: numberLabel }),
           removeGithub: (kind: string, numberLabel: string) =>
@@ -2628,6 +2588,7 @@ function ComposerContentImpl({
       serverId,
       selectedAttachments,
       pendingFiles,
+      imageUploads,
       t,
     ],
   );
@@ -2907,14 +2868,31 @@ const styles = StyleSheet.create((theme: Theme) => ({
     width: "100%",
     gap: theme.spacing[3],
   },
+  // The target: 44 px on a phone around the drawn disc, the disc itself from md up (as the send button)
   cancelButton: {
-    width: 28,
-    height: 28,
+    width: touchSize(28),
+    height: touchSize(28),
+    borderRadius: theme.borderRadius.full,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: {
+      xs: 0,
+      md: theme.spacing[1],
+    },
+  },
+  cancelDisc: {
+    width: {
+      xs: 36,
+      md: 28,
+    },
+    height: {
+      xs: 36,
+      md: 28,
+    },
     borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.palette.red[600],
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: theme.spacing[1],
   },
   rightControls: {
     flexDirection: "row",
@@ -2922,15 +2900,15 @@ const styles = StyleSheet.create((theme: Theme) => ({
     gap: theme.spacing[1],
   },
   contextWindowMeterSlot: {
-    width: 28,
-    height: 28,
+    width: touchSize(28),
+    height: touchSize(28),
     flexShrink: 0,
     alignItems: "center",
     justifyContent: "center",
   },
   realtimeVoiceButton: {
-    width: 28,
-    height: 28,
+    width: touchSize(28),
+    height: touchSize(28),
     borderRadius: theme.borderRadius.full,
     alignItems: "center",
     justifyContent: "center",
@@ -2966,46 +2944,6 @@ const styles = StyleSheet.create((theme: Theme) => ({
     flexDirection: "column",
     gap: theme.spacing[2],
   },
-  queueItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: theme.spacing[3],
-    paddingVertical: theme.spacing[2],
-    backgroundColor: theme.colors.surface1,
-    borderRadius: theme.borderRadius.lg,
-    borderWidth: theme.borderWidth[1],
-    borderColor: theme.colors.border,
-    gap: theme.spacing[2],
-  },
-  queueText: {
-    flex: 1,
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-  },
-  queueBody: {
-    flex: 1,
-    minWidth: 0,
-  },
-  queueTextPending: {
-    opacity: PENDING_BUBBLE_OPACITY,
-  },
-  queueActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
-  },
-  queueActionButton: {
-    width: 32,
-    height: 32,
-    borderRadius: theme.borderRadius.full,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: theme.colors.surface2,
-  },
-  queueSendButton: {
-    backgroundColor: theme.colors.accent,
-  },
   sendErrorText: {
     color: theme.colors.palette.red[500],
     fontSize: theme.fontSize.base,
@@ -3013,9 +2951,6 @@ const styles = StyleSheet.create((theme: Theme) => ({
 })) as unknown as Record<string, object>;
 
 const ThemedAttachmentSpinner = withUnistyles(LoadingSpinner);
-const ThemedPencil = withUnistyles(Pencil);
-const ThemedArrowUp = withUnistyles(ArrowUp);
-const ThemedX = withUnistyles(X);
 const ThemedGitPullRequest = withUnistyles(GitPullRequest);
 const ThemedCircleDot = withUnistyles(CircleDot);
 // The pull request / issue picker is its own chunk, fetched when it first opens (composer/forge-picker.tsx)
@@ -3032,7 +2967,6 @@ const ThemedCamera = withUnistyles(Camera);
 const ThemedFileText = withUnistyles(FileText);
 const iconForegroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const iconForegroundMutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const iconAccentForegroundMapping = (theme: Theme) => ({ color: theme.colors.accentForeground });
 
 function renderForgeAttachmentIcon(icon: string): ReactElement {
   return (
