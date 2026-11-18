@@ -4,8 +4,8 @@
 name: paseo-ui
 
 on:
-  push:
-    branches: [main]
+  push:  # every branch: the gate waits for it
+    branches: ['**']
     paths: ["paseo/**", "server/modules/paseo/**", ".github/workflows/paseo-ui.yml"]
   workflow_dispatch:
   workflow_call:

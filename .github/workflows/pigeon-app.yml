@@ -27,7 +27,7 @@ on:
   push:
     # pigeon-app-fix/*: a fix cut from the A1 commit during the A1-A5 freeze (README "The A1-A5 freeze"); its commits
     # touch scripts/pigeon-app/ or this file, so the paths filter always passes them
-    branches: [main, "pigeon-app-fix/**"]
+    branches: ["**", "pigeon-app-fix/**"]  # every branch: the gate waits for it
     paths:
       - "paseo/**"
       - "public/sw.js"
