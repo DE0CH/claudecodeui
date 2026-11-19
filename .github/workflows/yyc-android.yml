@@ -129,6 +129,8 @@ jobs:
 
       - name: Emulator test
         if: matrix.build == 'replica'
+        # the emulator's boot and the whole path take about 15 min; a hang ends here, not at the job's limit
+        timeout-minutes: 35
         uses: reactivecircus/android-emulator-runner@v2
         env:
           APP_PACKAGE: dev.de0ch.jarvis4chat
